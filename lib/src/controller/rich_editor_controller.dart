@@ -51,18 +51,14 @@ class RichEditorController extends TextEditingController {
     RichTextRenderTheme theme = RichTextRenderTheme.standard,
     Duration typingTimeout = const Duration(milliseconds: 800),
     int maxHistoryLength = 500,
-  })  : document = EditorDocument.fromText(text, initialAttributes),
-        renderer = TextSpanRenderer(theme: theme),
-        focusNode = focusNode ?? FocusNode(),
-        _ownsFocusNode = focusNode == null,
-        super(text: text) {
+  }) : document = EditorDocument.fromText(text, initialAttributes),
+       renderer = TextSpanRenderer(theme: theme),
+       focusNode = focusNode ?? FocusNode(),
+       _ownsFocusNode = focusNode == null,
+       super(text: text) {
     transactions = TransactionManager(_handleCommit);
     engine = EditingEngine(document: document, transactions: transactions);
-    history = HistoryManager(
-      engine: engine,
-      typingTimeout: typingTimeout,
-      maxHistoryLength: maxHistoryLength,
-    );
+    history = HistoryManager(engine: engine, typingTimeout: typingTimeout, maxHistoryLength: maxHistoryLength);
     commands = CommandDispatcher(engine: engine, history: history);
     this.focusNode.addListener(_handleFocusChange);
   }
@@ -115,22 +111,38 @@ class RichEditorController extends TextEditingController {
     final diff = diffText(oldText, newText, cursorHint: cursorHint);
 
     if (!diff.isNoOp) {
-      history.execute(ReplaceRangeCommand(
-        start: diff.start,
-        end: diff.end,
-        text: diff.insertedText,
-        attributesForInsertion: Map.of(engine.stickyAttributes),
-      ));
+      history.execute(ReplaceRangeCommand(start: diff.start, end: diff.end, text: diff.insertedText, attributesForInsertion: Map.of(engine.stickyAttributes)));
     }
 
     // Trust the TextField/IME's own reported selection for where the
     // caret actually lands — autocorrect and IME composition can put it
     // somewhere `diff` alone wouldn't predict.
-    super.value = TextEditingValue(
-      text: document.text,
-      selection: newValue.selection,
-      composing: newValue.composing,
-    );
+    super.value = TextEditingValue(text: document.text, selection: newValue.selection, composing: newValue.composing);
+  }
+
+  /// Assigns `newValue`, guaranteeing listeners are notified even when
+  /// `newValue == value`.
+  ///
+  /// `ValueNotifier.value`'s setter — which `TextEditingController`
+  /// inherits — skips `notifyListeners()` when the new value equals the
+  /// old one. That's the right optimization for `ValueNotifier` in
+  /// general, but wrong here: `TextEditingValue` equality only covers
+  /// text, selection, and composing range. It has no concept of
+  /// formatting, which lives entirely in [document]'s `AttributeStore`.
+  /// A pure formatting change (toggle bold, undo a formatting command)
+  /// leaves text/selection/composing all unchanged, so it produces a
+  /// `TextEditingValue` indistinguishable from the current one — and the
+  /// inherited setter would silently swallow the notification, leaving
+  /// the `TextField` showing stale styling until some *other*, genuinely
+  /// value-changing edit forces a rebuild. Every call site that can
+  /// possibly be a formatting-only change routes through this instead of
+  /// `super.value =` directly.
+  void _applyValue(TextEditingValue newValue) {
+    final valueActuallyChanged = newValue != value;
+    super.value = newValue;
+    if (!valueActuallyChanged) {
+      notifyListeners();
+    }
   }
 
   /// The single [TransactionManager] commit callback — fires once per
@@ -153,32 +165,36 @@ class RichEditorController extends TextEditingController {
   void _handleCommit() {
     final newText = document.text;
     final length = newText.length;
-    final clamped = TextSelection(
-      baseOffset: clampInt(selection.baseOffset, 0, length),
-      extentOffset: clampInt(selection.extentOffset, 0, length),
-    );
-    super.value = value.copyWith(
-      text: newText,
-      selection: clamped,
-      composing: newText == value.text ? value.composing : TextRange.empty,
-    );
+    final clamped = TextSelection(baseOffset: clampInt(selection.baseOffset, 0, length), extentOffset: clampInt(selection.extentOffset, 0, length));
+    _applyValue(value.copyWith(text: newText, selection: clamped, composing: newText == value.text ? value.composing : TextRange.empty));
   }
 
   void _syncSelection(EditorSelection result) {
-    super.value = value.copyWith(
-      text: document.text,
-      selection: _toTextSelection(result),
-      composing: TextRange.empty,
-    );
+    _applyValue(value.copyWith(text: document.text, selection: _toTextSelection(result), composing: TextRange.empty));
   }
 
-  EditorSelection get _currentSelection => _toEditorSelection(selection);
+  /// The current selection as an [EditorSelection], defensively clamped.
+  ///
+  /// A freshly constructed `TextEditingController` starts with
+  /// `selection = TextSelection.collapsed(offset: -1)` until the bound
+  /// `TextField` is focused — Flutter's own sentinel for "no selection
+  /// yet". Every programmatic editing method below (`insertText`,
+  /// `toggleBold`, ...) reads this getter, so without this guard,
+  /// calling one of them before the field is ever focused — entirely
+  /// plausible for something like "insert a template into a new note" —
+  /// would pass `-1` straight through to [EditingEngine.replaceRange]
+  /// and trip its bounds assertion. Falling back to the end of the
+  /// document is the same thing focusing an empty text field would do.
+  EditorSelection get _currentSelection {
+    if (selection.start < 0 || selection.end < 0) {
+      return EditorSelection.collapsed(document.length);
+    }
+    return _toEditorSelection(selection);
+  }
 
-  TextSelection _toTextSelection(EditorSelection s) =>
-      TextSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
+  TextSelection _toTextSelection(EditorSelection s) => TextSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
 
-  EditorSelection _toEditorSelection(TextSelection s) =>
-      EditorSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
+  EditorSelection _toEditorSelection(TextSelection s) => EditorSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
 
   // ---------------------------------------------------------------------
   // Editing API — thin wrappers over CommandDispatcher for programmatic
@@ -194,24 +210,32 @@ class RichEditorController extends TextEditingController {
 
   void pasteText(String text) => _syncSelection(commands.paste(_currentSelection, text));
 
-  void pasteRichText(String text, List<TextAttribute> relativeAttributes) =>
-      _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));
+  void pasteRichText(String text, List<TextAttribute> relativeAttributes) => _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));
 
   void toggleBold() => commands.toggleBold(_currentSelection);
+
   void toggleItalic() => commands.toggleItalic(_currentSelection);
+
   void toggleUnderline() => commands.toggleUnderline(_currentSelection);
+
   void toggleStrikethrough() => commands.toggleStrikethrough(_currentSelection);
+
   void toggleHighlight() => commands.toggleHighlight(_currentSelection);
+
   void toggleCode() => commands.toggleCode(_currentSelection);
 
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
+
   void setSize(num? size) => commands.setSize(_currentSelection, size);
+
   void setLink(String? url) => commands.setLink(_currentSelection, url);
+
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
 
   void clearFormatting() => commands.clearFormatting(_currentSelection);
 
   bool get canUndo => history.canUndo;
+
   bool get canRedo => history.canRedo;
 
   void undo() {
@@ -231,8 +255,7 @@ class RichEditorController extends TextEditingController {
   bool isAttributeActive(AttributeType type) {
     final sel = _currentSelection;
     if (sel.isCollapsed) {
-      return engine.stickyAttributes.containsKey(type) ||
-          document.attributeStore.findAt(sel.start, type: type).isNotEmpty;
+      return engine.stickyAttributes.containsKey(type) || document.attributeStore.findAt(sel.start, type: type).isNotEmpty;
     }
     return document.attributeStore.coversRange(sel.start, sel.end, type);
   }
@@ -248,9 +271,7 @@ class RichEditorController extends TextEditingController {
       final at = document.attributeStore.findAt(sel.start, type: type);
       return at.isEmpty ? null : at.first.value;
     }
-    final covering = document.attributeStore
-        .findIntersecting(sel.start, sel.end, type: type)
-        .where((s) => s.covers(sel.start, sel.end));
+    final covering = document.attributeStore.findIntersecting(sel.start, sel.end, type: type).where((s) => s.covers(sel.start, sel.end));
     return covering.isEmpty ? null : covering.first.value;
   }
 
@@ -266,10 +287,7 @@ class RichEditorController extends TextEditingController {
     document.reset(text, attributes);
     engine.restoreStickyAttributes(const {});
     history.clear();
-    super.value = TextEditingValue(
-      text: document.text,
-      selection: const TextSelection.collapsed(offset: 0),
-    );
+    _applyValue(TextEditingValue(text: document.text, selection: const TextSelection.collapsed(offset: 0)));
   }
 
   Map<String, dynamic> toJson() => document.toJson();
@@ -279,15 +297,24 @@ class RichEditorController extends TextEditingController {
   // ---------------------------------------------------------------------
 
   @override
-  TextSpan buildTextSpan({
-    required BuildContext context,
-    TextStyle? style,
-    required bool withComposing,
-  }) {
-    return renderer.renderSpan(
-      document,
-      style: style,
-      composingRange: withComposing ? value.composing : null,
-    );
+  TextSpan buildTextSpan({required BuildContext context, TextStyle? style, required bool withComposing}) {
+    final span = renderer.renderSpan(document, style: style, composingRange: withComposing ? value.composing : null);
+    assert(() {
+      final renderedLength = span.toPlainText().length;
+      if (renderedLength != document.text.length) {
+        throw FlutterError(
+          'TextSpanRenderer produced a span of $renderedLength characters '
+          'but the document text is ${document.text.length} characters. '
+          'RenderEditable maps every tap, drag, and selection-handle '
+          'position against whatever buildTextSpan returns — a length '
+          'mismatch here is exactly the kind of bug that makes selection '
+          'and the caret behave incorrectly without any other visible '
+          'symptom. Check AttributeStore spans for offsets outside the '
+          'current text length.',
+        );
+      }
+      return true;
+    }());
+    return span;
   }
 }
