@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../controller/rich_text_editing_controller.dart';
+
+import '../controller/rich_editor_controller.dart';
 import '../models/attribute_type.dart';
 import '../painters/ruled_lines_painter.dart';
 import 'tool_button.dart';
@@ -16,7 +17,7 @@ class FormatToolbar extends StatelessWidget {
     required this.onLoad,
   });
 
-  final RichTextEditingController controller;
+  final RichEditorController controller;
   final bool showMargin;
   final VoidCallback onToggleMargin;
   final RuledLineStyle lineStyle;
@@ -36,44 +37,21 @@ class FormatToolbar extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                ToolButton(
-                  icon: Icons.save,
-                  isActive: false,
-                  onPressed: onSave,
-                  tooltip: 'Save Note',
-                ),
-                ToolButton(
-                  icon: Icons.folder_open,
-                  isActive: false,
-                  onPressed: onLoad,
-                  tooltip: 'Load Note',
-                ),
+                ToolButton(icon: Icons.save, isActive: false, onPressed: onSave, tooltip: 'Save Note'),
+                ToolButton(icon: Icons.folder_open, isActive: false, onPressed: onLoad, tooltip: 'Load Note'),
                 const VerticalDivider(indent: 8, endIndent: 8),
                 IconButton(
                   tooltip: 'Undo',
-                  icon: Icon(
-                    Icons.undo,
-                    size: 20,
-                    color: controller.canUndo ? Colors.black87 : Colors.grey[400],
-                  ),
+                  icon: Icon(Icons.undo, size: 20, color: controller.canUndo ? Colors.black87 : Colors.grey[400]),
                   onPressed: controller.canUndo ? controller.undo : null,
                 ),
                 IconButton(
                   tooltip: 'Redo',
-                  icon: Icon(
-                    Icons.redo,
-                    size: 20,
-                    color: controller.canRedo ? Colors.black87 : Colors.grey[400],
-                  ),
+                  icon: Icon(Icons.redo, size: 20, color: controller.canRedo ? Colors.black87 : Colors.grey[400]),
                   onPressed: controller.canRedo ? controller.redo : null,
                 ),
                 const VerticalDivider(indent: 8, endIndent: 8),
-                ToolButton(
-                  icon: showMargin ? Icons.view_sidebar : Icons.view_sidebar_outlined,
-                  isActive: showMargin,
-                  onPressed: onToggleMargin,
-                  tooltip: 'Toggle Margin',
-                ),
+                ToolButton(icon: showMargin ? Icons.view_sidebar : Icons.view_sidebar_outlined, isActive: showMargin, onPressed: onToggleMargin, tooltip: 'Toggle Margin'),
                 ToolButton(
                   icon: lineStyle == RuledLineStyle.none ? Icons.grid_off : Icons.grid_on,
                   isActive: lineStyle != RuledLineStyle.none,
@@ -83,57 +61,22 @@ class FormatToolbar extends StatelessWidget {
                 const VerticalDivider(indent: 8, endIndent: 8),
                 _HeaderMenu(controller: controller),
                 const VerticalDivider(indent: 8, endIndent: 8),
-                ToolButton(
-                  icon: Icons.format_bold,
-                  isActive: controller.isAttributeActive(AttributeType.bold),
-                  onPressed: () => controller.toggleAttribute(AttributeType.bold),
-                  tooltip: 'Bold',
-                ),
-                ToolButton(
-                  icon: Icons.format_italic,
-                  isActive: controller.isAttributeActive(AttributeType.italic),
-                  onPressed: () => controller.toggleAttribute(AttributeType.italic),
-                  tooltip: 'Italic',
-                ),
-                ToolButton(
-                  icon: Icons.format_underlined,
-                  isActive: controller.isAttributeActive(AttributeType.underline),
-                  onPressed: () => controller.toggleAttribute(AttributeType.underline),
-                  tooltip: 'Underline',
-                ),
+                ToolButton(icon: Icons.format_bold, isActive: controller.isAttributeActive(AttributeType.bold), onPressed: () => controller.toggleBold, tooltip: 'Bold'),
+                ToolButton(icon: Icons.format_italic, isActive: controller.isAttributeActive(AttributeType.italic), onPressed: () => controller.toggleItalic(), tooltip: 'Italic'),
+                ToolButton(icon: Icons.format_underlined, isActive: controller.isAttributeActive(AttributeType.underline), onPressed: () => controller.toggleUnderline(), tooltip: 'Underline'),
                 ToolButton(
                   icon: Icons.format_strikethrough,
                   isActive: controller.isAttributeActive(AttributeType.strikethrough),
-                  onPressed: () => controller.toggleAttribute(AttributeType.strikethrough),
+                  onPressed: () => controller.toggleStrikethrough(),
                   tooltip: 'Strikethrough',
                 ),
                 const VerticalDivider(indent: 8, endIndent: 8),
                 _ColorMenu(controller: controller),
-                ToolButton(
-                  icon: Icons.border_color,
-                  isActive: controller.isAttributeActive(AttributeType.highlight),
-                  onPressed: () => controller.toggleAttribute(AttributeType.highlight),
-                  tooltip: 'Highlight',
-                ),
-                ToolButton(
-                  icon: Icons.code,
-                  isActive: controller.isAttributeActive(AttributeType.code),
-                  onPressed: () => controller.toggleAttribute(AttributeType.code),
-                  tooltip: 'Inline Code',
-                ),
+                ToolButton(icon: Icons.border_color, isActive: controller.isAttributeActive(AttributeType.highlight), onPressed: () => controller.toggleHighlight(), tooltip: 'Highlight'),
+                ToolButton(icon: Icons.code, isActive: controller.isAttributeActive(AttributeType.code), onPressed: () => controller.toggleCode(), tooltip: 'Inline Code'),
                 const VerticalDivider(indent: 8, endIndent: 8),
-                ToolButton(
-                  icon: Icons.link,
-                  isActive: controller.isAttributeActive(AttributeType.link),
-                  onPressed: () => _showLinkDialog(context, controller),
-                  tooltip: 'Insert Link',
-                ),
-                ToolButton(
-                  icon: Icons.format_clear,
-                  isActive: false,
-                  onPressed: controller.clearFormatting,
-                  tooltip: 'Clear Formatting',
-                ),
+                ToolButton(icon: Icons.link, isActive: controller.isAttributeActive(AttributeType.link), onPressed: () => _showLinkDialog(context, controller), tooltip: 'Insert Link'),
+                ToolButton(icon: Icons.format_clear, isActive: false, onPressed: controller.clearFormatting, tooltip: 'Clear Formatting'),
               ],
             ),
           );
@@ -142,7 +85,7 @@ class FormatToolbar extends StatelessWidget {
     );
   }
 
-  void _showLinkDialog(BuildContext context, RichTextEditingController controller) {
+  void _showLinkDialog(BuildContext context, RichEditorController controller) {
     final TextEditingController urlController = TextEditingController();
     showDialog(
       context: context,
@@ -158,7 +101,7 @@ class FormatToolbar extends StatelessWidget {
           TextButton(
             onPressed: () {
               if (urlController.text.isNotEmpty) {
-                controller.setAttribute(AttributeType.link, urlController.text);
+                controller.setLink(urlController.text);
               }
               Navigator.pop(context);
             },
@@ -171,7 +114,7 @@ class FormatToolbar extends StatelessWidget {
 }
 
 class _HeaderMenu extends StatelessWidget {
-  final RichTextEditingController controller;
+  final RichEditorController controller;
 
   const _HeaderMenu({required this.controller});
 
@@ -180,7 +123,7 @@ class _HeaderMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       tooltip: 'Headers',
       icon: const Icon(Icons.format_size, size: 20, color: Colors.black87),
-      onSelected: (val) => controller.setAttribute(AttributeType.header, val == 'none' ? null : val),
+      onSelected: (val) => controller.setHeader(val == 'none' ? null : val),
       itemBuilder: (context) => [
         const PopupMenuItem(value: 'none', child: Text('Normal')),
         const PopupMenuItem(
@@ -197,25 +140,17 @@ class _HeaderMenu extends StatelessWidget {
 }
 
 class _ColorMenu extends StatelessWidget {
-  final RichTextEditingController controller;
+  final RichEditorController controller;
 
   const _ColorMenu({required this.controller});
 
   @override
   Widget build(BuildContext context) {
-    final List<Color> colors = [
-      Colors.black,
-      Colors.red,
-      Colors.blue,
-      Colors.green,
-      Colors.orange,
-      Colors.purple,
-    ];
+    final List<Color> colors = [Colors.black, Colors.red, Colors.blue, Colors.green, Colors.orange, Colors.purple];
     return PopupMenuButton<Color>(
       tooltip: 'Text Color',
       icon: const Icon(Icons.format_color_text, size: 20, color: Colors.black87),
-      onSelected: (color) =>
-          controller.setAttribute(AttributeType.color, color == Colors.black ? null : color),
+      onSelected: (color) => controller.setColor(color == Color(0xff000000) ? null : color.toARGB32()),
       itemBuilder: (context) => colors
           .map(
             (c) => PopupMenuItem(

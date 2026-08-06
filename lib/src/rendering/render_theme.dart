@@ -1,0 +1,90 @@
+import 'package:flutter/material.dart';
+
+/// Visual parameters [TextSpanRenderer] resolves attributes into: fonts,
+/// sizes, colors.
+///
+/// Deliberately separate from *editing* configuration (undo history
+/// length, whether sticky formatting is enabled) — the old
+/// `RichEditorConfig` mixed both together, but they change for different
+/// reasons and are read by different components. History length belongs
+/// with `HistoryManager`; this belongs with the renderer.
+@immutable
+class RichTextRenderTheme {
+  final double baseFontSize;
+
+  /// Target line height in logical pixels. Converted to Flutter's
+  /// height-multiplier convention (`height = lineHeight / fontSize`) per
+  /// segment, so line spacing stays visually constant across mixed font
+  /// sizes (e.g. a header line next to body text) — same approach the
+  /// original controller used.
+  final double lineHeight;
+
+  final double h1FontSize;
+  final double h2FontSize;
+
+  final Color highlightColor;
+  final Color codeBackgroundColor;
+  final Color linkColor;
+  final String codeFontFamily;
+
+  const RichTextRenderTheme({
+    this.baseFontSize = 16.0,
+    this.lineHeight = 24.0,
+    this.h1FontSize = 28.0,
+    this.h2FontSize = 22.0,
+    this.highlightColor = const Color(0x66FFEB3B),
+    this.codeBackgroundColor = const Color(0x1F000000),
+    this.linkColor = const Color(0xFF1A73E8),
+    this.codeFontFamily = 'monospace',
+  });
+
+  static const standard = RichTextRenderTheme();
+
+  RichTextRenderTheme copyWith({
+    double? baseFontSize,
+    double? lineHeight,
+    double? h1FontSize,
+    double? h2FontSize,
+    Color? highlightColor,
+    Color? codeBackgroundColor,
+    Color? linkColor,
+    String? codeFontFamily,
+  }) {
+    return RichTextRenderTheme(
+      baseFontSize: baseFontSize ?? this.baseFontSize,
+      lineHeight: lineHeight ?? this.lineHeight,
+      h1FontSize: h1FontSize ?? this.h1FontSize,
+      h2FontSize: h2FontSize ?? this.h2FontSize,
+      highlightColor: highlightColor ?? this.highlightColor,
+      codeBackgroundColor: codeBackgroundColor ?? this.codeBackgroundColor,
+      linkColor: linkColor ?? this.linkColor,
+      codeFontFamily: codeFontFamily ?? this.codeFontFamily,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is RichTextRenderTheme &&
+        other.baseFontSize == baseFontSize &&
+        other.lineHeight == lineHeight &&
+        other.h1FontSize == h1FontSize &&
+        other.h2FontSize == h2FontSize &&
+        other.highlightColor == highlightColor &&
+        other.codeBackgroundColor == codeBackgroundColor &&
+        other.linkColor == linkColor &&
+        other.codeFontFamily == codeFontFamily;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    baseFontSize,
+    lineHeight,
+    h1FontSize,
+    h2FontSize,
+    highlightColor,
+    codeBackgroundColor,
+    linkColor,
+    codeFontFamily,
+  );
+}

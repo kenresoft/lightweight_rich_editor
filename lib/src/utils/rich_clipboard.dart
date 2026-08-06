@@ -11,6 +11,6 @@ class RichClipboard {
 
   void setData(String text, List<TextAttribute> attrs) {
     plainText = text;
-    attributes = attrs.map((a) => a.copy()).toList();
+    attributes = attrs.map((a) => a.copyWith()).toList();
   }
 }

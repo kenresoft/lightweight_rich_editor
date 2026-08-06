@@ -3,7 +3,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../controller/rich_text_editing_controller.dart';
+import '../../lightweight_rich_editor.dart';
+import '../controller/rich_editor_controller.dart';
 import '../models/text_attribute.dart';
 import '../painters/ruled_lines_painter.dart';
 import '../utils/rich_clipboard.dart';
@@ -11,7 +12,7 @@ import '../utils/rich_clipboard.dart';
 /// A rich text editor widget that supports ruled lines and formatted text.
 class RichTextEditor extends StatelessWidget {
   /// The controller that manages the text and attributes.
-  final RichTextEditingController controller;
+  final RichEditorController controller;
 
   /// The scroll controller for the editor.
   final ScrollController scrollController;
@@ -38,7 +39,7 @@ class RichTextEditor extends StatelessWidget {
     final String selectedText = controller.text.substring(selection.start, selection.end);
     final List<TextAttribute> selectedAttrs = [];
 
-    for (final attr in controller.attributes) {
+    for (final attr in controller.document.attributes) {
       final int start = math.max(selection.start, attr.start).toInt();
       final int end = math.min(selection.end, attr.end).toInt();
 
@@ -73,19 +74,20 @@ class RichTextEditor extends StatelessWidget {
 
     if (plainText != null) {
       if (plainText == RichClipboard.instance.plainText) {
-        controller.insertRichText(
+        controller.pasteRichText(
           RichClipboard.instance.plainText,
           RichClipboard.instance.attributes,
         );
       } else {
-        controller.insertRichText(plainText, []);
+        controller.pasteRichText(plainText, []);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final config = controller.config;
+    // final config = controller.config;
+    final config = RichEditorConfig.standard;
 
     return Actions(
       actions: <Type, Action<Intent>>{
