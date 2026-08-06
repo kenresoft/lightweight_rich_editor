@@ -1,0 +1,230 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('RichEditorController — TextField-driven editing (set value)', () {
+    test('typing a character updates document text and selection', () {
+      final controller = RichEditorController(text: 'hello');
+
+      controller.value = const TextEditingValue(text: 'hello!', selection: TextSelection.collapsed(offset: 6));
+
+      expect(controller.document.text, 'hello!');
+      expect(controller.selection, const TextSelection.collapsed(offset: 6));
+    });
+
+    test('a selection-only change (no text change) does not touch the document', () {
+      final controller = RichEditorController(text: 'hello');
+
+      controller.value = const TextEditingValue(text: 'hello', selection: TextSelection.collapsed(offset: 2));
+
+      expect(controller.document.text, 'hello');
+      expect(controller.selection, const TextSelection.collapsed(offset: 2));
+    });
+
+    test('deleting via TextField (backspace) is recorded and undoable', () {
+      final controller = RichEditorController(text: 'hello');
+      controller.value = const TextEditingValue(text: 'hell', selection: TextSelection.collapsed(offset: 4));
+
+      expect(controller.document.text, 'hell');
+      expect(controller.canUndo, isTrue);
+
+      controller.undo();
+      expect(controller.document.text, 'hello');
+    });
+
+    test('sequential TextField edits within the typing window coalesce into one undo step', () {
+      final controller = RichEditorController(text: '');
+
+      controller.value = const TextEditingValue(text: 'h', selection: TextSelection.collapsed(offset: 1));
+      controller.value = const TextEditingValue(text: 'he', selection: TextSelection.collapsed(offset: 2));
+      controller.value = const TextEditingValue(text: 'hey', selection: TextSelection.collapsed(offset: 3));
+
+      expect(controller.document.text, 'hey');
+      expect(controller.history.undoDepth, 1);
+
+      controller.undo();
+      expect(controller.document.text, '');
+    });
+
+    test('final selection matches what the TextField reported, not the diff math', () {
+      // Autocorrect-style edit: text changes in the middle, but the
+      // reported selection is somewhere the naive start+insertedLength
+      // calculation wouldn't produce.
+      final controller = RichEditorController(text: 'teh');
+
+      controller.value = const TextEditingValue(
+        text: 'the',
+        selection: TextSelection.collapsed(offset: 0), // cursor jumped to the start
+      );
+
+      expect(controller.document.text, 'the');
+      expect(controller.selection, const TextSelection.collapsed(offset: 0));
+    });
+  });
+
+  group('RichEditorController — programmatic editing API', () {
+    test('insertText inserts and moves the caret to the correct position', () {
+      final controller = RichEditorController(text: 'hello world');
+      controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 5));
+
+      controller.insertText(',');
+
+      expect(controller.document.text, 'hello, world');
+      expect(controller.selection, const TextSelection.collapsed(offset: 6));
+    });
+
+    test('toggleBold on a selection is reflected by isAttributeActive', () {
+      final controller = RichEditorController(text: 'hello world');
+      controller.value = controller.value.copyWith(selection: const TextSelection(baseOffset: 0, extentOffset: 5));
+
+      controller.toggleBold();
+
+      expect(controller.isAttributeActive(AttributeType.bold), isTrue);
+    });
+
+    test('setHeader applies to the whole paragraph from a collapsed caret', () {
+      final controller = RichEditorController(text: 'line one\nline two');
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection.collapsed(offset: 11), // inside "line two"
+      );
+
+      controller.setHeader('h1');
+
+      final store = controller.document.attributeStore;
+      final lineTwoStart = 'line one\n'.length;
+      expect(store.coversRange(lineTwoStart, controller.document.text.length, AttributeType.header), isTrue);
+      expect(store.findAt(3, type: AttributeType.header), isEmpty); // "line one" untouched
+    });
+
+    test('formatting a selection does not change text length or selection', () {
+      final controller = RichEditorController(text: 'hello world');
+      const sel = TextSelection(baseOffset: 0, extentOffset: 5);
+      controller.value = controller.value.copyWith(selection: sel);
+
+      controller.toggleBold();
+
+      expect(controller.document.text, 'hello world');
+      expect(controller.selection, sel);
+    });
+
+    test('calling an editing method before the field is ever focused does not crash', () {
+      // Regression test: a fresh TextEditingController's selection is
+      // (-1, -1) until something focuses it. Calling a programmatic
+      // editing method in that state used to pass -1 straight through
+      // to EditingEngine and trip its bounds assertion.
+      final controller = RichEditorController(text: 'hello');
+      expect(controller.selection.start, -1, reason: 'sanity check: this is the actual default Flutter gives us');
+
+      controller.insertText('!');
+
+      expect(controller.document.text, 'hello!');
+    });
+  });
+
+  group('RichEditorController — undo/redo', () {
+    test('canUndo/canRedo reflect controller state', () {
+      final controller = RichEditorController(text: 'hi');
+      controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 2));
+      expect(controller.canUndo, isFalse);
+
+      controller.insertText('!');
+      expect(controller.canUndo, isTrue);
+      expect(controller.canRedo, isFalse);
+
+      controller.undo();
+      expect(controller.canUndo, isFalse);
+      expect(controller.canRedo, isTrue);
+
+      controller.redo();
+      expect(controller.document.text, 'hi!');
+    });
+  });
+
+  group('RichEditorController — notification on formatting-only changes', () {
+    // Regression coverage for a real bug: TextEditingController's
+    // inherited value setter skips notifyListeners() when the new
+    // TextEditingValue equals the old one, but TextEditingValue has no
+    // concept of formatting — a pure attribute change leaves
+    // text/selection/composing all identical, so without _applyValue's
+    // explicit force-notify, a bold toggle would apply to the document
+    // but never trigger a TextField rebuild.
+    test('toggling bold fires a listener even though text and selection are unchanged', () {
+      final controller = RichEditorController(text: 'hello world');
+      controller.value = controller.value.copyWith(selection: const TextSelection(baseOffset: 0, extentOffset: 5));
+
+      var notified = false;
+      controller.addListener(() => notified = true);
+
+      controller.toggleBold();
+
+      expect(notified, isTrue);
+      expect(controller.isAttributeActive(AttributeType.bold), isTrue);
+    });
+
+    test('undoing a formatting-only command fires a listener', () {
+      final controller = RichEditorController(text: 'hello world');
+      controller.value = controller.value.copyWith(selection: const TextSelection(baseOffset: 0, extentOffset: 5));
+      controller.toggleBold();
+
+      var notified = false;
+      controller.addListener(() => notified = true);
+
+      controller.undo();
+
+      expect(notified, isTrue);
+      expect(controller.isAttributeActive(AttributeType.bold), isFalse);
+    });
+
+    test('setHeader on a collapsed caret (text/selection unchanged) fires a listener', () {
+      final controller = RichEditorController(text: 'a line of text');
+      controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 3));
+
+      var notified = false;
+      controller.addListener(() => notified = true);
+
+      controller.setHeader('h1');
+
+      expect(notified, isTrue);
+    });
+  });
+
+  group('RichEditorController — rendered span integrity', () {
+    testWidgets('buildTextSpan never produces a span whose length disagrees with the document', (tester) async {
+      final controller = RichEditorController(
+        text: 'hello world',
+        initialAttributes: const [TextAttribute(start: 0, end: 5, type: AttributeType.bold)],
+      );
+
+      late BuildContext capturedContext;
+      await tester.pumpWidget(
+        Builder(
+          builder: (context) {
+            capturedContext = context;
+            return const SizedBox();
+          },
+        ),
+      );
+
+      // The assertion inside buildTextSpan itself is the real check here
+      // — it throws in debug mode if TextSpanRenderer ever produces a
+      // mismatched length. A clean call is a pass.
+      expect(() => controller.buildTextSpan(context: capturedContext, withComposing: false), returnsNormally);
+    });
+  });
+
+  test('loadDocument replaces content and clears history', () {
+    final controller = RichEditorController(text: 'old note');
+    controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    controller.insertText('!');
+    expect(controller.canUndo, isTrue);
+
+    controller.loadDocument('a different note');
+
+    expect(controller.document.text, 'a different note');
+    expect(controller.canUndo, isFalse);
+    expect(controller.selection, const TextSelection.collapsed(offset: 0));
+  });
+}
