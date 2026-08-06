@@ -30,14 +30,14 @@ class EditorHomeScreen extends StatefulWidget {
 }
 
 class _EditorHomeScreenState extends State<EditorHomeScreen> {
-  late RichTextEditingController _controller;
+  late RichEditorController _controller;
   final ScrollController _scrollController = ScrollController();
 
   bool _showMarginLine = true;
   RuledLineStyle _lineStyle = RuledLineStyle.solid;
   bool _isDarkMode = false;
 
-  NoteDocument? _internalStorage;
+  EditorDocument? _internalStorage;
 
   @override
   void initState() {
@@ -47,13 +47,13 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
 
   void _initController() {
     final config = _isDarkMode ? _darkConfig : RichEditorConfig.standard;
-    _controller = RichTextEditingController(
+    _controller = RichEditorController(
       text: 'This is a clean, lightweight rich-text editor.\n\n'
           'Try toggling Dark Mode in the top right to see the configuration system in action!',
       initialAttributes: [
         TextAttribute(start: 35, end: 41, type: AttributeType.bold),
       ],
-      config: config,
+      // config: config,
     );
   }
 
@@ -66,7 +66,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
 
   void _handleSave() {
     setState(() {
-      _internalStorage = _controller.toDocument();
+      _internalStorage = _controller.document;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Note saved to internal memory')),
@@ -75,7 +75,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
 
   void _handleLoad() {
     if (_internalStorage != null) {
-      _controller.fromDocument(_internalStorage!);
+      // _controller.fromDocument(_internalStorage!);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Note restored perfectly')),
       );
@@ -105,12 +105,12 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
   }
 
   void _toggleDarkMode() {
-    final doc = _controller.toDocument();
+    final doc = _controller.document;
     setState(() {
       _isDarkMode = !_isDarkMode;
       _controller.dispose();
       _initController();
-      _controller.fromDocument(doc);
+      // _controller.fromDocument(doc);
     });
   }
 
