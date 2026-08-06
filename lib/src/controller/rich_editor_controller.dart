@@ -208,6 +208,14 @@ class RichEditorController extends TextEditingController {
 
   void deleteForward() => _syncSelection(commands.deleteForward(_currentSelection));
 
+  /// Deletes the current selection outright. No-op if the selection is
+  /// collapsed. Prefer this over `deleteBackward()` at call sites (like
+  /// cut) that mean "delete what's selected" — `deleteBackward` happens
+  /// to fall back to the same behavior for a non-collapsed selection,
+  /// but that's an implementation detail, not something a call site
+  /// should rely on to read clearly.
+  void deleteSelection() => _syncSelection(commands.deleteSelection(_currentSelection));
+
   void pasteText(String text) => _syncSelection(commands.paste(_currentSelection, text));
 
   void pasteRichText(String text, List<TextAttribute> relativeAttributes) => _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));

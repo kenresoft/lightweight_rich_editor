@@ -3,10 +3,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../lightweight_rich_editor.dart';
 import '../controller/rich_editor_controller.dart';
 import '../models/text_attribute.dart';
 import '../painters/ruled_lines_painter.dart';
+import '../rendering/editor_style.dart';
 import '../utils/rich_clipboard.dart';
 
 /// A rich text editor widget that supports ruled lines and formatted text.
@@ -23,25 +23,28 @@ class RichTextEditor extends StatelessWidget {
   /// The style of the horizontal ruled lines.
   final RuledLineStyle lineStyle;
 
-  /// Creates a [RichTextEditor].
+  /// Layout and background painting style.
+  final RichEditorStyle editorStyle;
+
   const RichTextEditor({
     super.key,
     required this.controller,
     required this.scrollController,
     this.showMargin = true,
     this.lineStyle = RuledLineStyle.solid,
+    this.editorStyle = RichEditorStyle.standard,
   });
 
   void _handleCopy() {
     final selection = controller.selection;
     if (selection.isCollapsed) return;
 
-    final String selectedText = controller.text.substring(selection.start, selection.end);
-    final List<TextAttribute> selectedAttrs = [];
+    final selectedText = controller.text.substring(selection.start, selection.end);
+    final selectedAttrs = <TextAttribute>[];
 
     for (final attr in controller.document.attributes) {
-      final int start = math.max(selection.start, attr.start).toInt();
-      final int end = math.min(selection.end, attr.end).toInt();
+      final start = math.max(selection.start, attr.start);
+      final end = math.min(selection.end, attr.end);
 
       if (end > start) {
         selectedAttrs.add(
@@ -61,33 +64,44 @@ class RichTextEditor extends StatelessWidget {
 
   void _handleCut() {
     _handleCopy();
-    final selection = controller.selection;
-    controller.value = controller.value.copyWith(
-      text: controller.text.replaceRange(selection.start, selection.end, ''),
-      selection: TextSelection.collapsed(offset: selection.start),
-    );
+    // Deletes the selection, not "backspace" — deleteSelection reads
+    // correctly at the call site instead of relying on deleteBackward's
+    // fallback-to-delete-selection behavior for a non-collapsed range.
+    controller.deleteSelection();
   }
 
   Future<void> _handlePaste() async {
-    final ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
-    final String? plainText = data?.text;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final plainText = data?.text;
+    if (plainText == null) return;
 
-    if (plainText != null) {
-      if (plainText == RichClipboard.instance.plainText) {
-        controller.pasteRichText(
-          RichClipboard.instance.plainText,
-          RichClipboard.instance.attributes,
-        );
-      } else {
-        controller.pasteRichText(plainText, []);
-      }
+    if (plainText == RichClipboard.instance.plainText) {
+      controller.pasteRichText(
+        RichClipboard.instance.plainText,
+        RichClipboard.instance.attributes,
+      );
+    } else {
+      controller.insertText(plainText);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // final config = controller.config;
-    final config = RichEditorConfig.standard;
+    // Deliberately read once, outside any controller-listening scope.
+    // Nothing here needs to react to every keystroke/selection change —
+    // the theme is effectively static configuration, and the TextField
+    // below already listens to `controller` internally (that's what
+    // passing `controller: controller` does). Wrapping this whole
+    // subtree in a ListenableBuilder on `controller` — which the
+    // previous version of this widget did — forces the entire ancestor
+    // tree (ruled-line painting, both margin animations) to rebuild on
+    // every single selection-drag pointer-move event, fighting
+    // RenderEditable's own internal gesture tracking. That's what caused
+    // the "selection handles feel stuck / won't track the drag"
+    // behavior. Nothing in this widget's own visual output depends on
+    // controller state beyond what TextField already handles itself, so
+    // nothing here should be listening to it.
+    final renderTheme = controller.renderer.theme;
 
     return Actions(
       actions: <Type, Action<Intent>>{
@@ -117,19 +131,23 @@ class RichTextEditor extends StatelessWidget {
                 duration: const Duration(milliseconds: 260),
                 curve: Curves.easeInOut,
                 builder: (context, marginOpacity, child) {
+                  // Scoped to exactly what needs it: the ruled-line
+                  // painter depends on scroll offset only, so only this
+                  // leaf listens to scrollController — not the TextField
+                  // above it, and definitely not `controller`.
                   return ListenableBuilder(
                     listenable: scrollController,
                     builder: (context, child) {
                       return CustomPaint(
                         painter: RuledLinesPainter(
-                          lineHeight: config.lineHeight,
-                          topPadding: config.paddingTop,
+                          lineHeight: renderTheme.lineHeight,
+                          topPadding: editorStyle.paddingTop,
                           scrollOffset: scrollController.hasClients ? scrollController.offset : 0.0,
                           marginOpacity: marginOpacity,
                           lineStyle: lineStyle,
-                          marginLineX: config.marginLineX,
-                          lineColor: config.ruledLineColor,
-                          marginColor: config.marginLineColor,
+                          marginLineX: editorStyle.marginLineX,
+                          lineColor: editorStyle.ruledLineColor,
+                          marginColor: editorStyle.marginColor,
                         ),
                       );
                     },
@@ -142,16 +160,16 @@ class RichTextEditor extends StatelessWidget {
             child: RepaintBoundary(
               child: TweenAnimationBuilder<double>(
                 tween: Tween<double>(
-                  end: showMargin ? config.paddingLeftMarginOn : config.paddingLeftMarginOff,
+                  end: showMargin ? editorStyle.paddingLeftMarginOn : editorStyle.paddingLeftMarginOff,
                 ),
                 duration: const Duration(milliseconds: 260),
                 curve: Curves.easeInOut,
                 builder: (context, leftPad, _) => Padding(
                   padding: EdgeInsets.only(
-                    top: config.paddingTop,
+                    top: editorStyle.paddingTop,
                     left: leftPad,
-                    right: config.paddingRight,
-                    bottom: config.paddingBottom,
+                    right: editorStyle.paddingRight,
+                    bottom: editorStyle.paddingBottom,
                   ),
                   child: TextField(
                     controller: controller,
@@ -164,14 +182,14 @@ class RichTextEditor extends StatelessWidget {
                     selectionHeightStyle: BoxHeightStyle.tight,
                     selectionWidthStyle: BoxWidthStyle.tight,
                     style: TextStyle(
-                      fontSize: config.fontSize,
-                      height: config.lineHeightMultiplier,
+                      fontSize: renderTheme.baseFontSize,
+                      height: renderTheme.lineHeight / renderTheme.baseFontSize,
                       color: Colors.black,
                       letterSpacing: 0.2,
                     ),
                     strutStyle: StrutStyle(
-                      fontSize: config.fontSize,
-                      height: config.lineHeightMultiplier,
+                      fontSize: renderTheme.baseFontSize,
+                      height: renderTheme.lineHeight / renderTheme.baseFontSize,
                       forceStrutHeight: true,
                       leading: 0.0,
                     ),

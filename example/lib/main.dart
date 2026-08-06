@@ -46,22 +46,25 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
   }
 
   void _initController() {
-    final config = _isDarkMode ? _darkConfig : RichEditorConfig.standard;
+    final renderTheme = _isDarkMode ? _darkRenderTheme : RichTextRenderTheme.standard;
     _controller = RichEditorController(
       text: 'This is a clean, lightweight rich-text editor.\n\n'
           'Try toggling Dark Mode in the top right to see the configuration system in action!',
       initialAttributes: [
         TextAttribute(start: 35, end: 41, type: AttributeType.bold),
       ],
-      // config: config,
+      theme: renderTheme,
     );
   }
 
-  static const _darkConfig = RichEditorConfig(
-    ruledLineColor: Color(0xFF37474F),
-    marginLineColor: Color(0xFF455A64),
+  static const _darkRenderTheme = RichTextRenderTheme(
     highlightColor: Color(0xFF4A148C),
     linkColor: Colors.cyanAccent,
+  );
+
+  static const _darkEditorStyle = RichEditorStyle(
+    ruledLineColor: Color(0xFF37474F),
+    marginLineColor: Color(0xFF455A64),
   );
 
   void _handleSave() {
@@ -75,7 +78,10 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
 
   void _handleLoad() {
     if (_internalStorage != null) {
-      // _controller.fromDocument(_internalStorage!);
+      _controller.loadDocument(
+        _internalStorage!.text,
+        _internalStorage!.attributes,
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Note restored perfectly')),
       );
@@ -105,12 +111,13 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
   }
 
   void _toggleDarkMode() {
-    final doc = _controller.document;
+    final docText = _controller.document.text;
+    final docAttrs = _controller.document.attributes;
     setState(() {
       _isDarkMode = !_isDarkMode;
       _controller.dispose();
       _initController();
-      // _controller.fromDocument(doc);
+      _controller.loadDocument(docText, docAttrs);
     });
   }
 
@@ -164,6 +171,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
                 scrollController: _scrollController,
                 showMargin: _showMarginLine,
                 lineStyle: _lineStyle,
+                editorStyle: _isDarkMode ? _darkEditorStyle : RichEditorStyle.standard,
               ),
             ),
           ),
