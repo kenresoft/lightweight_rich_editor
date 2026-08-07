@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../clipboard/clipboard_manager.dart';
+import '../clipboard/rich_clipboard_delegate.dart';
 import '../commands/command_dispatcher.dart';
 import '../commands/replace_range_command.dart';
 import '../core/editing_engine.dart';
@@ -7,24 +9,26 @@ import '../core/editor_document.dart';
 import '../core/editor_selection.dart';
 import '../core/transaction_manager.dart';
 import '../history/history_manager.dart';
+import '../metrics/editor_metrics.dart';
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
 import '../rendering/render_theme.dart';
 import '../rendering/text_span_renderer.dart';
+import '../search/search_index.dart';
 import '../utils/clamp_int.dart';
 import '../utils/text_diff.dart';
 
 /// The public API of the editor: a [TextEditingController] that
 /// coordinates [EditorDocument], [EditingEngine], [HistoryManager]/
-/// [CommandDispatcher], and [TextSpanRenderer].
+/// [CommandDispatcher], [TextSpanRenderer], and [ClipboardManager].
 ///
 /// This is deliberately thin — it does not implement editing logic,
-/// span math, undo grouping, or style resolution itself. Every one of
-/// those lives in the component built for it in Phases 1–4. What this
-/// class owns is the three things that only make sense at the
-/// `TextField` boundary:
+/// span math, undo grouping, style resolution, or clipboard handling
+/// itself. Every one of those lives in the component built for it.
+/// What this class owns is the handful of things that only make sense
+/// at the `TextField` boundary:
 /// 1. Diffing `TextField`'s before/after whole-string reports into
-///    [ReplaceRangeCommand]s (see [_handleTextFieldEdit]).
+///    [ReplaceRangeCommand]s (see the `set value` override).
 /// 2. Converting between Flutter's [TextSelection] and the engine's
 ///    framework-agnostic [EditorSelection].
 /// 3. Keeping [TextEditingController.value] in sync with [document] as
@@ -39,6 +43,9 @@ class RichEditorController extends TextEditingController {
   late final EditingEngine engine;
   late final HistoryManager history;
   late final CommandDispatcher commands;
+  late final ClipboardManager clipboard;
+  late final EditorMetrics metrics;
+  late final SearchIndex search;
   final TextSpanRenderer renderer;
 
   final FocusNode focusNode;
@@ -51,15 +58,24 @@ class RichEditorController extends TextEditingController {
     RichTextRenderTheme theme = RichTextRenderTheme.standard,
     Duration typingTimeout = const Duration(milliseconds: 800),
     int maxHistoryLength = 500,
-  }) : document = EditorDocument.fromText(text, initialAttributes),
-       renderer = TextSpanRenderer(theme: theme),
-       focusNode = focusNode ?? FocusNode(),
-       _ownsFocusNode = focusNode == null,
-       super(text: text) {
+    RichClipboardDelegate? richClipboardDelegate,
+    void Function(String url)? onTapLink,
+  })  : document = EditorDocument.fromText(text, initialAttributes),
+        renderer = TextSpanRenderer(theme: theme, onTapLink: onTapLink),
+        focusNode = focusNode ?? FocusNode(),
+        _ownsFocusNode = focusNode == null,
+        super(text: text) {
     transactions = TransactionManager(_handleCommit);
     engine = EditingEngine(document: document, transactions: transactions);
-    history = HistoryManager(engine: engine, typingTimeout: typingTimeout, maxHistoryLength: maxHistoryLength);
+    history = HistoryManager(
+      engine: engine,
+      typingTimeout: typingTimeout,
+      maxHistoryLength: maxHistoryLength,
+    );
     commands = CommandDispatcher(engine: engine, history: history);
+    clipboard = ClipboardManager(document: document, commands: commands, delegate: richClipboardDelegate);
+    metrics = EditorMetrics(document: document, history: history);
+    search = SearchIndex(document: document, commands: commands);
     this.focusNode.addListener(_handleFocusChange);
   }
 
@@ -73,6 +89,7 @@ class RichEditorController extends TextEditingController {
   void dispose() {
     focusNode.removeListener(_handleFocusChange);
     if (_ownsFocusNode) focusNode.dispose();
+    renderer.dispose();
     super.dispose();
   }
 
@@ -111,13 +128,22 @@ class RichEditorController extends TextEditingController {
     final diff = diffText(oldText, newText, cursorHint: cursorHint);
 
     if (!diff.isNoOp) {
-      history.execute(ReplaceRangeCommand(start: diff.start, end: diff.end, text: diff.insertedText, attributesForInsertion: Map.of(engine.stickyAttributes)));
+      history.execute(ReplaceRangeCommand(
+        start: diff.start,
+        end: diff.end,
+        text: diff.insertedText,
+        attributesForInsertion: Map.of(engine.stickyAttributes),
+      ));
     }
 
     // Trust the TextField/IME's own reported selection for where the
     // caret actually lands — autocorrect and IME composition can put it
     // somewhere `diff` alone wouldn't predict.
-    super.value = TextEditingValue(text: document.text, selection: newValue.selection, composing: newValue.composing);
+    super.value = TextEditingValue(
+      text: document.text,
+      selection: newValue.selection,
+      composing: newValue.composing,
+    );
   }
 
   /// Assigns `newValue`, guaranteeing listeners are notified even when
@@ -165,12 +191,23 @@ class RichEditorController extends TextEditingController {
   void _handleCommit() {
     final newText = document.text;
     final length = newText.length;
-    final clamped = TextSelection(baseOffset: clampInt(selection.baseOffset, 0, length), extentOffset: clampInt(selection.extentOffset, 0, length));
-    _applyValue(value.copyWith(text: newText, selection: clamped, composing: newText == value.text ? value.composing : TextRange.empty));
+    final clamped = TextSelection(
+      baseOffset: clampInt(selection.baseOffset, 0, length),
+      extentOffset: clampInt(selection.extentOffset, 0, length),
+    );
+    _applyValue(value.copyWith(
+      text: newText,
+      selection: clamped,
+      composing: newText == value.text ? value.composing : TextRange.empty,
+    ));
   }
 
   void _syncSelection(EditorSelection result) {
-    _applyValue(value.copyWith(text: document.text, selection: _toTextSelection(result), composing: TextRange.empty));
+    _applyValue(value.copyWith(
+      text: document.text,
+      selection: _toTextSelection(result),
+      composing: TextRange.empty,
+    ));
   }
 
   /// The current selection as an [EditorSelection], defensively clamped.
@@ -192,9 +229,11 @@ class RichEditorController extends TextEditingController {
     return _toEditorSelection(selection);
   }
 
-  TextSelection _toTextSelection(EditorSelection s) => TextSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
+  TextSelection _toTextSelection(EditorSelection s) =>
+      TextSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
 
-  EditorSelection _toEditorSelection(TextSelection s) => EditorSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
+  EditorSelection _toEditorSelection(TextSelection s) =>
+      EditorSelection(baseOffset: s.baseOffset, extentOffset: s.extentOffset);
 
   // ---------------------------------------------------------------------
   // Editing API — thin wrappers over CommandDispatcher for programmatic
@@ -218,32 +257,40 @@ class RichEditorController extends TextEditingController {
 
   void pasteText(String text) => _syncSelection(commands.paste(_currentSelection, text));
 
-  void pasteRichText(String text, List<TextAttribute> relativeAttributes) => _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));
+  void pasteRichText(String text, List<TextAttribute> relativeAttributes) =>
+      _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));
+
+  /// Copies the current selection to the system clipboard (and to
+  /// [clipboard]'s delegate, if one is set, preserving formatting). See
+  /// [ClipboardManager.copy].
+  Future<void> copy() => clipboard.copy(_currentSelection);
+
+  /// Copies then deletes the current selection. See [ClipboardManager.cut].
+  Future<void> cut() async => _syncSelection(await clipboard.cut(_currentSelection));
+
+  /// Pastes at the current selection — rich content if [clipboard] has a
+  /// matching delegate entry, otherwise plain text from the system
+  /// clipboard. See [ClipboardManager.paste].
+  Future<void> paste() async {
+    final result = await clipboard.paste(_currentSelection);
+    if (result != null) _syncSelection(result);
+  }
 
   void toggleBold() => commands.toggleBold(_currentSelection);
-
   void toggleItalic() => commands.toggleItalic(_currentSelection);
-
   void toggleUnderline() => commands.toggleUnderline(_currentSelection);
-
   void toggleStrikethrough() => commands.toggleStrikethrough(_currentSelection);
-
   void toggleHighlight() => commands.toggleHighlight(_currentSelection);
-
   void toggleCode() => commands.toggleCode(_currentSelection);
 
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
-
   void setSize(num? size) => commands.setSize(_currentSelection, size);
-
   void setLink(String? url) => commands.setLink(_currentSelection, url);
-
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
 
   void clearFormatting() => commands.clearFormatting(_currentSelection);
 
   bool get canUndo => history.canUndo;
-
   bool get canRedo => history.canRedo;
 
   void undo() {
@@ -263,7 +310,8 @@ class RichEditorController extends TextEditingController {
   bool isAttributeActive(AttributeType type) {
     final sel = _currentSelection;
     if (sel.isCollapsed) {
-      return engine.stickyAttributes.containsKey(type) || document.attributeStore.findAt(sel.start, type: type).isNotEmpty;
+      return engine.stickyAttributes.containsKey(type) ||
+          document.attributeStore.findAt(sel.start, type: type).isNotEmpty;
     }
     return document.attributeStore.coversRange(sel.start, sel.end, type);
   }
@@ -279,7 +327,9 @@ class RichEditorController extends TextEditingController {
       final at = document.attributeStore.findAt(sel.start, type: type);
       return at.isEmpty ? null : at.first.value;
     }
-    final covering = document.attributeStore.findIntersecting(sel.start, sel.end, type: type).where((s) => s.covers(sel.start, sel.end));
+    final covering = document.attributeStore
+        .findIntersecting(sel.start, sel.end, type: type)
+        .where((s) => s.covers(sel.start, sel.end));
     return covering.isEmpty ? null : covering.first.value;
   }
 
@@ -295,30 +345,110 @@ class RichEditorController extends TextEditingController {
     document.reset(text, attributes);
     engine.restoreStickyAttributes(const {});
     history.clear();
-    _applyValue(TextEditingValue(text: document.text, selection: const TextSelection.collapsed(offset: 0)));
+    _applyValue(TextEditingValue(
+      text: document.text,
+      selection: const TextSelection.collapsed(offset: 0),
+    ));
   }
 
   Map<String, dynamic> toJson() => document.toJson();
+
+  // ---------------------------------------------------------------------
+  // Find & replace
+  // ---------------------------------------------------------------------
+
+  /// Runs a new search and, if there's a match, selects it in the
+  /// editor. See [SearchIndex.search].
+  void find(String query, {bool caseSensitive = false, bool wholeWord = false}) {
+    search.search(query, caseSensitive: caseSensitive, wholeWord: wholeWord);
+    _selectCurrentMatch();
+  }
+
+  /// Selects the next match, wrapping around. No-op if there are none.
+  void findNext() {
+    search.next();
+    _selectCurrentMatch();
+  }
+
+  /// Selects the previous match, wrapping around. No-op if there are none.
+  void findPrevious() {
+    search.previous();
+    _selectCurrentMatch();
+  }
+
+  /// Replaces the current match and selects the next one, if any. See
+  /// [SearchIndex.replaceCurrent].
+  void replaceCurrentMatch(String replacement) {
+    final result = search.replaceCurrent(replacement);
+    if (result != null) {
+      _syncSelection(result);
+      _selectCurrentMatch();
+    }
+  }
+
+  /// Replaces every current match, as one undoable edit. See
+  /// [SearchIndex.replaceAll].
+  int replaceAllMatches(String replacement) => search.replaceAll(replacement);
+
+  /// Ends the current search and clears its match selection.
+  ///
+  /// Notifies unconditionally, even though nothing about
+  /// [TextEditingController.value] changes — the current-match highlight
+  /// (see [buildTextSpan]) is driven by `search.currentMatch`, not by
+  /// `value`, specifically so it stays visible while a find bar has
+  /// focus. That means clearing it needs its own explicit rebuild
+  /// trigger; without this, a highlighted match would visibly linger on
+  /// screen after the find bar closes.
+  void clearFind() {
+    search.clear();
+    notifyListeners();
+  }
+
+  void _selectCurrentMatch() {
+    final match = search.currentMatch;
+    if (match == null) {
+      // No match (e.g. a query with zero results) — still notify, or a
+      // *previous* search's highlight would stay visibly stuck on
+      // screen. Same reasoning as clearFind above: the highlight isn't
+      // driven by `value`, so a `value`-only change check can't be
+      // trusted to catch this.
+      notifyListeners();
+      return;
+    }
+    _applyValue(value.copyWith(
+      selection: TextSelection(baseOffset: match.start, extentOffset: match.end),
+    ));
+  }
 
   // ---------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------
 
   @override
-  TextSpan buildTextSpan({required BuildContext context, TextStyle? style, required bool withComposing}) {
-    final span = renderer.renderSpan(document, style: style, composingRange: withComposing ? value.composing : null);
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final match = search.currentMatch;
+    final span = renderer.renderSpan(
+      document,
+      style: style,
+      composingRange: withComposing ? value.composing : null,
+      matchHighlightRange: match != null ? TextRange(start: match.start, end: match.end) : null,
+    );
     assert(() {
       final renderedLength = span.toPlainText().length;
       if (renderedLength != document.text.length) {
         throw FlutterError(
           'TextSpanRenderer produced a span of $renderedLength characters '
-          'but the document text is ${document.text.length} characters. '
-          'RenderEditable maps every tap, drag, and selection-handle '
-          'position against whatever buildTextSpan returns — a length '
-          'mismatch here is exactly the kind of bug that makes selection '
-          'and the caret behave incorrectly without any other visible '
-          'symptom. Check AttributeStore spans for offsets outside the '
-          'current text length.',
+              'but the document text is ${document.text.length} characters. '
+              'RenderEditable maps every tap, drag, and selection-handle '
+              'position against whatever buildTextSpan returns — a length '
+              'mismatch here is exactly the kind of bug that makes selection '
+              'and the caret behave incorrectly without any other visible '
+              'symptom. Check AttributeStore spans for offsets outside the '
+              'current text length.',
         );
       }
       return true;

@@ -36,6 +36,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
   bool _showMarginLine = true;
   RuledLineStyle _lineStyle = RuledLineStyle.solid;
   bool _isDarkMode = false;
+  bool _showFindBar = false;
 
   EditorDocument? _internalStorage;
 
@@ -156,7 +157,14 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
             onToggleLineStyle: _cycleLineStyle,
             onSave: _handleSave,
             onLoad: _handleLoad,
+            onToggleFind: () => setState(() => _showFindBar = !_showFindBar),
+            findVisible: _showFindBar,
           ),
+          if (_showFindBar)
+            FindReplaceBar(
+              controller: _controller,
+              onClose: () => setState(() => _showFindBar = false),
+            ),
           Expanded(
             child: Theme(
               data: Theme.of(context).copyWith(
@@ -172,6 +180,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
                 showMargin: _showMarginLine,
                 lineStyle: _lineStyle,
                 editorStyle: _isDarkMode ? _darkEditorStyle : RichEditorStyle.standard,
+                onToggleFind: () => setState(() => _showFindBar = !_showFindBar),
               ),
             ),
           ),

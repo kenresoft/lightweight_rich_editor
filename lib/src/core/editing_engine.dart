@@ -99,10 +99,50 @@ class EditingEngine {
       for (final type in insertionAttributes.keys) {
         store.optimize(type: type);
       }
+
+      if (text.contains('\n')) {
+        _confineParagraphScopedAttributes(start, start + text.length);
+      }
     }
 
     transactions.notify();
     return EditorSelection.collapsed(start + text.length);
+  }
+
+  /// Trims any [AttributeType.isParagraphScoped] span (currently just
+  /// [AttributeType.header]) that now crosses a newline within
+  /// `[rangeStart, rangeEnd)`, cutting it off *before* the newline.
+  ///
+  /// Without this, [AttributeStore.shiftForInsertion]'s span-absorbs-the-
+  /// insertion-point rule — correct for character-level formatting, so
+  /// typing in the middle of bold text stays bold — also lets a header
+  /// span silently absorb a newline typed at its end. Every character
+  /// typed immediately after then lands exactly at the span's new end,
+  /// growing it again, one character at a time: the header visibly
+  /// bleeds onto the next paragraph as the user types. A header is a
+  /// property of exactly one paragraph, so this confines it after any
+  /// insertion that could have introduced one. The paragraph *after* the
+  /// newline is left with no header at all — matching the standard
+  /// "pressing Enter after a heading returns to body text" behavior in
+  /// Notion, Google Docs, and Word.
+  void _confineParagraphScopedAttributes(int rangeStart, int rangeEnd) {
+    final text = document.text;
+    final store = document.attributeStore;
+    final end = rangeEnd < text.length ? rangeEnd : text.length;
+
+    for (var i = rangeStart; i < end; i++) {
+      if (text.codeUnitAt(i) != 0x0A) continue;
+
+      for (final type in AttributeType.values) {
+        if (!type.isParagraphScoped) continue;
+        for (final span in store.findIntersecting(i, i + 1, type: type)) {
+          store.remove(span);
+          if (span.start < i) {
+            store.insert(span.copyWith(end: i));
+          }
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -301,6 +341,9 @@ class EditingEngine {
       store.insert(attr);
     }
     store.optimize();
+    if (text.contains('\n')) {
+      _confineParagraphScopedAttributes(start, start + text.length);
+    }
 
     transactions.notify();
     return EditorSelection.collapsed(start + text.length);
@@ -358,6 +401,9 @@ class EditingEngine {
         ));
       }
       store.optimize();
+      if (text.contains('\n')) {
+        _confineParagraphScopedAttributes(start, start + text.length);
+      }
     }
 
     transactions.notify();
