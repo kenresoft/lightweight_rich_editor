@@ -27,6 +27,14 @@ class RichTextRenderTheme {
   final Color linkColor;
   final String codeFontFamily;
 
+  /// Background color for the current find-and-replace match — see
+  /// `TextSpanRenderer.renderSpan`'s `matchHighlightRange`. Deliberately
+  /// distinct from [highlightColor] (a different hue, not just a
+  /// different opacity of the same one) so the current search match is
+  /// visually unmistakable even on text that already has the `highlight`
+  /// attribute applied.
+  final Color matchHighlightColor;
+
   const RichTextRenderTheme({
     this.baseFontSize = 16.0,
     this.lineHeight = 24.0,
@@ -36,6 +44,7 @@ class RichTextRenderTheme {
     this.codeBackgroundColor = const Color(0x1F000000),
     this.linkColor = const Color(0xFF1A73E8),
     this.codeFontFamily = 'monospace',
+    this.matchHighlightColor = const Color(0xFFFFA726),
   });
 
   static const standard = RichTextRenderTheme();
@@ -49,6 +58,7 @@ class RichTextRenderTheme {
     Color? codeBackgroundColor,
     Color? linkColor,
     String? codeFontFamily,
+    Color? matchHighlightColor,
   }) {
     return RichTextRenderTheme(
       baseFontSize: baseFontSize ?? this.baseFontSize,
@@ -59,6 +69,7 @@ class RichTextRenderTheme {
       codeBackgroundColor: codeBackgroundColor ?? this.codeBackgroundColor,
       linkColor: linkColor ?? this.linkColor,
       codeFontFamily: codeFontFamily ?? this.codeFontFamily,
+      matchHighlightColor: matchHighlightColor ?? this.matchHighlightColor,
     );
   }
 
@@ -73,7 +84,8 @@ class RichTextRenderTheme {
         other.highlightColor == highlightColor &&
         other.codeBackgroundColor == codeBackgroundColor &&
         other.linkColor == linkColor &&
-        other.codeFontFamily == codeFontFamily;
+        other.codeFontFamily == codeFontFamily &&
+        other.matchHighlightColor == matchHighlightColor;
   }
 
   @override
@@ -86,5 +98,6 @@ class RichTextRenderTheme {
     codeBackgroundColor,
     linkColor,
     codeFontFamily,
+    matchHighlightColor,
   );
 }

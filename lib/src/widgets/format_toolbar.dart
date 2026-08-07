@@ -15,6 +15,8 @@ class FormatToolbar extends StatelessWidget {
     required this.onToggleLineStyle,
     required this.onSave,
     required this.onLoad,
+    this.onToggleFind,
+    this.findVisible = false,
   });
 
   final RichEditorController controller;
@@ -24,6 +26,13 @@ class FormatToolbar extends StatelessWidget {
   final VoidCallback onToggleLineStyle;
   final VoidCallback onSave;
   final VoidCallback onLoad;
+
+  /// Toggles the find/replace bar. Omit to leave the button out
+  /// entirely (e.g. if the host app puts find/replace somewhere else).
+  final VoidCallback? onToggleFind;
+
+  /// Whether the find bar is currently shown — highlights the button.
+  final bool findVisible;
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +59,15 @@ class FormatToolbar extends StatelessWidget {
                   icon: Icon(Icons.redo, size: 20, color: controller.canRedo ? Colors.black87 : Colors.grey[400]),
                   onPressed: controller.canRedo ? controller.redo : null,
                 ),
+                if (onToggleFind != null) ...[
+                  const VerticalDivider(indent: 8, endIndent: 8),
+                  ToolButton(
+                    icon: Icons.search,
+                    isActive: findVisible,
+                    onPressed: onToggleFind!,
+                    tooltip: 'Find & Replace',
+                  ),
+                ],
                 const VerticalDivider(indent: 8, endIndent: 8),
                 ToolButton(icon: showMargin ? Icons.view_sidebar : Icons.view_sidebar_outlined, isActive: showMargin, onPressed: onToggleMargin, tooltip: 'Toggle Margin'),
                 ToolButton(
@@ -150,18 +168,18 @@ class _ColorMenu extends StatelessWidget {
     return PopupMenuButton<Color>(
       tooltip: 'Text Color',
       icon: const Icon(Icons.format_color_text, size: 20, color: Colors.black87),
-      onSelected: (color) => controller.setColor(color == Color(0xff000000) ? null : color.toARGB32()),
+      onSelected: (color) => controller.setColor(color == const Color(0xff000000) ? null : color.toARGB32()),
       itemBuilder: (context) => colors
           .map(
             (c) => PopupMenuItem(
-              value: c,
-              child: Container(
-                width: 24,
-                height: 24,
-                decoration: BoxDecoration(color: c, shape: BoxShape.circle),
-              ),
-            ),
-          )
+          value: c,
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+          ),
+        ),
+      )
           .toList(),
     );
   }
