@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -148,6 +149,132 @@ void main() {
       final second = renderer.renderSpan(document, style: const TextStyle(fontSize: 20));
 
       expect(identical(first, second), isFalse);
+    });
+  });
+
+  group('TextSpanRenderer — link taps', () {
+    test('a link segment gets no recognizer when onTapLink is not set', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText(
+        'click here',
+        [const TextAttribute(start: 0, end: 5, type: AttributeType.link, value: 'https://example.com')],
+      );
+
+      final span = renderer.renderSpan(document);
+      expect(span.children!.cast<TextSpan>().first.recognizer, isNull);
+    });
+
+    test('tapping a link segment invokes onTapLink with its URL', () {
+      String? tappedUrl;
+      final renderer = TextSpanRenderer(onTapLink: (url) => tappedUrl = url);
+      final document = EditorDocument.fromText(
+        'click here',
+        [const TextAttribute(start: 0, end: 5, type: AttributeType.link, value: 'https://example.com')],
+      );
+
+      final span = renderer.renderSpan(document);
+      final recognizer = span.children!.cast<TextSpan>().first.recognizer as TapGestureRecognizer;
+      recognizer.onTap!();
+
+      expect(tappedUrl, 'https://example.com');
+    });
+
+    test('rebuilding after a text edit produces a fresh recognizer for the new span', () {
+      final renderer = TextSpanRenderer(onTapLink: (_) {});
+      final document = EditorDocument.fromText(
+        'click here',
+        [const TextAttribute(start: 0, end: 5, type: AttributeType.link, value: 'https://example.com')],
+      );
+
+      final first = renderer.renderSpan(document);
+      final firstRecognizer = first.children!.cast<TextSpan>().first.recognizer;
+
+      document.reset(
+        'click there',
+        [const TextAttribute(start: 0, end: 5, type: AttributeType.link, value: 'https://example.com')],
+      );
+      final second = renderer.renderSpan(document);
+      final secondRecognizer = second.children!.cast<TextSpan>().first.recognizer;
+
+      // Not the same object — the old one should have been disposed
+      // (renderer.dispose(), tested below, is the safety net if it
+      // wasn't), not reused across a rebuild.
+      expect(identical(firstRecognizer, secondRecognizer), isFalse);
+    });
+
+    test('renderer.dispose() does not throw, including with no prior renders', () {
+      expect(() => TextSpanRenderer(onTapLink: (_) {}).dispose(), returnsNormally);
+    });
+
+    test('renderer.dispose() after rendering link content does not throw', () {
+      final renderer = TextSpanRenderer(onTapLink: (_) {});
+      final document = EditorDocument.fromText(
+        'click here',
+        [const TextAttribute(start: 0, end: 5, type: AttributeType.link, value: 'https://example.com')],
+      );
+      renderer.renderSpan(document);
+
+      expect(() => renderer.dispose(), returnsNormally);
+    });
+  });
+
+  group('TextSpanRenderer — match highlight', () {
+    test('paints matchHighlightRange with the theme\'s matchHighlightColor', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText('find the needle here');
+
+      final span = renderer.renderSpan(
+        document,
+        matchHighlightRange: const TextRange(start: 9, end: 15), // "needle"
+      );
+      final children = span.children!.cast<TextSpan>();
+
+      final matchSegment = children.firstWhere((c) => c.text == 'needle');
+      expect(matchSegment.style!.backgroundColor, renderer.theme.matchHighlightColor);
+    });
+
+    test('match highlight takes priority over the highlight attribute', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText(
+        'needle',
+        [const TextAttribute(start: 0, end: 6, type: AttributeType.highlight)],
+      );
+
+      final span = renderer.renderSpan(document, matchHighlightRange: const TextRange(start: 0, end: 6));
+
+      expect(span.children!.cast<TextSpan>().single.style!.backgroundColor, renderer.theme.matchHighlightColor);
+    });
+
+    test('text outside the match range is unaffected', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText('needle in a haystack');
+
+      final span = renderer.renderSpan(document, matchHighlightRange: const TextRange(start: 0, end: 6));
+      final children = span.children!.cast<TextSpan>();
+
+      final outside = children.firstWhere((c) => c.text == ' in a haystack');
+      expect(outside.style!.backgroundColor, isNot(renderer.theme.matchHighlightColor));
+    });
+
+    test('a changed matchHighlightRange invalidates the cache', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText('cat cat cat');
+
+      final first = renderer.renderSpan(document, matchHighlightRange: const TextRange(start: 0, end: 3));
+      final second = renderer.renderSpan(document, matchHighlightRange: const TextRange(start: 4, end: 7));
+
+      expect(identical(first, second), isFalse);
+    });
+
+    test('the same matchHighlightRange across calls is a cache hit', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText('cat cat cat');
+      const range = TextRange(start: 0, end: 3);
+
+      final first = renderer.renderSpan(document, matchHighlightRange: range);
+      final second = renderer.renderSpan(document, matchHighlightRange: range);
+
+      expect(identical(first, second), isTrue);
     });
   });
 }

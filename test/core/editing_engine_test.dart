@@ -161,6 +161,28 @@ void main() {
       expect(store.findAt(1, type: AttributeType.header), isEmpty); // in "aaa"
       expect(store.findAt(9, type: AttributeType.header), isEmpty); // in "ccc"
     });
+
+    test('does not bleed onto a new paragraph created by pressing Enter and typing', () {
+      // Regression test: AttributeStore.shiftForInsertion's "a span
+      // straddling the insertion point absorbs it" rule is correct for
+      // character-level formatting (typing mid-bold-text stays bold) but
+      // was, before this fix, also letting a header span absorb a
+      // newline typed at its end — after which every further typed
+      // character landed exactly at the span's new end and grew it
+      // again, bleeding the header onto the new paragraph indefinitely.
+      final engine = _engine('Title');
+      engine.applyAttribute(AttributeType.header, const EditorSelection.collapsed(2), 'h1');
+      expect(engine.document.attributeStore.coversRange(0, 5, AttributeType.header), isTrue);
+
+      engine.insert(const EditorSelection.collapsed(5), '\n');
+      engine.insert(const EditorSelection.collapsed(6), 'Body text');
+
+      expect(engine.document.text, 'Title\nBody text');
+      // The original "Title" paragraph is still a header...
+      expect(engine.document.attributeStore.coversRange(0, 5, AttributeType.header), isTrue);
+      // ...but none of the new paragraph is.
+      expect(engine.document.attributeStore.findIntersecting(6, 15, type: AttributeType.header), isEmpty);
+    });
   });
 
   group('EditingEngine.clearFormatting', () {

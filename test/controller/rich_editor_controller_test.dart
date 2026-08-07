@@ -215,16 +215,66 @@ void main() {
     });
   });
 
-  test('loadDocument replaces content and clears history', () {
-    final controller = RichEditorController(text: 'old note');
-    controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
-    controller.insertText('!');
-    expect(controller.canUndo, isTrue);
+  group('RichEditorController — search-driven rendering', () {
+    testWidgets('buildTextSpan highlights the current search match', (tester) async {
+      final controller = RichEditorController(text: 'find the needle here');
+      late BuildContext capturedContext;
+      await tester.pumpWidget(
+        Builder(
+          builder: (context) {
+            capturedContext = context;
+            return const SizedBox();
+          },
+        ),
+      );
 
-    controller.loadDocument('a different note');
+      controller.find('needle');
+      final span = controller.buildTextSpan(context: capturedContext, withComposing: false);
+      final matchSegment = span.children!.cast<TextSpan>().firstWhere((c) => c.text == 'needle');
 
-    expect(controller.document.text, 'a different note');
-    expect(controller.canUndo, isFalse);
-    expect(controller.selection, const TextSelection.collapsed(offset: 0));
+      expect(matchSegment.style!.backgroundColor, controller.renderer.theme.matchHighlightColor);
+    });
+
+    test('a query with no results still notifies (clears any stale highlight)', () {
+      // Regression test: searching for something with zero matches used
+      // to skip notifyListeners entirely, which meant a *previous*
+      // search's highlighted match stayed stuck on screen after the new,
+      // empty search.
+      final controller = RichEditorController(text: 'hello world');
+      var notified = false;
+      controller.addListener(() => notified = true);
+
+      controller.find('xyz');
+
+      expect(notified, isTrue);
+      expect(controller.search.currentMatch, isNull);
+    });
+
+    test('clearFind notifies even though value itself is unchanged', () {
+      final controller = RichEditorController(text: 'hello world');
+      controller.find('world');
+      var notified = false;
+      controller.addListener(() => notified = true);
+
+      controller.clearFind();
+
+      expect(notified, isTrue);
+      expect(controller.search.currentMatch, isNull);
+    });
+  });
+
+  group('RichEditorController — document load', () {
+    test('loadDocument replaces content and clears history', () {
+      final controller = RichEditorController(text: 'old note');
+      controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+      controller.insertText('!');
+      expect(controller.canUndo, isTrue);
+
+      controller.loadDocument('a different note');
+
+      expect(controller.document.text, 'a different note');
+      expect(controller.canUndo, isFalse);
+      expect(controller.selection, const TextSelection.collapsed(offset: 0));
+    });
   });
 }
