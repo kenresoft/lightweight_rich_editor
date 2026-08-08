@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../controller/rich_editor_controller.dart';
 import '../models/attribute_type.dart';
 import '../painters/ruled_lines_painter.dart';
+import 'link_entry_dialog.dart';
 import 'tool_button.dart';
 
 class FormatToolbar extends StatelessWidget {
@@ -93,7 +94,12 @@ class FormatToolbar extends StatelessWidget {
                 ToolButton(icon: Icons.border_color, isActive: controller.isAttributeActive(AttributeType.highlight), onPressed: controller.toggleHighlight, tooltip: 'Highlight'),
                 ToolButton(icon: Icons.code, isActive: controller.isAttributeActive(AttributeType.code), onPressed: controller.toggleCode, tooltip: 'Inline Code'),
                 const VerticalDivider(indent: 8, endIndent: 8),
-                ToolButton(icon: Icons.link, isActive: controller.isAttributeActive(AttributeType.link), onPressed: () => _showLinkDialog(context, controller), tooltip: 'Insert Link'),
+                ToolButton(
+                  icon: Icons.link,
+                  isActive: controller.isAttributeActive(AttributeType.link),
+                  onPressed: () => _handleInsertLink(context, controller),
+                  tooltip: 'Insert Link',
+                ),
                 ToolButton(icon: Icons.format_clear, isActive: false, onPressed: controller.clearFormatting, tooltip: 'Clear Formatting'),
               ],
             ),
@@ -103,31 +109,12 @@ class FormatToolbar extends StatelessWidget {
     );
   }
 
-  void _showLinkDialog(BuildContext context, RichEditorController controller) {
-    final TextEditingController urlController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Insert Link'),
-        content: TextField(
-          controller: urlController,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'https://example.com'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              if (urlController.text.isNotEmpty) {
-                controller.setLink(urlController.text);
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('Insert'),
-          ),
-        ],
-      ),
-    );
+  Future<void> _handleInsertLink(BuildContext context, RichEditorController controller) async {
+    final currentLink = controller.activeAttributeValue(AttributeType.link) as String?;
+    final url = await showLinkEntryDialog(context, initialUrl: currentLink);
+    if (url != null) {
+      controller.setLink(url);
+    }
   }
 }
 

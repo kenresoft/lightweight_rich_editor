@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../controller/rich_editor_controller.dart';
 import '../painters/ruled_lines_painter.dart';
 import '../rendering/editor_style.dart';
+import '../utils/link_launcher.dart';
 
 /// Toggles bold on the current selection. No Flutter default binding —
 /// registered below via [Shortcuts].
@@ -45,6 +46,20 @@ class RichTextEditor extends StatelessWidget {
   /// Called when the user presses a "find" shortcut (e.g. Ctrl+F).
   final VoidCallback? onToggleFind;
 
+  /// Whether choosing "Open Link" from the selection toolbar (see
+  /// [contextMenuBuilder] below) shows an "Open link?" confirmation
+  /// before launching it, rather than opening immediately. Defaults to
+  /// `true`. Note this is already a two-step, deliberate action
+  /// (long-press to select, then explicitly tap the menu item) — this
+  /// flag is for teams that want an extra safety net on top of that,
+  /// not a substitute for it.
+  ///
+  /// Has no effect if the controller was constructed with its own
+  /// custom `onTapLink` (see `RichEditorController.hasCustomTapHandler`)
+  /// — a host that already asked for custom link-activation behavior
+  /// is called directly instead.
+  final bool confirmBeforeOpeningLinks;
+
   const RichTextEditor({
     super.key,
     required this.controller,
@@ -53,7 +68,18 @@ class RichTextEditor extends StatelessWidget {
     this.lineStyle = RuledLineStyle.solid,
     this.editorStyle = RichEditorStyle.standard,
     this.onToggleFind,
+    this.confirmBeforeOpeningLinks = true,
   });
+
+  void _openLink(BuildContext context, String url) {
+    if (controller.hasCustomTapHandler) {
+      controller.renderer.onTapLink?.call(url);
+    } else if (confirmBeforeOpeningLinks) {
+      confirmAndLaunchLink(context, url);
+    } else {
+      launchLinkUrl(url);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -221,24 +247,68 @@ class RichTextEditor extends StatelessWidget {
                         isDense: true,
                         contentPadding: EdgeInsets.zero,
                       ),
+                      // Long-press (the platform's own gesture for
+                      // "select word + show the selection toolbar") is
+                      // what triggers link activation, via the
+                      // "Open Link" button injected below — not a bare
+                      // single tap, which stays reserved for cursor
+                      // placement. This is also more reliable than
+                      // driving activation off `TextField.onTap`:
+                      // `contextMenuBuilder` is the framework's actual
+                      // supported hook for adding a custom action here,
+                      // rather than racing the field's own built-in tap/
+                      // double-tap/drag gesture recognizers.
                       contextMenuBuilder: (context, editableTextState) {
-                        return AdaptiveTextSelectionToolbar.editable(
+                        final selection = editableTextState.textEditingValue.selection;
+                        final linkUrl = selection.isValid
+                            ? (controller.linkUrlAt(selection.start) ??
+                            controller.linkUrlAt(selection.end))
+                            : null;
+
+                        if (linkUrl == null) {
+                          // No link under the current long-press
+                          // selection — identical to the toolbar this
+                          // editor always showed before this change.
+                          return AdaptiveTextSelectionToolbar.editable(
+                            anchors: editableTextState.contextMenuAnchors,
+                            clipboardStatus: ClipboardStatus.pasteable,
+                            onCopy: () {
+                              controller.copy();
+                              editableTextState.hideToolbar();
+                            },
+                            onCut: () {
+                              controller.cut();
+                              editableTextState.hideToolbar();
+                            },
+                            onPaste: () => controller.paste(),
+                            onSelectAll: () =>
+                                editableTextState.selectAll(SelectionChangedCause.toolbar),
+                            onLiveTextInput: null,
+                            onLookUp: null,
+                            onSearchWeb: null,
+                            onShare: null,
+                          );
+                        }
+
+                        // Selection landed on a link: prepend "Open
+                        // Link" to the platform's normal button set
+                        // (`editableTextState.contextMenuButtonItems`
+                        // already computes Cut/Copy/Paste/Select All
+                        // exactly as the branch above does by hand) —
+                        // additive only, so cut/copy/paste/select-all
+                        // on linked text keeps working unchanged.
+                        return AdaptiveTextSelectionToolbar.buttonItems(
                           anchors: editableTextState.contextMenuAnchors,
-                          clipboardStatus: ClipboardStatus.pasteable,
-                          onCopy: () {
-                            controller.copy();
-                            editableTextState.copySelection(SelectionChangedCause.toolbar);
-                          },
-                          onCut: () {
-                            controller.cut();
-                            editableTextState.cutSelection(SelectionChangedCause.toolbar);
-                          },
-                          onPaste: () => controller.paste(),
-                          onSelectAll: () => editableTextState.selectAll(SelectionChangedCause.toolbar),
-                          onLiveTextInput: null,
-                          onLookUp: null,
-                          onSearchWeb: null,
-                          onShare: null,
+                          buttonItems: [
+                            ContextMenuButtonItem(
+                              label: 'Open Link',
+                              onPressed: () {
+                                editableTextState.hideToolbar();
+                                _openLink(context, linkUrl);
+                              },
+                            ),
+                            ...editableTextState.contextMenuButtonItems,
+                          ],
                         );
                       },
                     ),
