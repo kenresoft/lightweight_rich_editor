@@ -58,12 +58,20 @@ class _StyleEvent {
 class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   RichTextRenderTheme theme;
 
-  /// Called when the user taps a link span, with the link's URL. Links
-  /// only become tappable when this is set — without it, they're styled
-  /// (underlined, colored) but inert, same as before this was added.
+  /// Called when the user taps a link span, with the link's URL.
   void Function(String url)? onTapLink;
 
-  TextSpanRenderer({this.theme = RichTextRenderTheme.standard, this.onTapLink});
+  /// Whether links should be interactive (clickable) in the rendered
+  /// span. In an editable field, this should usually be `false` to
+  /// allow cursor placement and selection on links; the host can
+  /// still handle links via long-press (selection toolbar).
+  bool interactiveLinks;
+
+  TextSpanRenderer({
+    this.theme = RichTextRenderTheme.standard,
+    this.onTapLink,
+    this.interactiveLinks = true,
+  });
 
   TextSpan? _cachedSpan;
   String? _cachedText;
@@ -114,7 +122,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         _cachedStyle == style &&
         _cachedComposing == composingRange &&
         _cachedMatchHighlight == matchHighlightRange &&
-        _cachedTheme == theme) {
+        _cachedTheme == theme &&
+        _cachedInteractiveLinks == interactiveLinks) {
       return _cachedSpan!;
     }
 
@@ -127,8 +136,11 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedComposing = composingRange;
     _cachedMatchHighlight = matchHighlightRange;
     _cachedTheme = theme;
+    _cachedInteractiveLinks = interactiveLinks;
     return span;
   }
+
+  bool? _cachedInteractiveLinks;
 
   /// Invalidates the cache without changing anything else — call if
   /// `theme` was mutated in place rather than reassigned (mutating a
@@ -151,7 +163,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   }
 
   TapGestureRecognizer? _recognizerFor(String? linkUrl) {
-    if (linkUrl == null || onTapLink == null) return null;
+    if (linkUrl == null || onTapLink == null || !interactiveLinks) return null;
     final url = linkUrl;
     final recognizer = TapGestureRecognizer()..onTap = () => onTapLink?.call(url);
     _recognizers.add(recognizer);

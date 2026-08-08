@@ -52,17 +52,21 @@ class ReplaceRangeCommand extends EditorCommand {
   @override
   EditorSelection execute(EditingEngine engine) {
     final store = engine.document.attributeStore;
-    _removedText = engine.document.buffer.substring(start, end);
-    _removedSpans = store.findIntersecting(start, end);
+    final length = engine.document.buffer.length;
+    final safeStart = start.clamp(0, length);
+    final safeEnd = end.clamp(safeStart, length);
+
+    _removedText = engine.document.buffer.substring(safeStart, safeEnd);
+    _removedSpans = store.findIntersecting(safeStart, safeEnd);
 
     if (relativeAttributes != null) {
       return engine.pasteRich(
-        EditorSelection(baseOffset: start, extentOffset: end),
+        EditorSelection(baseOffset: safeStart, extentOffset: safeEnd),
         text,
         relativeAttributes!,
       );
     }
-    return engine.replaceRange(start, end, text, attributesForInsertion: attributesForInsertion);
+    return engine.replaceRange(safeStart, safeEnd, text, attributesForInsertion: attributesForInsertion);
   }
 
   @override

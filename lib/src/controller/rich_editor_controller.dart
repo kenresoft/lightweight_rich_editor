@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../clipboard/clipboard_manager.dart';
+import '../clipboard/in_memory_rich_clipboard_delegate.dart';
 import '../clipboard/rich_clipboard_delegate.dart';
 import '../commands/command_dispatcher.dart';
 import '../commands/replace_range_command.dart';
@@ -8,7 +9,11 @@ import '../core/editing_engine.dart';
 import '../core/editor_document.dart';
 import '../core/editor_selection.dart';
 import '../core/transaction_manager.dart';
+import '../export/html_exporter.dart';
+import '../export/markdown_exporter.dart';
 import '../history/history_manager.dart';
+import '../import/html_importer.dart';
+import '../import/markdown_importer.dart';
 import '../metrics/editor_metrics.dart';
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
@@ -16,7 +21,9 @@ import '../rendering/render_theme.dart';
 import '../rendering/text_span_renderer.dart';
 import '../search/search_index.dart';
 import '../utils/clamp_int.dart';
+import '../utils/link_launcher.dart';
 import '../utils/text_diff.dart';
+import '../utils/url_detector.dart';
 
 /// The public API of the editor: a [TextEditingController] that
 /// coordinates [EditorDocument], [EditingEngine], [HistoryManager]/
@@ -33,6 +40,10 @@ import '../utils/text_diff.dart';
 ///    framework-agnostic [EditorSelection].
 /// 3. Keeping [TextEditingController.value] in sync with [document] as
 ///    the single [TransactionManager] commit callback ([_handleCommit]).
+/// 4. Detecting a just-completed URL token at a typing boundary
+///    (space/newline/tab) and autolinking it via the same
+///    [CommandDispatcher.setLink] path the manual link dialog uses
+///    (see [_maybeAutolink]).
 ///
 /// Compare this to the original `RichTextEditingController`, which did
 /// all of the above *and* every editing method *and* undo/redo *and*
@@ -51,6 +62,16 @@ class RichEditorController extends TextEditingController {
   final FocusNode focusNode;
   final bool _ownsFocusNode;
 
+  /// Whether the host supplied its own `onTapLink` to this constructor,
+  /// as opposed to relying on the default ([launchLinkUrl]). Read by
+  /// `RichTextEditor` to decide whether it's safe to layer its own
+  /// tap-confirmation UI on top of `renderer.onTapLink` — see
+  /// `RichTextEditor.confirmBeforeOpeningLinks`. A host that already
+  /// asked for custom tap behavior (e.g. routing taps to an in-app
+  /// webview) is left completely alone rather than having that
+  /// silently wrapped in a confirmation dialog it didn't ask for.
+  final bool hasCustomTapHandler;
+
   RichEditorController({
     String text = '',
     List<TextAttribute> initialAttributes = const [],
@@ -60,8 +81,20 @@ class RichEditorController extends TextEditingController {
     int maxHistoryLength = 500,
     RichClipboardDelegate? richClipboardDelegate,
     void Function(String url)? onTapLink,
+    bool interactiveLinks = false,
   })  : document = EditorDocument.fromText(text, initialAttributes),
-        renderer = TextSpanRenderer(theme: theme, onTapLink: onTapLink),
+  // Defaults to the standard external-browser launcher
+  // (`launchLinkUrl`) when the host doesn't supply its own
+  // `onTapLink` — so both manually-created and autolinked links
+  // are tappable out of the box. Hosts that want different
+  // behavior still override it via the constructor param exactly
+  // as before; see `hasCustomTapHandler`.
+        renderer = TextSpanRenderer(
+          theme: theme,
+          onTapLink: onTapLink ?? launchLinkUrl,
+          interactiveLinks: interactiveLinks,
+        ),
+        hasCustomTapHandler = onTapLink != null,
         focusNode = focusNode ?? FocusNode(),
         _ownsFocusNode = focusNode == null,
         super(text: text) {
@@ -73,7 +106,11 @@ class RichEditorController extends TextEditingController {
       maxHistoryLength: maxHistoryLength,
     );
     commands = CommandDispatcher(engine: engine, history: history);
-    clipboard = ClipboardManager(document: document, commands: commands, delegate: richClipboardDelegate);
+    clipboard = ClipboardManager(
+      document: document,
+      commands: commands,
+      delegate: richClipboardDelegate ?? InMemoryRichClipboardDelegate(),
+    );
     metrics = EditorMetrics(document: document, history: history);
     search = SearchIndex(document: document, commands: commands);
     this.focusNode.addListener(_handleFocusChange);
@@ -144,6 +181,74 @@ class RichEditorController extends TextEditingController {
       selection: newValue.selection,
       composing: newValue.composing,
     );
+
+    if (!diff.isNoOp) {
+      _maybeAutolink(diff);
+    }
+  }
+
+  /// After a text-changing edit, checks whether the just-inserted text
+  /// ended on an autolink boundary (space/newline/tab) and, if the
+  /// token immediately before that boundary is a confidently
+  /// URL-shaped token, applies the link attribute over it via
+  /// [CommandDispatcher.setLink] — the exact same path the manual link
+  /// dialog uses, so an autolinked URL is its own undo step and is
+  /// editable/removable exactly like a manually-inserted link.
+  ///
+  /// Deliberately runs *after* `super.value = ...` above rather than
+  /// before. By the time `commands.setLink` fires
+  /// `transactions.notify()` -> `_handleCommit` -> `_applyValue`,
+  /// `this.selection` already equals the correct, final, IME-reported
+  /// selection — so `_handleCommit`'s clamp-and-reapply computes a
+  /// genuine no-op `TextEditingValue`, and `_applyValue` takes the
+  /// documented "notify anyway" path for pure-formatting changes,
+  /// instead of momentarily computing a stale, pre-edit-selection
+  /// guess and then immediately overwriting it.
+  ///
+  /// Only ever inspects the single token immediately before the
+  /// boundary that was just typed — never the whole document — which
+  /// is what keeps this from firing while a URL is still being typed:
+  /// a boundary char has to have actually just been inserted for
+  /// `diff.insertedText` to end with one, and no URL contains a
+  /// space/newline/tab.
+  void _maybeAutolink(TextDiff diff) {
+    if (diff.insertedText.isEmpty) return;
+    final lastChar = diff.insertedText[diff.insertedText.length - 1];
+    if (!isAutolinkBoundary(lastChar)) return;
+
+    final boundaryIndex = diff.start + diff.insertedText.length - 1;
+    final detected = detectUrlBeforeBoundary(document.text, boundaryIndex);
+    if (detected == null) return;
+
+    final existing = document.attributeStore.findIntersecting(detected.start, detected.end, type: AttributeType.link);
+    if (existing.isNotEmpty) {
+      final link = existing.first;
+      if (link.start == detected.start && link.end == detected.end && link.value == detected.href) {
+        return;
+      }
+    }
+
+    commands.setLink(
+      EditorSelection(baseOffset: detected.start, extentOffset: detected.end),
+      detected.href,
+    );
+
+    // `EditingEngine.applyAttribute` sets the link as a *sticky*
+    // attribute after applying it to a range — correct for something
+    // like bold (keep bolding as you keep typing right after a bolded
+    // selection), wrong here: without this, the very next character
+    // typed after the space would silently inherit the link. A
+    // collapsed selection at the boundary clears sticky state only —
+    // it never touches the document/store (see
+    // `EditingEngine.removeAttribute`) — so this is not an undo step,
+    // same as `syncStickyAttributesAt` above being called directly on
+    // `engine` rather than through `commands`/`history`.
+    engine.removeAttribute(AttributeType.link, EditorSelection.collapsed(detected.end));
+
+    // Defensive: make sure the next keystroke starts a fresh
+    // typing/coalescing session rather than risking a merge with
+    // whatever's now on top of the undo stack.
+    history.breakCoalescing();
   }
 
   /// Assigns `newValue`, guaranteeing listeners are notified even when
@@ -260,6 +365,26 @@ class RichEditorController extends TextEditingController {
   void pasteRichText(String text, List<TextAttribute> relativeAttributes) =>
       _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));
 
+  /// Parses `markdown` (a deliberately scoped subset — see
+  /// [MarkdownImporter]) and pastes the result at the current selection.
+  void pasteMarkdown(String markdown) {
+    final parsed = const MarkdownImporter().parse(markdown);
+    _syncSelection(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
+  }
+
+  /// Parses `html` (see [HtmlImporter] for what's recognized) and pastes
+  /// the result at the current selection.
+  ///
+  /// This library doesn't source `html` for you — Flutter's built-in
+  /// `Clipboard` API doesn't reliably expose HTML content across
+  /// platforms without a plugin (e.g. `super_clipboard`). Call this once
+  /// your app has obtained an HTML string some other way (a clipboard
+  /// plugin, a platform channel, drag-and-drop, a web `paste` event).
+  void pasteHtml(String html) {
+    final parsed = const HtmlImporter().parse(html);
+    _syncSelection(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
+  }
+
   /// Copies the current selection to the system clipboard (and to
   /// [clipboard]'s delegate, if one is set, preserving formatting). See
   /// [ClipboardManager.copy].
@@ -277,6 +402,12 @@ class RichEditorController extends TextEditingController {
   }
 
   void toggleBold() => commands.toggleBold(_currentSelection);
+
+  /// Exports the current document as an HTML string.
+  String toHtml() => const HtmlExporter().export(document.text, document.attributes);
+
+  /// Exports the current document as a Markdown string.
+  String toMarkdown() => const MarkdownExporter().export(document.text, document.attributes);
   void toggleItalic() => commands.toggleItalic(_currentSelection);
   void toggleUnderline() => commands.toggleUnderline(_currentSelection);
   void toggleStrikethrough() => commands.toggleStrikethrough(_currentSelection);
@@ -331,6 +462,34 @@ class RichEditorController extends TextEditingController {
         .findIntersecting(sel.start, sel.end, type: type)
         .where((s) => s.covers(sel.start, sel.end));
     return covering.isEmpty ? null : covering.first.value;
+  }
+
+  /// The link URL at [offset], or `null` if [offset] isn't inside a
+  /// link attribute.
+  ///
+  /// Checks both `offset` and `offset - 1`. A single tap's resulting
+  /// caret offset lands wherever `RenderEditable` rounds to the
+  /// nearest character boundary — tapping the *right half* of a
+  /// link's very last character is a completely ordinary way to tap
+  /// "on" that link, and it produces `offset == link.end`, not
+  /// `link.end - 1`. Checking only `offset` would silently miss that
+  /// (common) case. The trade-off: a tap intended to place the caret
+  /// just *after* a link (to keep typing) at that exact same boundary
+  /// offset is indistinguishable from a tap "on" the link's last
+  /// character — this is inherently ambiguous from offset alone, the
+  /// same ambiguity Google Docs/Notion have at a link's edge. Pairing
+  /// this with a confirmation dialog before actually launching (see
+  /// `RichTextEditor`) is what makes that ambiguity harmless rather
+  /// than something that needs pixel-perfect resolution here.
+  String? linkUrlAt(int offset) {
+    if (offset < 0) return null;
+    final atOffset = document.attributeStore.findAt(offset, type: AttributeType.link);
+    if (atOffset.isNotEmpty) return atOffset.first.value as String?;
+    if (offset > 0) {
+      final beforeOffset = document.attributeStore.findAt(offset - 1, type: AttributeType.link);
+      if (beforeOffset.isNotEmpty) return beforeOffset.first.value as String?;
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------
