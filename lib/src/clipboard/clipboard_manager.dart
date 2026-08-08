@@ -1,23 +1,21 @@
-import 'package:flutter/services.dart';
-
 import '../commands/command_dispatcher.dart';
 import '../core/editor_document.dart';
 import '../core/editor_selection.dart';
+import '../export/html_exporter.dart';
+import '../import/html_importer.dart';
+import '../import/markdown_importer.dart';
+import '../models/attribute_type.dart';
+import '../models/text_attribute.dart';
+import '../utils/url_detector.dart';
+import 'native/rich_clipboard_platform.dart';
 import 'rich_clipboard_delegate.dart';
 
 /// Copy/cut/paste for an [EditorDocument], via [CommandDispatcher] so
 /// cut and paste are ordinary undoable edits like everything else.
 ///
-/// This used to live as private methods inside the app's `RichTextEditor`
-/// widget — functionally fine, but it meant clipboard behavior wasn't
-/// reusable by any other UI built on the same controller, and it forced
-/// the widget layer to reach into `document.attributes`/`document.text`
-/// directly rather than going through the library's own API. Moving it
-/// here means any widget wrapping [RichEditorController] — a plain
-/// `TextField`, a custom canvas editor, a test — gets working copy/cut/
-/// paste for free, and rich formatting round-trips through an optional
-/// [RichClipboardDelegate] instead of a hard dependency on one app's
-/// clipboard class.
+/// This uses an internal native plugin to access rich content flavors
+/// (like HTML) that browsers and other apps provide, which Flutter's
+/// built-in `Clipboard` API cannot reach.
 class ClipboardManager {
   final EditorDocument document;
   final CommandDispatcher commands;
@@ -49,7 +47,10 @@ class ClipboardManager {
         .toList(growable: false);
 
     delegate?.store(text, attributes);
-    await Clipboard.setData(ClipboardData(text: text));
+    
+    // Generate HTML to preserve formatting in the system clipboard.
+    final html = const HtmlExporter().export(text, attributes);
+    await RichClipboardPlatform.setData(text: text, html: html);
   }
 
   /// Copies `selection`, then deletes it. Returns the resulting
@@ -62,18 +63,79 @@ class ClipboardManager {
   /// Pastes at `selection`, preferring rich content from [delegate] when
   /// its stored plain text matches what's currently on the system
   /// clipboard (i.e. it's still the same copy, not something copied
-  /// elsewhere since) — otherwise falls back to plain-text paste from
-  /// the system clipboard. Returns the resulting selection, or `null` if
-  /// the clipboard had no text to paste.
+  /// elsewhere since) — otherwise falls back to the HTML flavor if
+  /// available via native plugin, or heuristic Markdown detection.
+  ///
+  /// Returns the resulting selection, or `null` if the clipboard had no
+  /// content to paste.
   Future<EditorSelection?> paste(EditorSelection selection) async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final plainText = data?.text;
-    if (plainText == null || plainText.isEmpty) return null;
+    // RichClipboardPlatform.getData() provides both plain text and HTML
+    // from the system clipboard using native code.
+    final data = await RichClipboardPlatform.getData();
+    final plainText = data.text;
+    final htmlText = data.html;
+
+    if ((plainText == null || plainText.isEmpty) && (htmlText == null || htmlText.isEmpty)) {
+      return null;
+    }
 
     final rich = delegate?.read();
     if (rich != null && rich.text == plainText) {
       return commands.pasteRich(selection, rich.text, rich.attributes);
     }
-    return commands.paste(selection, plainText);
+
+    // 1. Try HTML if the clipboard provided it (e.g. copied from a browser)
+    if (htmlText != null && htmlText.isNotEmpty) {
+      final parsed = const HtmlImporter().parse(htmlText);
+      // Only use the rich import if it actually found formatting or
+      // meaningful structure.
+      if (parsed.attributes.isNotEmpty || (plainText != null && parsed.text != plainText)) {
+        return commands.pasteRich(selection, parsed.text, parsed.attributes);
+      }
+    }
+
+    // 2. Fallback to heuristic Markdown detection on the plain text version
+    if (plainText != null && plainText.isNotEmpty) {
+      if (_looksLikeMarkdown(plainText)) {
+        final parsed = const MarkdownImporter().parse(plainText);
+        if (parsed.attributes.isNotEmpty) {
+          return commands.pasteRich(selection, parsed.text, parsed.attributes);
+        }
+      }
+
+      // 3. Final fallback: plain text with autolink detection
+      final urls = detectAllUrls(plainText);
+      if (urls.isNotEmpty) {
+        final attributes = urls.map((u) => TextAttribute(
+          start: u.start,
+          end: u.end,
+          type: AttributeType.link,
+          value: u.href,
+        )).toList();
+        return commands.pasteRich(selection, plainText, attributes);
+      }
+
+      return commands.paste(selection, plainText);
+    }
+
+    return null;
+  }
+
+  bool _looksLikeMarkdown(String text) {
+    // Detects common Markdown markers.
+    // 1. Headers: # at start of line
+    if (RegExp(r'^#+ ', multiLine: true).hasMatch(text)) return true;
+    
+    // 2. Inline markers: bold, strikethrough, code
+    if (text.contains('**') || text.contains('__') || 
+        text.contains('~~') || text.contains('`')) return true;
+    
+    // 3. Italic markers: single * or _ with content
+    if (RegExp(r'([*_]).+\1').hasMatch(text)) return true;
+    
+    // 4. Links: [text](url)
+    if (RegExp(r'\[.*\]\(.*\)').hasMatch(text)) return true;
+    
+    return false;
   }
 }
