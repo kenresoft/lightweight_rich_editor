@@ -8,13 +8,14 @@ A performance-focused, lightweight rich-text editor for Flutter with notebook-st
 ## Features
 
 - **Standard Rich Text Styling**: Bold, Italic, Underline, Strikethrough.
+- **Rich Content Interop**: Intelligent paste support for HTML (from browsers) and Markdown, preserving formatting natively.
 - **Advanced Styling**: Custom text colors, highlights, font sizes, and inline code.
 - **Structural Elements**: Heading support (H1, H2).
 - **Hyperlinks**: Easy link insertion and management.
 - **Notebook Experience**: Customizable horizontal ruled lines and vertical margin lines.
 - **Performance First**: Built on top of standard `EditableText` for smooth scrolling and low memory overhead.
-- **Highly Configurable**: Control everything from colors and fonts to history length and behavior via `RichEditorConfig`.
-- **Serialization**: Save and load documents with high fidelity using `NoteDocument` (JSON-ready).
+- **Highly Configurable**: Control everything from colors and fonts to history length and behavior via `RichTextRenderTheme` and `RichEditorStyle`.
+- **Serialization**: Save and load documents with high fidelity using `EditorDocument` (JSON-ready).
 
 ## Getting started
 
@@ -22,14 +23,14 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  lightweight_rich_editor: ^0.1.0
+  lightweight_rich_editor: ^0.1.1
 ```
 
 ## Usage
 
 ### 1. Basic Usage
 
-Use the `RichTextEditor` widget along with a `RichTextEditingController`.
+Use the `RichTextEditor` widget along with a `RichEditorController`.
 
 ```dart
 import 'package:flutter/material.dart';
@@ -41,13 +42,13 @@ class MyEditor extends StatefulWidget {
 }
 
 class _MyEditorState extends State<MyEditor> {
-  late final RichTextEditingController _controller;
+  late final RichEditorController _controller;
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _controller = RichTextEditingController(text: "Hello World!");
+    _controller = RichEditorController(text: "Hello World!");
   }
 
   @override
@@ -64,19 +65,21 @@ class _MyEditorState extends State<MyEditor> {
 
 ### 2. Custom Configuration
 
-Customize the editor's appearance and behavior using `RichEditorConfig`.
+Customize the editor's appearance using `RichTextRenderTheme` and `RichEditorStyle`.
 
 ```dart
-final myConfig = RichEditorConfig(
-  fontSize: 20.0,
+final myTheme = RichTextRenderTheme(
+  baseFontSize: 18.0,
   highlightColor: Colors.yellow.withOpacity(0.5),
-  ruledLineColor: Colors.grey.withOpacity(0.2),
-  maxHistoryLength: 50,
 );
 
-_controller = RichTextEditingController(
+final myStyle = RichEditorStyle(
+  ruledLineColor: Colors.grey.withOpacity(0.2),
+);
+
+_controller = RichEditorController(
   text: "Custom Editor",
-  config: myConfig,
+  theme: myTheme,
 );
 ```
 

@@ -1,6 +1,6 @@
 name: lightweight_rich_editor
 description: "A lightweight, performance-focused rich-text editor for Flutter with notebook-style ruled lines and high customizability."
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/kenresoft/lightweight_rich_editor
 issue_tracker: https://github.com/kenresoft/lightweight_rich_editor/issues
 topics:
@@ -15,6 +15,9 @@ environment:
   flutter: ">=3.0.0"
 
 dependencies:
+  html: ^0.15.6
+  url_launcher: ^6.3.2
+  web: ^1.1.1
   flutter:
     sdk: flutter
 
@@ -24,6 +27,23 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 
 flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.kenresoft.lightweight_rich_editor
+        pluginClass: LightweightRichEditorPlugin
+      ios:
+        pluginClass: LightweightRichEditorPlugin
+      web:
+        pluginClass: LightweightRichEditorWeb
+        fileName: src/clipboard/native/rich_clipboard_web.dart
+      macos:
+        pluginClass: LightweightRichEditorPlugin
+      windows:
+        pluginClass: LightweightRichEditorPlugin
+      linux:
+        pluginClass: LightweightRichEditorPlugin
+
   uses-material-design: true
 
   # To add assets to your package, add an assets section, like this:
