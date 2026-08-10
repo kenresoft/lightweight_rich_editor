@@ -1,25 +1,21 @@
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
+import '../utils/url_detector.dart';
 
-/// Parses a deliberately scoped *subset* of Markdown into plain text plus
-/// [TextAttribute]s — not a CommonMark-compliant parser.
+/// Parses a deliberately scoped *subset* of Markdown (and WhatsApp flavor)
+/// into plain text plus [TextAttribute]s — not a CommonMark-compliant parser.
 ///
 /// Supported: `**bold**`, `*italic*` / `_italic_`, `~~strikethrough~~`,
 /// `` `code` ``, `[text](url)` links, and `# ` / `## ` headers at the
-/// start of a line (mapped to h1/h2 — this editor doesn't model h3+, so
-/// `###` and deeper collapse to h2).
+/// start of a line.
 ///
-/// Explicitly NOT supported, by design — these would pull this "lightweight
-/// inline formatting" editor toward being a document/block editor, which
-/// the product brief rules out: lists, blockquotes, tables, images,
-/// reference-style links, `***triple***` markers, backslash escaping, and
-/// nested/combined emphasis within a single run (e.g.
-/// `**bold *and italic* together**` — the inner `*...*` won't parse
-/// correctly layered inside the outer `**...**`).
+/// WhatsApp flavor: `*bold*`, `_italic_`, `~strikethrough~`, ` ```monospace``` `.
 ///
-/// Unclosed markers degrade gracefully: `**bold` with no closing `**`
-/// renders as the literal text `**bold`, not silently-dropped characters
-/// or a crash — see [_pairMarkers].
+/// List markers (`- `, `* `, `+ `, `1. `) are intentionally left alone —
+/// list formatting was removed from [AttributeType] (see its doc comment
+/// for why), so a line starting with one of these is imported as literal
+/// text, prefix included, rather than silently stripping the prefix and
+/// losing the visual list shape the source note had.
 class MarkdownImporter {
   const MarkdownImporter();
 
@@ -27,13 +23,14 @@ class MarkdownImporter {
   /// it — ready to hand to `CommandDispatcher.pasteRich`/
   /// `RichEditorController.pasteMarkdown`.
   ({String text, List<TextAttribute> attributes}) parse(String markdown) {
+    final isWhatsApp = _detectWhatsAppFlavor(markdown);
     final lines = markdown.split('\n');
     final buffer = StringBuffer();
     final attributes = <TextAttribute>[];
 
     for (var i = 0; i < lines.length; i++) {
-      final stripped = _stripHeaderPrefix(lines[i]);
-      final inline = _parseInline(stripped.rest);
+      final stripped = _stripPrefix(lines[i]);
+      final inline = _parseInline(stripped.rest, isWhatsApp);
 
       final lineStart = buffer.length;
       buffer.write(inline.text);
@@ -57,20 +54,31 @@ class MarkdownImporter {
     return (text: buffer.toString(), attributes: attributes);
   }
 
-  ({String? headerLevel, String rest}) _stripHeaderPrefix(String line) {
+  bool _detectWhatsAppFlavor(String markdown) {
+    final hasWAExclusive = markdown.contains('```') ||
+        RegExp(r'(^|\s)~[^~]+~($|\s)').hasMatch(markdown);
+    final hasMDExclusive = markdown.contains('**') || markdown.contains('~~');
+
+    // If it has WA markers and NO MD markers, it's highly likely WhatsApp.
+    // If it has both, we default to Markdown to be safe.
+    // If it has only ambiguous markers like `*text*`, we fallback to Markdown.
+    return hasWAExclusive && !hasMDExclusive;
+  }
+
+  ({String? headerLevel, String rest}) _stripPrefix(String line) {
     if (line.startsWith('## ')) return (headerLevel: 'h2', rest: line.substring(3));
     if (line.startsWith('# ')) return (headerLevel: 'h1', rest: line.substring(2));
-    // Collapse any deeper heading level to h2 — this editor only models
-    // two header levels.
-    final match = RegExp(r'^(#{3,6}) ').firstMatch(line);
-    if (match != null) return (headerLevel: 'h2', rest: line.substring(match.end));
+    final headerMatch = RegExp(r'^(#{3,6}) ').firstMatch(line);
+    if (headerMatch != null) return (headerLevel: 'h2', rest: line.substring(headerMatch.end));
+
+    // List-prefixed lines ('- ', '* ', '+ ', '1. ') are intentionally
+    // left untouched here and fall through to the plain-text case below
+    // — see the class doc comment.
     return (headerLevel: null, rest: line);
   }
 
-  ({String text, List<TextAttribute> attributes}) _parseInline(String line) {
-    // Links first — they're atomic (`[text](url)` always resolves in one
-    // step) and link text is treated as plain (no nested emphasis parsed
-    // inside brackets, a deliberate scope limit).
+  ({String text, List<TextAttribute> attributes}) _parseInline(String line, bool isWhatsApp) {
+    // Links first
     final links = <({int start, int end, int textStart, int textEnd, String url})>[];
     var i = 0;
     while (i < line.length) {
@@ -93,8 +101,7 @@ class MarkdownImporter {
     }
     bool insideLink(int index) => links.any((l) => index >= l.start && index < l.end);
 
-    // Emphasis markers outside link ranges, paired left-to-right per
-    // marker string.
+    // Emphasis markers outside link ranges
     final occurrences = <({int index, String marker})>[];
     i = 0;
     while (i < line.length) {
@@ -102,7 +109,7 @@ class MarkdownImporter {
         i++;
         continue;
       }
-      final marker = _markerAt(line, i);
+      final marker = _markerAt(line, i, isWhatsApp);
       if (marker != null) {
         occurrences.add((index: i, marker: marker));
         i += marker.length;
@@ -110,12 +117,9 @@ class MarkdownImporter {
         i++;
       }
     }
-    final pairs = _pairMarkers(occurrences);
+    final pairs = _pairMarkers(occurrences, isWhatsApp);
 
-    // Final pass: write output, substituting links, consuming matched
-    // marker delimiters, and recording attributes in output coordinates.
-    // Anything not part of a link or a matched pair — including any
-    // marker character that never found its match — is written literally.
+    // Final pass: write output and collect attributes
     final buffer = StringBuffer();
     final attributes = <TextAttribute>[];
     final pairOutputStart = <int, int>{};
@@ -153,10 +157,27 @@ class MarkdownImporter {
       i++;
     }
 
-    return (text: buffer.toString(), attributes: attributes);
+    // Autolink bare URLs in the resulting plain text, avoiding existing links
+    final plainText = buffer.toString();
+    final urls = detectAllUrls(plainText);
+    for (final u in urls) {
+      final overlaps = attributes.any((a) => a.type == AttributeType.link && a.intersects(u.start, u.end));
+      if (!overlaps) {
+        attributes.add(TextAttribute(start: u.start, end: u.end, type: AttributeType.link, value: u.href));
+      }
+    }
+
+    return (text: plainText, attributes: attributes);
   }
 
-  String? _markerAt(String line, int i) {
+  String? _markerAt(String line, int i, bool isWhatsApp) {
+    if (isWhatsApp) {
+      if (_startsWith(line, i, '```')) return '```';
+      if (line[i] == '*') return '*';
+      if (line[i] == '_') return '_';
+      if (line[i] == '~') return '~';
+      return null;
+    }
     if (_startsWith(line, i, '**')) return '**';
     if (_startsWith(line, i, '__')) return '__';
     if (_startsWith(line, i, '~~')) return '~~';
@@ -171,7 +192,15 @@ class MarkdownImporter {
     return line.substring(i, i + pattern.length) == pattern;
   }
 
-  AttributeType _markerType(String marker) {
+  AttributeType _markerType(String marker, bool isWhatsApp) {
+    if (isWhatsApp) {
+      switch (marker) {
+        case '*': return AttributeType.bold;
+        case '_': return AttributeType.italic;
+        case '~': return AttributeType.strikethrough;
+        case '```': return AttributeType.code;
+      }
+    }
     switch (marker) {
       case '**':
       case '__':
@@ -185,15 +214,9 @@ class MarkdownImporter {
     }
   }
 
-  /// Pairs marker occurrences into (open, close) spans using one stack
-  /// per marker string, left to right — the first unmatched occurrence
-  /// of a marker opens it, the next occurrence of the *same* marker
-  /// string closes it. A marker occurrence that never gets closed (odd
-  /// count of that marker on the line) is simply never added to the
-  /// result, which is what makes unclosed markers degrade to literal
-  /// text in [_parseInline] rather than eating the character silently.
   List<({int openIndex, int closeIndex, int markerLength, AttributeType type})> _pairMarkers(
       List<({int index, String marker})> occurrences,
+      bool isWhatsApp,
       ) {
     final pairs = <({int openIndex, int closeIndex, int markerLength, AttributeType type})>[];
     final openStacks = <String, List<int>>{};
@@ -207,13 +230,9 @@ class MarkdownImporter {
           openIndex: openIndex,
           closeIndex: occ.index,
           markerLength: occ.marker.length,
-          type: _markerType(occ.marker),
+          type: _markerType(occ.marker, isWhatsApp),
           ));
         }
-        // Empty content between markers (e.g. "****") — drop the pair
-        // silently rather than creating a zero-width attribute; those
-        // characters simply won't match any pair in the final pass and
-        // fall through as literal text.
       } else {
         stack.add(occ.index);
       }
