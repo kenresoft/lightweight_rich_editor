@@ -34,7 +34,23 @@ class CommandDispatcher {
 
   /// Inserts `text` at `selection` (replacing it, if not collapsed),
   /// formatted with whatever sticky attributes are currently pending.
+  ///
+  /// A bare `'\n'` — a single-character insertion, indistinguishable at
+  /// this layer from a live Enter keypress — is routed through
+  /// [EditingEngine.enterKeyEdit] first, so typing Enter inside a
+  /// literal list line continues (or exits) the list as plain text. A
+  /// multi-character paste that happens to contain newlines never hits
+  /// this branch; only an exact single `'\n'` does.
   EditorSelection insertText(EditorSelection selection, String text) {
+    if (text == '\n') {
+      final edit = engine.enterKeyEdit(selection);
+      return dispatch(ReplaceRangeCommand(
+        start: edit.start,
+        end: edit.end,
+        text: edit.text,
+        attributesForInsertion: Map.of(engine.stickyAttributes),
+      ));
+    }
     return dispatch(ReplaceRangeCommand(
       start: selection.start,
       end: selection.end,

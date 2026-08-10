@@ -14,7 +14,7 @@ class RichClipboardPlatform {
         text: result['text'] as String?,
         html: result['html'] as String?,
       );
-    } on PlatformException catch (e) {
+    } catch (_) {
       // Degrading to plain text if the native plugin fails or isn't implemented.
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       return (text: data?.text, html: null);
@@ -28,7 +28,7 @@ class RichClipboardPlatform {
         'text': text,
         'html': html,
       });
-    } on PlatformException catch (_) {
+    } catch (_) {
       // Fallback to standard Flutter API if native plugin fails.
       await Clipboard.setData(ClipboardData(text: text));
     }

@@ -72,6 +72,17 @@ class RichEditorController extends TextEditingController {
   /// silently wrapped in a confirmation dialog it didn't ask for.
   final bool hasCustomTapHandler;
 
+  /// A visual-only selection range to be rendered even when the editor
+  /// loses focus (e.g. while a formatting popup is open).
+  TextRange? _selectionHighlight;
+  TextRange? get selectionHighlight => _selectionHighlight;
+
+  void setSelectionHighlight(TextRange? range) {
+    if (_selectionHighlight == range) return;
+    _selectionHighlight = range;
+    notifyListeners();
+  }
+
   RichEditorController({
     String text = '',
     List<TextAttribute> initialAttributes = const [],
@@ -145,6 +156,16 @@ class RichEditorController extends TextEditingController {
   /// changes (arrow keys, taps) skip straight to syncing sticky
   /// formatting and breaking coalescing — no diffing needed since the
   /// text didn't change.
+  ///
+  /// A diff whose entire inserted text is a bare `'\n'` — a live Enter
+  /// keypress, indistinguishable at this layer from any other single-
+  /// character insertion — is routed through
+  /// [EditingEngine.enterKeyEdit] first, so typing Enter inside a
+  /// literal list line (`'- '`, `'3. '`, ...) continues or exits the
+  /// list as plain text. This is the actual typing path a live
+  /// `TextField` takes; [CommandDispatcher.insertText] has the same
+  /// hook for programmatic/toolbar-driven insertion, but that method is
+  /// never called for ordinary keystrokes — they come through here.
   @override
   set value(TextEditingValue newValue) {
     final oldText = document.text;
@@ -164,25 +185,60 @@ class RichEditorController extends TextEditingController {
     final cursorHint = selection.start >= 0 ? selection.start : null;
     final diff = diffText(oldText, newText, cursorHint: cursorHint);
 
+    // Flutter's own `newValue.selection` is a guess based on what *it*
+    // thinks was inserted — always correct for the ordinary path below,
+    // where the document ends up with exactly `diff.insertedText`. The
+    // smart-Enter path can insert a longer (or shorter) string than the
+    // bare '\n' Flutter guessed for, so that guess is stale the moment
+    // it's taken; this computes the real post-edit caret instead of
+    // trusting it.
+    var resultSelection = newValue.selection;
+    var resultComposing = newValue.composing;
+    var ranAutolink = false;
+
     if (!diff.isNoOp) {
+      if (diff.insertedText == '\n') {
+        final edit = engine.enterKeyEdit(
+          EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
+        );
+        history.execute(ReplaceRangeCommand(
+          start: edit.start,
+          end: edit.end,
+          text: edit.text,
+          attributesForInsertion: Map.of(engine.stickyAttributes),
+        ));
+        resultSelection = TextSelection.collapsed(offset: edit.start + edit.text.length);
+        resultComposing = TextRange.empty;
+        // Not autolinking here: the exit-list variant deletes the
+        // prefix, which shifts everything `_maybeAutolink` assumes
+        // about `diff`'s positions still lining up with the document.
+        // Narrow trade-off — no autolink on the exact keystroke where
+        // Enter also exits a list — over reusing position math that no
+        // longer holds.
+      } else {
       history.execute(ReplaceRangeCommand(
         start: diff.start,
         end: diff.end,
         text: diff.insertedText,
         attributesForInsertion: Map.of(engine.stickyAttributes),
       ));
+        ranAutolink = true;
+    }
     }
 
     // Trust the TextField/IME's own reported selection for where the
     // caret actually lands — autocorrect and IME composition can put it
-    // somewhere `diff` alone wouldn't predict.
+    // somewhere `diff` alone wouldn't predict. Only valid on the
+    // ordinary path above, where `resultSelection`/`resultComposing`
+    // still equal Flutter's own values; the smart-Enter path already
+    // overrode both for the reason noted there.
     super.value = TextEditingValue(
       text: document.text,
-      selection: newValue.selection,
-      composing: newValue.composing,
+      selection: resultSelection,
+      composing: resultComposing,
     );
 
-    if (!diff.isNoOp) {
+    if (ranAutolink) {
       _maybeAutolink(diff);
     }
   }
@@ -328,6 +384,12 @@ class RichEditorController extends TextEditingController {
   /// and trip its bounds assertion. Falling back to the end of the
   /// document is the same thing focusing an empty text field would do.
   EditorSelection get _currentSelection {
+    if (_selectionHighlight != null && _selectionHighlight!.isValid) {
+      return EditorSelection(
+        baseOffset: _selectionHighlight!.start,
+        extentOffset: _selectionHighlight!.end,
+      );
+    }
     if (selection.start < 0 || selection.end < 0) {
       return EditorSelection.collapsed(document.length);
     }
@@ -413,9 +475,22 @@ class RichEditorController extends TextEditingController {
   void toggleStrikethrough() => commands.toggleStrikethrough(_currentSelection);
   void toggleHighlight() => commands.toggleHighlight(_currentSelection);
   void toggleCode() => commands.toggleCode(_currentSelection);
+/*  void toggleBulletList() => commands.toggleBulletList(_currentSelection);
+  void toggleNumberedList() => commands.toggleNumberedList(_currentSelection);*/
 
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
   void setSize(num? size) => commands.setSize(_currentSelection, size);
+
+  void increaseFontSize() {
+    final current = activeAttributeValue(AttributeType.size) as num? ?? renderer.theme.baseFontSize;
+    setSize((current.toDouble() + 2.0).clamp(8.0, 72.0));
+  }
+
+  void decreaseFontSize() {
+    final current = activeAttributeValue(AttributeType.size) as num? ?? renderer.theme.baseFontSize;
+    setSize((current.toDouble() - 2.0).clamp(8.0, 72.0));
+  }
+
   void setLink(String? url) => commands.setLink(_currentSelection, url);
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
 
@@ -488,6 +563,19 @@ class RichEditorController extends TextEditingController {
     if (offset > 0) {
       final beforeOffset = document.attributeStore.findAt(offset - 1, type: AttributeType.link);
       if (beforeOffset.isNotEmpty) return beforeOffset.first.value as String?;
+    }
+    return null;
+  }
+
+  /// The logical range of the link at [offset], or `null` if [offset]
+  /// isn't inside a link attribute.
+  TextRange? linkRangeAt(int offset) {
+    if (offset < 0) return null;
+    final atOffset = document.attributeStore.findAt(offset, type: AttributeType.link);
+    if (atOffset.isNotEmpty) return TextRange(start: atOffset.first.start, end: atOffset.first.end);
+    if (offset > 0) {
+      final beforeOffset = document.attributeStore.findAt(offset - 1, type: AttributeType.link);
+      if (beforeOffset.isNotEmpty) return TextRange(start: beforeOffset.first.start, end: beforeOffset.first.end);
     }
     return null;
   }
@@ -595,6 +683,7 @@ class RichEditorController extends TextEditingController {
       style: style,
       composingRange: withComposing ? value.composing : null,
       matchHighlightRange: match != null ? TextRange(start: match.start, end: match.end) : null,
+      selectionHighlightRange: _selectionHighlight,
     );
     assert(() {
       final renderedLength = span.toPlainText().length;

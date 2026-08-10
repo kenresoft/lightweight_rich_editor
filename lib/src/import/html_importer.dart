@@ -14,6 +14,24 @@ class _StyleFrame {
   const _StyleFrame(this.type, this.value);
 }
 
+/// Tracks the nearest enclosing `<ul>`/`<ol>` while walking, so a `<li>`
+/// knows what kind of marker to emit and, for an ordered list, what
+/// number it's up to.
+///
+/// A fresh [_ListContext] is created every time a `<ul>`/`<ol>` element
+/// is visited — including a *nested* one — so numbering is always
+/// correctly scoped to its own list (a second, unrelated `<ol>` later in
+/// the same paste restarts at 1; a nested `<ol>` inside a `<li>` starts
+/// its own count rather than continuing the outer one). That's ordinary
+/// correct list semantics, independent of the indentation
+/// simplification below.
+class _ListContext {
+  final bool ordered;
+  int _counter = 0;
+  _ListContext(this.ordered);
+  int next() => ++_counter;
+}
+
 /// Parses HTML into plain text plus [TextAttribute]s, for pasting content
 /// copied from a browser or another rich-text source.
 ///
@@ -23,10 +41,20 @@ class _StyleFrame {
 /// to h2, this editor only models two levels). `<br>` becomes a newline;
 /// block-level elements (`<p>`, `<div>`, `<li>`, `<blockquote>`, headers)
 /// are separated by newlines but otherwise treated as plain text — this
-/// is a text+inline-formatting importer, not a layout engine, so list
-/// bullets, table structure, and blockquote indentation are all
-/// discarded; only their text content survives. `<script>`/`<style>`
-/// contents are never imported.
+/// is a text+inline-formatting importer, not a layout engine, so table
+/// structure and blockquote indentation are discarded; only their text
+/// content survives. `<script>`/`<style>` contents are never imported.
+///
+/// List items are the one exception: a `<li>` inside a `<ul>`/`<ol>`
+/// gets a literal `'  - '`/`'  N. '` prefix written directly into the
+/// output text — real characters, not a stored attribute — matching how
+/// this library represents lists everywhere else (see the removal notes
+/// on `AttributeType`: list markers are always literal text, detected
+/// and styled presentationally at render time, never virtual/injected).
+/// Indentation is deliberately flat — every list item gets the same
+/// single-level `'  '` regardless of true DOM nesting depth — rather
+/// than a per-depth indent; a `<li>` with no enclosing `<ul>`/`<ol>`
+/// (malformed fragment) is left as plain block text, same as before.
 ///
 /// Depends on `package:html` for actual HTML parsing (handling malformed
 /// markup, entities, nesting) rather than hand-rolling that — unlike
@@ -47,7 +75,7 @@ class HtmlImporter {
     final attributes = <TextAttribute>[];
 
     if (body != null) {
-      _walk(body, buffer, attributes, const []);
+      _walk(body, buffer, attributes, const [], null);
     }
 
     var text = buffer.toString();
@@ -60,14 +88,20 @@ class HtmlImporter {
     return (text: text, attributes: _mergeAttributes(attributes));
   }
 
-  void _walk(dom.Node node, StringBuffer buffer, List<TextAttribute> attributes, List<_StyleFrame> stack) {
+  void _walk(
+      dom.Node node,
+      StringBuffer buffer,
+      List<TextAttribute> attributes,
+      List<_StyleFrame> stack,
+      _ListContext? currentList,
+      ) {
     if (node is dom.Text) {
       var content = node.text.replaceAll(RegExp(r'\s+'), ' ');
       if (content.isEmpty) return;
 
       // Avoid double spaces at boundaries if one already exists
       if (content == ' ' && buffer.toString().endsWith(' ')) return;
-      
+
       final start = buffer.length;
       buffer.write(content);
       for (final frame in stack) {
@@ -103,9 +137,24 @@ class HtmlImporter {
       buffer.write('\n');
     }
 
+    // A <ul>/<ol> starts a fresh list scope for its own direct <li>
+    // children (see _ListContext) — including one nested inside a <li>
+    // of an outer list, which shadows the outer context for its own
+    // subtree without disturbing the outer list's own counter. A <li>
+    // with no enclosing list (currentList == null) just falls through
+    // to plain block text, unchanged from before.
+    var childListContext = currentList;
+    if (tag == 'ul') {
+      childListContext = _ListContext(false);
+    } else if (tag == 'ol') {
+      childListContext = _ListContext(true);
+    } else if (tag == 'li' && currentList != null) {
+      buffer.write(currentList.ordered ? '  ${currentList.next()}. ' : '  - ');
+    }
+
     final List<_StyleFrame> extraFrames = _framesFromStyles(node);
-    final frame = _frameFor(tag);
-    
+    final frame = _frameFor(tag, node);
+
     var currentStack = stack;
     if (frame != null) currentStack = [...currentStack, frame];
     currentStack = [...currentStack, ...extraFrames];
@@ -118,7 +167,7 @@ class HtmlImporter {
     }
 
     for (final child in node.nodes) {
-      _walk(child, buffer, attributes, currentStack);
+      _walk(child, buffer, attributes, currentStack, childListContext);
     }
 
     if (isBlock && buffer.isNotEmpty && !buffer.toString().endsWith('\n')) {
@@ -185,7 +234,7 @@ class HtmlImporter {
     return merged;
   }
 
-  _StyleFrame? _frameFor(String? tag) {
+  _StyleFrame? _frameFor(String? tag, dom.Element node) {
     switch (tag) {
       case 'b':
       case 'strong':

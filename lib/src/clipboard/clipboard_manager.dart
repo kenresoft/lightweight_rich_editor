@@ -124,17 +124,25 @@ class ClipboardManager {
   bool _looksLikeMarkdown(String text) {
     // Detects common Markdown markers.
     // 1. Headers: # at start of line
-    if (RegExp(r'^#+ ', multiLine: true).hasMatch(text)) return true;
+    if (RegExp(r'^#+ ', multiLine: true).hasMatch(text)) {
+      return true;
+    }
     
     // 2. Inline markers: bold, strikethrough, code
     if (text.contains('**') || text.contains('__') || 
-        text.contains('~~') || text.contains('`')) return true;
+        text.contains('~~') || text.contains('`')) {
+      return true;
+    }
     
     // 3. Italic markers: single * or _ with content
-    if (RegExp(r'([*_]).+\1').hasMatch(text)) return true;
+    if (RegExp(r'([*_]).+\1').hasMatch(text)) {
+      return true;
+    }
     
     // 4. Links: [text](url)
-    if (RegExp(r'\[.*\]\(.*\)').hasMatch(text)) return true;
+    if (RegExp(r'\[.*\]\(.*\)').hasMatch(text)) {
+      return true;
+    }
     
     return false;
   }
