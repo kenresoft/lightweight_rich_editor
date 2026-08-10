@@ -35,6 +35,13 @@ class RichTextRenderTheme {
   /// attribute applied.
   final Color matchHighlightColor;
 
+  /// Color applied to a literal list prefix (`'- '`, `'3. '`, etc.) at
+  /// the start of a paragraph — see `TextSpanRenderer._listPrefixStyle`.
+  /// Purely presentational: the prefix is ordinary document text styled
+  /// differently, not a generated marker, so this only ever affects
+  /// color/weight, never what text exists or how long it is.
+  final Color listMarkerColor;
+
   const RichTextRenderTheme({
     this.baseFontSize = 16.0,
     this.lineHeight = 24.0,
@@ -45,6 +52,7 @@ class RichTextRenderTheme {
     this.linkColor = const Color(0xFF1A73E8),
     this.codeFontFamily = 'monospace',
     this.matchHighlightColor = const Color(0xFFFFA726),
+    this.listMarkerColor = const Color(0xFF757575),
   });
 
   static const standard = RichTextRenderTheme();
@@ -59,6 +67,7 @@ class RichTextRenderTheme {
     Color? linkColor,
     String? codeFontFamily,
     Color? matchHighlightColor,
+    Color? listMarkerColor,
   }) {
     return RichTextRenderTheme(
       baseFontSize: baseFontSize ?? this.baseFontSize,
@@ -70,6 +79,7 @@ class RichTextRenderTheme {
       linkColor: linkColor ?? this.linkColor,
       codeFontFamily: codeFontFamily ?? this.codeFontFamily,
       matchHighlightColor: matchHighlightColor ?? this.matchHighlightColor,
+      listMarkerColor: listMarkerColor ?? this.listMarkerColor,
     );
   }
 
@@ -85,7 +95,8 @@ class RichTextRenderTheme {
         other.codeBackgroundColor == codeBackgroundColor &&
         other.linkColor == linkColor &&
         other.codeFontFamily == codeFontFamily &&
-        other.matchHighlightColor == matchHighlightColor;
+        other.matchHighlightColor == matchHighlightColor &&
+        other.listMarkerColor == listMarkerColor;
   }
 
   @override
@@ -99,5 +110,6 @@ class RichTextRenderTheme {
     linkColor,
     codeFontFamily,
     matchHighlightColor,
+    listMarkerColor,
   );
 }

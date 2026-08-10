@@ -1,5 +1,6 @@
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
+import '../utils/list_prefix.dart';
 import 'editor_document.dart';
 import 'editor_selection.dart';
 import 'transaction_manager.dart';
@@ -89,12 +90,23 @@ class EditingEngine {
 
       final insertionAttributes = attributesForInsertion ?? _stickyAttributes;
       for (final entry in insertionAttributes.entries) {
-        store.insert(TextAttribute(
-          start: start,
-          end: start + text.length,
-          type: entry.key,
-          value: entry.value,
-        ));
+        final type = entry.key;
+        if (type.isParagraphScoped) {
+          final range = _paragraphBounds(EditorSelection.collapsed(start));
+          store.insert(TextAttribute(
+            start: range.start,
+            end: range.end,
+            type: type,
+            value: entry.value,
+          ));
+        } else {
+          store.insert(TextAttribute(
+            start: start,
+            end: start + text.length,
+            type: type,
+            value: entry.value,
+          ));
+        }
       }
       for (final type in insertionAttributes.keys) {
         store.optimize(type: type);
@@ -109,37 +121,45 @@ class EditingEngine {
     return EditorSelection.collapsed(start + text.length);
   }
 
-  /// Trims any [AttributeType.isParagraphScoped] span (currently just
-  /// [AttributeType.header]) that now crosses a newline within
-  /// `[rangeStart, rangeEnd)`, cutting it off *before* the newline.
+  /// Trims paragraph-scoped attributes to the paragraph they started in
+  /// after a newline insertion.
   ///
-  /// Without this, [AttributeStore.shiftForInsertion]'s span-absorbs-the-
-  /// insertion-point rule — correct for character-level formatting, so
-  /// typing in the middle of bold text stays bold — also lets a header
-  /// span silently absorb a newline typed at its end. Every character
-  /// typed immediately after then lands exactly at the span's new end,
-  /// growing it again, one character at a time: the header visibly
-  /// bleeds onto the next paragraph as the user types. A header is a
-  /// property of exactly one paragraph, so this confines it after any
-  /// insertion that could have introduced one. The paragraph *after* the
-  /// newline is left with no header at all — matching the standard
-  /// "pressing Enter after a heading returns to body text" behavior in
-  /// Notion, Google Docs, and Word.
+  /// [AttributeType.header], [AttributeType.link], and [AttributeType.code]
+  /// are confined to the paragraph they started in (cut off before the
+  /// newline) — a span that used to run through what is now a paragraph
+  /// break gets truncated at the break instead of silently spanning two
+  /// paragraphs.
+  ///
+  /// Bullet/numbered lists used to be handled here too, continuing the
+  /// list attribute onto the next paragraph. That branch is gone — see
+  /// the removal notes on [AttributeType] for why: it dropped list
+  /// formatting on every paragraph beyond the one immediately following
+  /// a break (a single span can cover many list items, but this method
+  /// only ever re-inserted two fragments — the paragraph before the
+  /// break and the one immediately after), and its per-newline call to
+  /// [_paragraphBounds] — itself an O(document length) scan — turned
+  /// every newline in an inserted/pasted range into another full-text
+  /// scan, i.e. O(newlines × document length) for a single paste. A
+  /// large imported note with many list items would hang on that alone.
   void _confineParagraphScopedAttributes(int rangeStart, int rangeEnd) {
     final text = document.text;
     final store = document.attributeStore;
     final end = rangeEnd < text.length ? rangeEnd : text.length;
 
     for (var i = rangeStart; i < end; i++) {
-      if (text.codeUnitAt(i) != 0x0A) continue;
+      if (text.codeUnitAt(i) != 0x0A) continue; // Newline at index i
 
-      for (final type in AttributeType.values) {
-        if (!type.isParagraphScoped) continue;
-        for (final span in store.findIntersecting(i, i + 1, type: type)) {
-          store.remove(span);
-          if (span.start < i) {
-            store.insert(span.copyWith(end: i));
-          }
+      final intersecting = store.findIntersecting(i, i + 1);
+      for (final span in intersecting) {
+        final type = span.type;
+        final isConfined = type == AttributeType.header ||
+            type == AttributeType.link ||
+            type == AttributeType.code;
+        if (!isConfined) continue;
+
+        store.remove(span);
+        if (span.start < i) {
+          store.insert(span.copyWith(end: i));
         }
       }
     }
@@ -215,6 +235,57 @@ class EditingEngine {
     return EditorSelection(baseOffset: pStart, extentOffset: pEnd);
   }
 
+  /// Computes the replacement for a live Enter keypress at `selection`:
+  /// list continuation as literal text.
+  ///
+  /// If the paragraph containing the caret begins with a literal
+  /// list-style prefix (`'- '`, `'* '`, `'+ '`, or `'N. '`), pressing
+  /// Enter continues the list onto the new line by repeating the prefix
+  /// (numbered prefixes increment). Pressing Enter on a list item that's
+  /// empty except for its prefix exits the list instead — the prefix is
+  /// removed rather than repeated indefinitely, matching the usual
+  /// "empty bullet + Enter" convention.
+  ///
+  /// This only ever produces literal text to insert in place of a bare
+  /// `'\n'` — there's no [AttributeType] involved and nothing here
+  /// touches the render layer, so unlike the old marker-based lists it
+  /// can never desync `RenderEditable`'s caret math from the document.
+  /// Callers should dispatch the returned `(start, end, text)` as a
+  /// single replace so it undoes as one step.
+  ///
+  /// Not applied when `selection` isn't collapsed — replacing a real
+  /// selection with Enter just inserts a plain newline, same as before.
+  ({int start, int end, String text}) enterKeyEdit(EditorSelection selection) {
+    if (!selection.isCollapsed) {
+      return (start: selection.start, end: selection.end, text: '\n');
+    }
+
+    final text = document.text;
+    final caret = selection.start;
+
+    final prevNewline = caret <= 0 ? -1 : text.lastIndexOf('\n', caret - 1);
+    final paragraphStart = prevNewline == -1 ? 0 : prevNewline + 1;
+    final nextNewline = text.indexOf('\n', caret);
+    final paragraphEnd = nextNewline == -1 ? text.length : nextNewline;
+
+    final beforeCaret = text.substring(paragraphStart, caret);
+    final match = listPrefixPattern.matchAsPrefix(beforeCaret);
+    if (match == null) {
+      return (start: caret, end: caret, text: '\n');
+    }
+
+    final prefix = match.group(0)!;
+    final restBeforeCaret = beforeCaret.substring(prefix.length).trim();
+    final restAfterCaret = text.substring(caret, paragraphEnd).trim();
+
+    if (restBeforeCaret.isEmpty && restAfterCaret.isEmpty) {
+      // Empty list item: exit the list instead of repeating the prefix.
+      return (start: paragraphStart, end: caret, text: '\n');
+    }
+
+    return (start: caret, end: caret, text: '\n${nextListPrefix(prefix)}');
+  }
+
   /// Toggles `type` over `selection`.
   ///
   /// - Not collapsed: if a single span already covers the whole
@@ -225,13 +296,18 @@ class EditingEngine {
   /// - Collapsed: toggles [stickyAttributes] instead of touching any
   ///   span, so the next typed text picks it up.
   ///
+  /// For paragraph-scoped attributes (currently just [AttributeType.header]),
+  /// this always affects the entire paragraph containing the selection.
+  ///
   /// Only valid for [AttributeType.isToggle] types — use [applyAttribute]
   /// for color/size/link/header, which carry a value.
   void toggleAttribute(AttributeType type, EditorSelection selection) {
     assert(type.isToggle,
     'toggleAttribute is for toggle-style attributes only; use applyAttribute for $type');
 
-    if (selection.isCollapsed) {
+    final range = type.isParagraphScoped ? _paragraphBounds(selection) : selection;
+
+    if (range.isCollapsed && !type.isParagraphScoped) {
       if (_stickyAttributes.containsKey(type)) {
         _stickyAttributes.remove(type);
       } else {
@@ -242,11 +318,11 @@ class EditingEngine {
     }
 
     final store = document.attributeStore;
-    final alreadyCovered = store.coversRange(selection.start, selection.end, type);
+    final alreadyCovered = store.coversRange(range.start, range.end, type);
 
-    store.clearRange(selection.start, selection.end, type: type);
+    store.clearRange(range.start, range.end, type: type);
     if (!alreadyCovered) {
-      store.insert(TextAttribute(start: selection.start, end: selection.end, type: type));
+      store.insert(TextAttribute(start: range.start, end: range.end, type: type));
       _stickyAttributes[type] = null;
     } else {
       _stickyAttributes.remove(type);
@@ -276,6 +352,7 @@ class EditingEngine {
 
     final store = document.attributeStore;
     store.clearRange(range.start, range.end, type: type);
+
     store.insert(TextAttribute(start: range.start, end: range.end, type: type, value: value));
     store.optimize(type: type);
     if (!type.isParagraphScoped) _stickyAttributes[type] = value;

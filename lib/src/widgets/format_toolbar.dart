@@ -79,6 +79,32 @@ class FormatToolbar extends StatelessWidget {
                 ),
                 const VerticalDivider(indent: 8, endIndent: 8),
                 _HeaderMenu(controller: controller),
+/*                const VerticalDivider(indent: 8, endIndent: 8),
+                ToolButton(
+                  icon: Icons.format_list_bulleted,
+                  isActive: controller.isAttributeActive(AttributeType.bulletList),
+                  onPressed: controller.toggleBulletList,
+                  tooltip: 'Bullet List',
+                ),
+                ToolButton(
+                  icon: Icons.format_list_numbered,
+                  isActive: controller.isAttributeActive(AttributeType.numberedList),
+                  onPressed: controller.toggleNumberedList,
+                  tooltip: 'Numbered List',
+                ),*/
+                const VerticalDivider(indent: 8, endIndent: 8),
+                ToolButton(
+                  icon: Icons.text_increase,
+                  isActive: false,
+                  onPressed: controller.increaseFontSize,
+                  tooltip: 'Increase Font Size',
+                ),
+                ToolButton(
+                  icon: Icons.text_decrease,
+                  isActive: false,
+                  onPressed: controller.decreaseFontSize,
+                  tooltip: 'Decrease Font Size',
+                ),
                 const VerticalDivider(indent: 8, endIndent: 8),
                 ToolButton(icon: Icons.format_bold, isActive: controller.isAttributeActive(AttributeType.bold), onPressed: controller.toggleBold, tooltip: 'Bold'),
                 ToolButton(icon: Icons.format_italic, isActive: controller.isAttributeActive(AttributeType.italic), onPressed: controller.toggleItalic, tooltip: 'Italic'),
@@ -111,7 +137,9 @@ class FormatToolbar extends StatelessWidget {
 
   Future<void> _handleInsertLink(BuildContext context, RichEditorController controller) async {
     final currentLink = controller.activeAttributeValue(AttributeType.link) as String?;
+    controller.setSelectionHighlight(controller.selection);
     final url = await showLinkEntryDialog(context, initialUrl: currentLink);
+    controller.setSelectionHighlight(null);
     if (url != null) {
       controller.setLink(url);
     }
@@ -128,7 +156,12 @@ class _HeaderMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       tooltip: 'Headers',
       icon: const Icon(Icons.format_size, size: 20, color: Colors.black87),
-      onSelected: (val) => controller.setHeader(val == 'none' ? null : val),
+      onOpened: () => controller.setSelectionHighlight(controller.selection),
+      onCanceled: () => controller.setSelectionHighlight(null),
+      onSelected: (val) {
+        controller.setSelectionHighlight(null);
+        controller.setHeader(val == 'none' ? null : val);
+      },
       itemBuilder: (context) => [
         const PopupMenuItem(value: 'none', child: Text('Normal')),
         const PopupMenuItem(
@@ -155,7 +188,12 @@ class _ColorMenu extends StatelessWidget {
     return PopupMenuButton<Color>(
       tooltip: 'Text Color',
       icon: const Icon(Icons.format_color_text, size: 20, color: Colors.black87),
-      onSelected: (color) => controller.setColor(color == const Color(0xff000000) ? null : color.toARGB32()),
+      onOpened: () => controller.setSelectionHighlight(controller.selection),
+      onCanceled: () => controller.setSelectionHighlight(null),
+      onSelected: (color) {
+        controller.setSelectionHighlight(null);
+        controller.setColor(color == const Color(0xff000000) ? null : color.toARGB32());
+      },
       itemBuilder: (context) => colors
           .map(
             (c) => PopupMenuItem(

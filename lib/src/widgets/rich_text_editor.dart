@@ -7,6 +7,7 @@ import '../controller/rich_editor_controller.dart';
 import '../painters/ruled_lines_painter.dart';
 import '../rendering/editor_style.dart';
 import '../utils/link_launcher.dart';
+import 'link_entry_dialog.dart';
 
 /// Toggles bold on the current selection. No Flutter default binding —
 /// registered below via [Shortcuts].
@@ -260,15 +261,12 @@ class RichTextEditor extends StatelessWidget {
                       // double-tap/drag gesture recognizers.
                       contextMenuBuilder: (context, editableTextState) {
                         final selection = editableTextState.textEditingValue.selection;
-                        final linkUrl = selection.isValid
-                            ? (controller.linkUrlAt(selection.start) ??
-                            controller.linkUrlAt(selection.end))
-                            : null;
+                        if (!selection.isValid) return const SizedBox.shrink();
+
+                        final linkUrl = controller.linkUrlAt(selection.start);
+                        final linkRange = controller.linkRangeAt(selection.start);
 
                         if (linkUrl == null) {
-                          // No link under the current long-press
-                          // selection — identical to the toolbar this
-                          // editor always showed before this change.
                           return AdaptiveTextSelectionToolbar.editable(
                             anchors: editableTextState.contextMenuAnchors,
                             clipboardStatus: ClipboardStatus.pasteable,
@@ -290,21 +288,43 @@ class RichTextEditor extends StatelessWidget {
                           );
                         }
 
-                        // Selection landed on a link: prepend "Open
-                        // Link" to the platform's normal button set
-                        // (`editableTextState.contextMenuButtonItems`
-                        // already computes Cut/Copy/Paste/Select All
-                        // exactly as the branch above does by hand) —
-                        // additive only, so cut/copy/paste/select-all
-                        // on linked text keeps working unchanged.
                         return AdaptiveTextSelectionToolbar.buttonItems(
                           anchors: editableTextState.contextMenuAnchors,
                           buttonItems: [
                             ContextMenuButtonItem(
-                              label: 'Open Link',
+                              label: 'Open',
                               onPressed: () {
                                 editableTextState.hideToolbar();
                                 _openLink(context, linkUrl);
+                              },
+                            ),
+                            ContextMenuButtonItem(
+                              label: 'Edit',
+                              onPressed: () async {
+                                editableTextState.hideToolbar();
+                                if (linkRange != null) {
+                                  controller.selection = TextSelection(
+                                    baseOffset: linkRange.start,
+                                    extentOffset: linkRange.end,
+                                  );
+                                }
+                                final url = await showLinkEntryDialog(context, initialUrl: linkUrl);
+                                if (url != null) {
+                                  controller.setLink(url);
+                                }
+                              },
+                            ),
+                            ContextMenuButtonItem(
+                              label: 'Remove',
+                              onPressed: () {
+                                editableTextState.hideToolbar();
+                                if (linkRange != null) {
+                                  controller.selection = TextSelection(
+                                    baseOffset: linkRange.start,
+                                    extentOffset: linkRange.end,
+                                  );
+                                }
+                                controller.setLink(null);
                               },
                             ),
                             ...editableTextState.contextMenuButtonItems,

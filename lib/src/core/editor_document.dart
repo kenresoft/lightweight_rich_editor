@@ -85,5 +85,5 @@ class EditorDocument {
 
   @override
   String toString() =>
-      'EditorDocument(${length} chars, ${_attributes.length} spans)';
+      'EditorDocument($length chars, ${_attributes.length} spans)';
 }

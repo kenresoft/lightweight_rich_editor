@@ -6,14 +6,18 @@ import '../core/editor_document.dart';
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
 import '../utils/clamp_int.dart';
+import '../utils/list_prefix.dart';
 import 'document_renderer.dart';
 import 'render_theme.dart';
 
 /// What kind of marker a `type == null` event represents — composing
-/// events and match-highlight events both use `type == null` (neither
-/// is an [AttributeType]), so they need their own discriminator to be
-/// tracked as separate counters during the sweep.
-enum _MarkerKind { composing, matchHighlight }
+/// events, match-highlight events, and selection-highlight events all use
+/// `type == null` (none are [AttributeType]s), so they need their own
+/// discriminator to be tracked as separate counters during the sweep.
+///
+/// Not to be confused with list markers (bullet/number prefixes), which
+/// this renderer no longer generates — see the removal note below.
+enum _MarkerKind { composing, matchHighlight, selectionHighlight }
 
 /// A boundary where the set of active attributes changes: a span
 /// starting/ending, the IME composing region starting/ending, or the
@@ -52,6 +56,26 @@ class _StyleEvent {
 ///    concrete [TextStyle], once per segment rather than once per
 ///    character.
 ///
+/// This renderer previously injected "virtual" list-marker text (bullet
+/// dots, numbers) into the rendered [TextSpan] that had no corresponding
+/// characters in the document. That's since been removed: this class
+/// feeds a live, editable `TextField` via `TextEditingController
+/// .buildTextSpan`, and Flutter requires the rendered span's plain text
+/// to match the controller's `value.text` exactly, character for
+/// character — `RenderEditable` maps a `TextPosition` in the rendered
+/// paragraph straight onto a document offset with no translation layer.
+/// Text injected here that isn't in the document silently corrupts caret
+/// placement and selection on every line after the injection point. See
+/// the removal notes on [AttributeType] for the full rationale.
+///
+/// List-looking lines aren't lost, though: if a paragraph's own text
+/// literally starts with `'- '`, `'* '`, `'+ '`, or `'N. '` (typed by
+/// the user, or preserved as-is on import — see [listPrefixLength]),
+/// that prefix is styled distinctly here purely presentationally. It's
+/// the same character count in as out, so it can't touch the caret
+/// invariant above; it's just picking a different [TextStyle] for text
+/// that was always going to be rendered anyway.
+///
 /// Results are cached against [AttributeStore.revision] plus the other
 /// call inputs, so re-rendering after a selection-only change (no text
 /// or formatting edit) is a cache hit.
@@ -79,7 +103,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   TextStyle? _cachedStyle;
   TextRange? _cachedComposing;
   TextRange? _cachedMatchHighlight;
+  TextRange? _cachedSelectionHighlight;
   RichTextRenderTheme? _cachedTheme;
+  bool? _cachedInteractiveLinks;
 
   /// Tap recognizers attached to the current [_cachedSpan]'s link
   /// segments. `GestureRecognizer`s must be explicitly disposed —
@@ -112,6 +138,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         TextStyle? style,
         TextRange? composingRange,
         TextRange? matchHighlightRange,
+        TextRange? selectionHighlightRange,
       }) {
     final text = document.text;
     final revision = document.attributeStore.revision;
@@ -122,12 +149,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         _cachedStyle == style &&
         _cachedComposing == composingRange &&
         _cachedMatchHighlight == matchHighlightRange &&
+        _cachedSelectionHighlight == selectionHighlightRange &&
         _cachedTheme == theme &&
         _cachedInteractiveLinks == interactiveLinks) {
       return _cachedSpan!;
     }
 
-    final span = _render(document, style, composingRange, matchHighlightRange);
+    final span = _render(document, style, composingRange, matchHighlightRange, selectionHighlightRange);
 
     _cachedSpan = span;
     _cachedText = text;
@@ -135,12 +163,11 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedStyle = style;
     _cachedComposing = composingRange;
     _cachedMatchHighlight = matchHighlightRange;
+    _cachedSelectionHighlight = selectionHighlightRange;
     _cachedTheme = theme;
     _cachedInteractiveLinks = interactiveLinks;
     return span;
   }
-
-  bool? _cachedInteractiveLinks;
 
   /// Invalidates the cache without changing anything else — call if
   /// `theme` was mutated in place rather than reassigned (mutating a
@@ -175,6 +202,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       TextStyle? style,
       TextRange? composingRange,
       TextRange? matchHighlightRange,
+      TextRange? selectionHighlightRange,
       ) {
     // A cache miss means we're about to build a brand new span tree —
     // dispose whatever recognizers the previous one was holding before
@@ -191,9 +219,17 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final hasMatchHighlight = matchHighlightRange != null &&
         matchHighlightRange.isValid &&
         matchHighlightRange.end > matchHighlightRange.start;
+    final hasSelectionHighlight = selectionHighlightRange != null &&
+        selectionHighlightRange.isValid &&
+        selectionHighlightRange.end > selectionHighlightRange.start;
 
     final spans = document.attributes;
-    if (spans.isEmpty && !hasComposing && !hasMatchHighlight) {
+    final hasListPrefix = _containsListPrefix(text);
+    if (spans.isEmpty &&
+        !hasComposing &&
+        !hasMatchHighlight &&
+        !hasSelectionHighlight &&
+        !hasListPrefix) {
       return TextSpan(text: text, style: style);
     }
 
@@ -202,12 +238,36 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       length,
       hasComposing ? composingRange : null,
       hasMatchHighlight ? matchHighlightRange : null,
+      hasSelectionHighlight ? selectionHighlightRange : null,
     );
-    if (events.isEmpty) {
+    if (events.isEmpty && !hasListPrefix) {
       return TextSpan(text: text, style: style);
     }
 
-    return TextSpan(style: style, children: _buildChildren(text, events, style));
+    return TextSpan(style: style, children: _buildChildren(document, events, style));
+  }
+
+  /// Whether any paragraph in `text` starts with a literal list prefix
+  /// — used only to decide whether [_render] can take its plain-`TextSpan`
+  /// fast path or needs the full event sweep to style that prefix.
+  ///
+  /// One pass over `text`: `pos` only ever advances to `next + 1`, so
+  /// the repeated `text.indexOf('\n', pos)` calls together cover each
+  /// character once, not once per paragraph — O(document length) total,
+  /// same order as building the plain-text span itself. This is
+  /// deliberately *not* the per-newline pattern the old list-attribute
+  /// code used (see the removal notes on `AttributeType`): there's no
+  /// nested O(document length) call — like `_paragraphBounds` used to
+  /// be — inside this loop.
+  bool _containsListPrefix(String text) {
+    var pos = 0;
+    while (pos <= text.length) {
+      if (listPrefixLength(text, pos) > 0) return true;
+      final next = text.indexOf('\n', pos);
+      if (next == -1) break;
+      pos = next + 1;
+    }
+    return false;
   }
 
   List<_StyleEvent> _buildEvents(
@@ -215,6 +275,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       int length,
       TextRange? composingRange,
       TextRange? matchHighlightRange,
+      TextRange? selectionHighlightRange,
       ) {
     final events = <_StyleEvent>[];
 
@@ -244,6 +305,15 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       }
     }
 
+    if (selectionHighlightRange != null) {
+      final ss = clampInt(selectionHighlightRange.start, 0, length);
+      final se = clampInt(selectionHighlightRange.end, 0, length);
+      if (se > ss) {
+        events.add(_StyleEvent(offset: ss, type: null, isStart: true, markerKind: _MarkerKind.selectionHighlight));
+        events.add(_StyleEvent(offset: se, type: null, isStart: false, markerKind: _MarkerKind.selectionHighlight));
+      }
+    }
+
     events.sort((a, b) {
       final cmp = a.offset.compareTo(b.offset);
       // Process ends before starts at the same offset, so a span that
@@ -254,11 +324,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     return events;
   }
 
-  List<TextSpan> _buildChildren(String text, List<_StyleEvent> events, TextStyle? baseStyle) {
+  List<TextSpan> _buildChildren(EditorDocument document, List<_StyleEvent> events, TextStyle? baseStyle) {
+    final text = document.text;
     final children = <TextSpan>[];
     final activeValues = {for (final type in AttributeType.values) type: <Object?>[]};
     var activeComposing = 0;
     var activeMatchHighlight = 0;
+    var activeSelectionHighlight = 0;
 
     var currentPos = 0;
     var eventIndex = 0;
@@ -270,6 +342,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           final delta = event.isStart ? 1 : -1;
           if (event.markerKind == _MarkerKind.matchHighlight) {
             activeMatchHighlight += delta;
+          } else if (event.markerKind == _MarkerKind.selectionHighlight) {
+            activeSelectionHighlight += delta;
           } else {
             activeComposing += delta;
           }
@@ -285,14 +359,40 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       eventIndex < events.length ? clampInt(events[eventIndex].offset, 0, text.length) : text.length;
 
       if (nextPos > currentPos) {
-        final linkUrl = activeValues[AttributeType.link]!.isEmpty
-            ? null
-            : activeValues[AttributeType.link]!.last as String?;
-        children.add(TextSpan(
-          text: text.substring(currentPos, nextPos),
-          style: _resolveStyle(baseStyle, activeValues, activeComposing > 0, activeMatchHighlight > 0),
-          recognizer: _recognizerFor(linkUrl),
-        ));
+        final isParagraphStart = currentPos == 0 || text.codeUnitAt(currentPos - 1) == 0x0A;
+        final prefixLen = isParagraphStart ? listPrefixLength(text, currentPos) : 0;
+        final prefixEnd = clampInt(currentPos + prefixLen, currentPos, nextPos);
+
+        final resolvedStyle = _resolveStyle(
+          baseStyle,
+          activeValues,
+          activeComposing > 0,
+          activeMatchHighlight > 0,
+          activeSelectionHighlight > 0,
+        );
+
+        // The prefix run is styled but otherwise ordinary text — same
+        // character count as what's in the document, just a different
+        // TextStyle. No recognizer on it: a link overlapping a literal
+        // '- ' at a paragraph start is a nonsensical combination not
+        // worth complicating this split for.
+        if (prefixEnd > currentPos) {
+          children.add(TextSpan(
+            text: text.substring(currentPos, prefixEnd),
+            style: _listPrefixStyle(resolvedStyle),
+          ));
+        }
+
+        if (nextPos > prefixEnd) {
+          final linkUrl = activeValues[AttributeType.link]!.isEmpty
+              ? null
+              : activeValues[AttributeType.link]!.last as String?;
+          children.add(TextSpan(
+            text: text.substring(prefixEnd, nextPos),
+            style: resolvedStyle,
+            recognizer: _recognizerFor(linkUrl),
+          ));
+        }
       }
       currentPos = nextPos;
     }
@@ -305,6 +405,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       Map<AttributeType, List<Object?>> active,
       bool isComposing,
       bool isCurrentMatch,
+      bool isSelectionHighlight,
       ) {
     bool isActive(AttributeType type) => active[type]!.isNotEmpty;
     Object? topValue(AttributeType type) {
@@ -349,17 +450,28 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       color: colorArgb != null
           ? Color(colorArgb)
           : (linkUrl != null ? theme.linkColor : baseStyle?.color),
-      // The current search match takes priority over any other
-      // background (including the `highlight` attribute) — it needs to
-      // stand out distinctly, and it's the thing the user just asked to
-      // see, so it shouldn't blend into or hide behind existing styling.
+      // The current search match and selection highlight take priority.
       backgroundColor: isCurrentMatch
           ? theme.matchHighlightColor
+          : (isSelectionHighlight
+          ? theme.linkColor.withValues(alpha: 0.3)
           : (isActive(AttributeType.highlight)
           ? theme.highlightColor
-          : (isCode ? theme.codeBackgroundColor : baseStyle?.backgroundColor)),
+          : (isCode ? theme.codeBackgroundColor : baseStyle?.backgroundColor))),
       decoration: decorations.isEmpty ? TextDecoration.none : TextDecoration.combine(decorations),
       fontFamily: isCode ? theme.codeFontFamily : baseStyle?.fontFamily,
+    );
+  }
+
+  /// Styling for a literal list-prefix run (`'- '`, `'3. '`, etc.) —
+  /// takes the already-resolved style for that position (so inline
+  /// formatting like bold still applies) and layers the theme's marker
+  /// color and weight on top. Purely presentational: `segmentStyle`'s
+  /// text is unchanged, this only picks a different [TextStyle] for it.
+  TextStyle _listPrefixStyle(TextStyle segmentStyle) {
+    return segmentStyle.copyWith(
+      color: theme.listMarkerColor,
+      fontWeight: FontWeight.w600,
     );
   }
 }
