@@ -17,7 +17,7 @@ import 'render_theme.dart';
 ///
 /// Not to be confused with list markers (bullet/number prefixes), which
 /// this renderer no longer generates — see the removal note below.
-enum _MarkerKind { composing, matchHighlight, selectionHighlight }
+enum _MarkerKind { composing, matchHighlight, selectionHighlight, paragraphBoundary }
 
 /// A boundary where the set of active attributes changes: a span
 /// starting/ending, the IME composing region starting/ending, or the
@@ -76,6 +76,15 @@ class _StyleEvent {
 /// invariant above; it's just picking a different [TextStyle] for text
 /// that was always going to be rendered anyway.
 ///
+/// Heading size/weight is read from `EditorDocument.paragraphs`
+/// (`ParagraphIndex`) rather than from an `AttributeType.header` span in
+/// the event sweep below — the first consumer switched over as part of
+/// the block-architecture migration (see the design notes and
+/// `EditingEngine`'s dual-write call sites). `AttributeType.header`
+/// spans still exist in `AttributeStore` and still drive the render
+/// cache's invalidation key (`AttributeStore.revision`); they're just no
+/// longer what decides the rendered font size here.
+///
 /// Results are cached against [AttributeStore.revision] plus the other
 /// call inputs, so re-rendering after a selection-only change (no text
 /// or formatting edit) is a cache hit.
@@ -100,6 +109,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   TextSpan? _cachedSpan;
   String? _cachedText;
   int? _cachedRevision;
+  int? _cachedParagraphRevision;
   TextStyle? _cachedStyle;
   TextRange? _cachedComposing;
   TextRange? _cachedMatchHighlight;
@@ -142,10 +152,18 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       }) {
     final text = document.text;
     final revision = document.attributeStore.revision;
+    // Header lives entirely in document.paragraphs now (ParagraphIndex),
+    // not attributeStore — without also keying the cache on its own
+    // revision counter, a header-only change (no text change, no
+    // attributeStore change) would be invisible to this cache check,
+    // and buildTextSpan would keep returning the stale, pre-header span
+    // forever. This is the fix for that.
+    final paragraphRevision = document.paragraphs.revision;
 
     if (_cachedSpan != null &&
         _cachedText == text &&
         _cachedRevision == revision &&
+        _cachedParagraphRevision == paragraphRevision &&
         _cachedStyle == style &&
         _cachedComposing == composingRange &&
         _cachedMatchHighlight == matchHighlightRange &&
@@ -160,6 +178,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedSpan = span;
     _cachedText = text;
     _cachedRevision = revision;
+    _cachedParagraphRevision = paragraphRevision;
     _cachedStyle = style;
     _cachedComposing = composingRange;
     _cachedMatchHighlight = matchHighlightRange;
@@ -229,11 +248,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         !hasComposing &&
         !hasMatchHighlight &&
         !hasSelectionHighlight &&
-        !hasListPrefix) {
+        !hasListPrefix &&
+        !document.paragraphs.hasAnyHeader) {
       return TextSpan(text: text, style: style);
     }
 
     final events = _buildEvents(
+      document,
       spans,
       length,
       hasComposing ? composingRange : null,
@@ -271,6 +292,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   }
 
   List<_StyleEvent> _buildEvents(
+      EditorDocument document,
       List<TextAttribute> spans,
       int length,
       TextRange? composingRange,
@@ -285,6 +307,17 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       if (end <= start) continue;
       events.add(_StyleEvent(offset: start, type: attr.type, isStart: true, value: attr.value));
       events.add(_StyleEvent(offset: end, type: attr.type, isStart: false, value: attr.value));
+    }
+
+    for (final record in document.paragraphs.records) {
+      if (record.start > 0) {
+        events.add(_StyleEvent(
+          offset: record.start,
+          type: null,
+          isStart: true,
+          markerKind: _MarkerKind.paragraphBoundary,
+        ));
+      }
     }
 
     if (composingRange != null) {
@@ -334,6 +367,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
     var currentPos = 0;
     var eventIndex = 0;
+    String? currentHeaderLevel;
 
     while (currentPos < text.length) {
       while (eventIndex < events.length && events[eventIndex].offset <= currentPos) {
@@ -344,6 +378,10 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
             activeMatchHighlight += delta;
           } else if (event.markerKind == _MarkerKind.selectionHighlight) {
             activeSelectionHighlight += delta;
+          } else if (event.markerKind == _MarkerKind.paragraphBoundary) {
+            // No counter needed: the event exists solely to force the
+            // outer while loop to break a segment at this offset, so
+            // currentHeaderLevel re-queries correctly below.
           } else {
             activeComposing += delta;
           }
@@ -360,12 +398,23 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
       if (nextPos > currentPos) {
         final isParagraphStart = currentPos == 0 || text.codeUnitAt(currentPos - 1) == 0x0A;
+        if (isParagraphStart) {
+          // Phase 3 of the block-architecture migration: headerLevel now
+          // reads from ParagraphIndex, not the AttributeType.header
+          // event sweep below. AttributeStore still carries header
+          // spans too (dual-write, kept for EditingEngine's consistency
+          // assertion and because AttributeType.header itself hasn't
+          // been removed yet) — activeValues[AttributeType.header] is
+          // simply unused for styling now rather than ripped out.
+          currentHeaderLevel = document.paragraphs.paragraphAt(currentPos)?.headerLevel;
+        }
         final prefixLen = isParagraphStart ? listPrefixLength(text, currentPos) : 0;
         final prefixEnd = clampInt(currentPos + prefixLen, currentPos, nextPos);
 
         final resolvedStyle = _resolveStyle(
           baseStyle,
           activeValues,
+          currentHeaderLevel,
           activeComposing > 0,
           activeMatchHighlight > 0,
           activeSelectionHighlight > 0,
@@ -403,6 +452,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   TextStyle _resolveStyle(
       TextStyle? baseStyle,
       Map<AttributeType, List<Object?>> active,
+      String? headerLevel,
       bool isComposing,
       bool isCurrentMatch,
       bool isSelectionHighlight,
@@ -413,7 +463,6 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       return stack.isEmpty ? null : stack.last;
     }
 
-    final headerLevel = topValue(AttributeType.header) as String?;
     final colorArgb = topValue(AttributeType.color) as int?;
     final sizeValue = topValue(AttributeType.size) as num?;
     final linkUrl = topValue(AttributeType.link) as String?;

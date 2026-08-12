@@ -56,3 +56,22 @@ String nextListPrefix(String prefix) {
   final n = int.parse(numbered.group(2)!);
   return '$leading${n + 1}${numbered.group(3)}';
 }
+
+/// Which kind of list a matched prefix represents. Not a stored
+/// document property — see `EditingEngine.listToggleEdit`'s doc comment
+/// for why list-ness is deliberately never anything but this pattern
+/// matched against real text, unlike header (`ParagraphIndex.headerLevel`),
+/// which has no textual representation at all and genuinely needs to be
+/// stored.
+enum ParagraphListType { bullet, numbered }
+
+/// The [ParagraphListType] a matched `prefix` (as returned by
+/// [listPrefixPattern]/[listPrefixLength]) represents, or `null` if
+/// `prefix` doesn't actually match the pattern (defensive — every real
+/// caller only ever passes a string [listPrefixLength] already
+/// confirmed matches).
+ParagraphListType? listTypeOfPrefix(String prefix) {
+  final trimmed = prefix.trimLeft();
+  if (trimmed.isEmpty) return null;
+  return RegExp(r'^\d').hasMatch(trimmed) ? ParagraphListType.numbered : ParagraphListType.bullet;
+}

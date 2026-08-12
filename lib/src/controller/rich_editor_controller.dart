@@ -22,6 +22,7 @@ import '../rendering/text_span_renderer.dart';
 import '../search/search_index.dart';
 import '../utils/clamp_int.dart';
 import '../utils/link_launcher.dart';
+import '../utils/list_prefix.dart';
 import '../utils/text_diff.dart';
 import '../utils/url_detector.dart';
 
@@ -198,7 +199,7 @@ class RichEditorController extends TextEditingController {
 
     if (!diff.isNoOp) {
       if (diff.insertedText == '\n') {
-        final edit = engine.enterKeyEdit(
+        final edit = engine.enterKeyEditWithRenumber(
           EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
         );
         history.execute(ReplaceRangeCommand(
@@ -207,7 +208,7 @@ class RichEditorController extends TextEditingController {
           text: edit.text,
           attributesForInsertion: Map.of(engine.stickyAttributes),
         ));
-        resultSelection = TextSelection.collapsed(offset: edit.start + edit.text.length);
+        resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
         resultComposing = TextRange.empty;
         // Not autolinking here: the exit-list variant deletes the
         // prefix, which shifts everything `_maybeAutolink` assumes
@@ -215,15 +216,50 @@ class RichEditorController extends TextEditingController {
         // Narrow trade-off — no autolink on the exact keystroke where
         // Enter also exits a list — over reusing position math that no
         // longer holds.
+      } else if (diff.insertedText.isEmpty && diff.end - diff.start == 1) {
+        // A single-character deletion — live backspace. Routed through
+        // the same consolidated EditingEngine.deleteBackwardEdit the
+        // programmatic CommandDispatcher.deleteBackward path uses, so
+        // live typing gets smart list-marker removal and numbered-list
+        // renumbering too, not just the raw one-character diff. Called
+        // with the caret at diff.end (where it was *before* backspacing,
+        // matching deleteBackwardEdit's own "collapsed selection at the
+        // pre-deletion caret" contract) — document.paragraphs/text still
+        // reflect the pre-deletion state here, since nothing has been
+        // dispatched yet.
+        final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(diff.end));
+        if (edit != null) {
+          history.execute(ReplaceRangeCommand(
+            start: edit.start,
+            end: edit.end,
+            text: edit.text,
+            attributesForInsertion: Map.of(engine.stickyAttributes),
+          ));
+          resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
+          resultComposing = TextRange.empty;
+        } else {
+          // Shouldn't happen — diff implies something was deletable —
+          // but fall back to the raw diff defensively rather than
+          // silently dropping the edit.
+          history.execute(ReplaceRangeCommand(
+            start: diff.start,
+            end: diff.end,
+            text: diff.insertedText,
+            attributesForInsertion: Map.of(engine.stickyAttributes),
+          ));
+        }
+        // Backspace never autolinks — _maybeAutolink no-ops on empty
+        // insertedText anyway, but ranAutolink stays false for clarity
+        // of intent, not just because the guard happens to catch it.
       } else {
-      history.execute(ReplaceRangeCommand(
-        start: diff.start,
-        end: diff.end,
-        text: diff.insertedText,
-        attributesForInsertion: Map.of(engine.stickyAttributes),
-      ));
+        history.execute(ReplaceRangeCommand(
+          start: diff.start,
+          end: diff.end,
+          text: diff.insertedText,
+          attributesForInsertion: Map.of(engine.stickyAttributes),
+        ));
         ranAutolink = true;
-    }
+      }
     }
 
     // Trust the TextField/IME's own reported selection for where the
@@ -466,17 +502,42 @@ class RichEditorController extends TextEditingController {
   void toggleBold() => commands.toggleBold(_currentSelection);
 
   /// Exports the current document as an HTML string.
-  String toHtml() => const HtmlExporter().export(document.text, document.attributes);
+  ///
+  /// Uses [EditorDocument.exportAttributes] rather than
+  /// [EditorDocument.attributes] directly — header formatting is read
+  /// from `document.paragraphs` now (Phase 3 of the block-architecture
+  /// migration), and `exportAttributes` is what synthesizes that back
+  /// into the flat span list `HtmlExporter` itself is unchanged and
+  /// still expects.
+  String toHtml() => const HtmlExporter().export(document.text, document.exportAttributes());
 
-  /// Exports the current document as a Markdown string.
-  String toMarkdown() => const MarkdownExporter().export(document.text, document.attributes);
+  /// Exports the current document as a Markdown string. See [toHtml]'s
+  /// doc comment — same reasoning applies here.
+  String toMarkdown() => const MarkdownExporter().export(document.text, document.exportAttributes());
   void toggleItalic() => commands.toggleItalic(_currentSelection);
   void toggleUnderline() => commands.toggleUnderline(_currentSelection);
   void toggleStrikethrough() => commands.toggleStrikethrough(_currentSelection);
   void toggleHighlight() => commands.toggleHighlight(_currentSelection);
   void toggleCode() => commands.toggleCode(_currentSelection);
-/*  void toggleBulletList() => commands.toggleBulletList(_currentSelection);
-  void toggleNumberedList() => commands.toggleNumberedList(_currentSelection);*/
+
+  void toggleBulletList() => _syncSelection(commands.toggleBulletList(_currentSelection));
+  void toggleNumberedList() => _syncSelection(commands.toggleNumberedList(_currentSelection));
+  void indentList() => _syncSelection(commands.indentList(_currentSelection));
+  void outdentList() => _syncSelection(commands.outdentList(_currentSelection));
+
+  /// Whether the paragraph containing the current selection starts with
+  /// a literal prefix of `type` — drives the list toolbar buttons'
+  /// active state. Purely derived from text (`listPrefixLength`/
+  /// `listTypeOfPrefix`), same as rendering and `enterKeyEdit` — no
+  /// stored list state to read.
+  bool isListActive(ParagraphListType type) {
+    final sel = _currentSelection;
+    final record = document.paragraphs.paragraphAt(sel.start);
+    if (record == null) return false;
+    final prefixLen = listPrefixLength(document.text, record.start);
+    if (prefixLen == 0) return false;
+    return listTypeOfPrefix(document.text.substring(record.start, record.start + prefixLen)) == type;
+  }
 
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
   void setSize(num? size) => commands.setSize(_currentSelection, size);
@@ -513,7 +574,17 @@ class RichEditorController extends TextEditingController {
   /// caret checks pending sticky formatting and whatever's applied right
   /// at that position; a range checks whether a single span covers the
   /// whole selection. Drives toolbar button highlighted state.
+  ///
+  /// For [AttributeType.header] this delegates entirely to
+  /// [activeAttributeValue] — header no longer lives in
+  /// [EditorDocument.attributeStore] at all (see the block-architecture
+  /// design notes), so the generic `attributeStore`-based logic below
+  /// would silently go stale the moment a heading is set via
+  /// `CommandDispatcher.setHeader`.
   bool isAttributeActive(AttributeType type) {
+    if (type == AttributeType.header) {
+      return activeAttributeValue(type) != null;
+    }
     final sel = _currentSelection;
     if (sel.isCollapsed) {
       return engine.stickyAttributes.containsKey(type) ||
@@ -526,7 +597,26 @@ class RichEditorController extends TextEditingController {
   /// header) at the current selection, or `null` if not active /
   /// inconsistent across the selection. Drives toolbar value display
   /// (e.g. showing the current color swatch).
+  ///
+  /// [AttributeType.header] reads from [EditorDocument.paragraphs]
+  /// instead of `attributeStore` — same reasoning as
+  /// [isAttributeActive]. "Active" for a multi-paragraph selection
+  /// means every paragraph the selection touches agrees on the same
+  /// `headerLevel`, mirroring what the old `attributeStore`-based
+  /// `coversRange`/`covers` check meant: a value only counts as active
+  /// if it uniformly covers the whole selection, not just part of it.
   Object? activeAttributeValue(AttributeType type) {
+    if (type == AttributeType.header) {
+      final sel = _currentSelection;
+      final startRecord = document.paragraphs.paragraphAt(sel.start);
+      if (startRecord == null) return null;
+      if (sel.isCollapsed) return startRecord.headerLevel;
+      final overlapping = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+      if (overlapping.isEmpty) return null;
+      final level = overlapping.first.headerLevel;
+      final allAgree = overlapping.every((r) => r.headerLevel == level);
+      return allAgree ? level : null;
+    }
     final sel = _currentSelection;
     if (sel.isCollapsed) {
       if (engine.stickyAttributes.containsKey(type)) return engine.stickyAttributes[type];

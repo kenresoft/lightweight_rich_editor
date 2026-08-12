@@ -157,19 +157,28 @@ class RichTextEditor extends StatelessWidget {
               return null;
             },
           ),
+          // Copy/cut/paste are async (they touch the system clipboard
+          // via a native plugin) — these now actually await that work
+          // instead of firing it and returning immediately. Not proven
+          // to be the cause of any specific reported bug, but returning
+          // from onInvoke before the clipboard write/read has actually
+          // completed is a real correctness gap regardless: any code
+          // that assumes "the Action completed" the moment onInvoke
+          // returns (haven't found one yet, but a host app's own
+          // wrapper reasonably might) would be trusting a lie.
           CopySelectionTextIntent: CallbackAction<CopySelectionTextIntent>(
-            onInvoke: (intent) {
+            onInvoke: (intent) async {
               if (intent.collapseSelection) {
-                controller.cut();
+                await controller.cut();
               } else {
-                controller.copy();
+                await controller.copy();
               }
               return null;
             },
           ),
           PasteTextIntent: CallbackAction<PasteTextIntent>(
-            onInvoke: (intent) {
-              controller.paste();
+            onInvoke: (intent) async {
+              await controller.paste();
               return null;
             },
           ),
@@ -240,7 +249,27 @@ class RichTextEditor extends StatelessWidget {
                       strutStyle: StrutStyle(
                         fontSize: renderTheme.baseFontSize,
                         height: renderTheme.lineHeight / renderTheme.baseFontSize,
-                        forceStrutHeight: true,
+                        // forceStrutHeight was true — it forces every
+                        // line's vertical box to this strut's fixed
+                        // dimensions regardless of the actual text's
+                        // font size on that line. A header's much
+                        // larger font (h1/h2) forced into the same
+                        // constrained box as body text is a strong,
+                        // repeatedly-reported match for "header data is
+                        // correct but nothing visibly changes" — three
+                        // independent test reports were consistent with
+                        // exactly this. Without forceStrutHeight, the
+                        // strut still guarantees a *minimum* line
+                        // height (so ordinary body text keeps its
+                        // current, consistent spacing — ruled-line
+                        // alignment is unaffected for any note that
+                        // doesn't use headers), but a line can grow
+                        // taller when its content needs more room.
+                        // Trade-off worth knowing: a header line's
+                        // ruled line underneath it may no longer align
+                        // perfectly with the notebook-paper grid, since
+                        // that line is now taller than a standard row —
+                        // only on lines that are actually headers.
                         leading: 0.0,
                       ),
                       decoration: const InputDecoration(

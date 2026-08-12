@@ -7,29 +7,30 @@
 /// italic, underline, strikethrough, highlight, code) carry no [value];
 /// value-style attributes (color, size, link, header) do.
 ///
-/// `bulletList`/`numberedList` were removed. The renderer represented
-/// list markers as characters injected into the rendered `TextSpan` that
-/// were never part of the underlying document text. Flutter's
-/// `TextEditingController.buildTextSpan` contract requires the rendered
-/// span's plain text to match `value.text` exactly, character for
-/// character — `EditableText`/`RenderEditable` use that 1:1 mapping to
-/// place the caret and resolve selections, with no translation layer.
-/// Injected marker characters broke that invariant on every list-bearing
-/// line, corrupting cursor placement and selection the moment a note
-/// contained a list. A second, independent bug in the paragraph
-/// confinement pass (`EditingEngine._confineParagraphScopedAttributes`)
-/// made importing a list into O(list lines × document length), which
-/// hung on any reasonably sized pasted/imported note, and also dropped
-/// list formatting on paragraphs beyond the one immediately following an
-/// Enter press.
+/// `bulletList`/`numberedList` were removed entirely — see the git
+/// history / earlier design notes: the renderer represented list markers
+/// as characters injected into the rendered `TextSpan` that were never
+/// part of the underlying document text, which broke `RenderEditable`'s
+/// caret math.
 ///
-/// Both problems are fundamental to representing list markers as
-/// non-document text; a real fix means storing markers as protected,
-/// non-editable characters in the document itself (blocking cursor
-/// placement/deletion inside them, handling backspace at the boundary,
-/// IME composition, copy/paste stripping, serialization) — a new
-/// subsystem, not a bug fix. Left as a deliberate future project rather
-/// than shipped half-working.
+/// [header] is a different situation: it's **kept in this enum
+/// deliberately, and permanently** — not as a migration artifact waiting
+/// on one more file. Header formatting is owned by `ParagraphIndex`
+/// everywhere it's *live*: editing (`EditingEngine.setHeaderLevel`,
+/// `SetHeaderLevelCommand`), rendering (`TextSpanRenderer`), undo, and
+/// toolbar state all read/write `ParagraphIndex.headerLevel` and never
+/// touch this enum value. [header] survives here purely as the
+/// **interchange format** at the boundary with external representations
+/// that inherently model headers the same way this enum always did:
+/// `HtmlExporter`/`MarkdownExporter` emit `<h1>`/`# ` from a
+/// `TextAttribute(type: header, ...)`, and `MarkdownImporter`/
+/// `HtmlImporter`/`EditingEngine.pasteRich` construct/consume one on the
+/// way in. That's an ordinary, deliberate split between a live model and
+/// a wire format, not something to eliminate — doing so would mean
+/// restructuring all four of those files to carry header through a
+/// separate channel, for no benefit to anything that's actually live.
+/// See the block-architecture design notes for the full migration
+/// history.
 enum AttributeType {
   bold,
   italic,
@@ -56,15 +57,5 @@ enum AttributeType {
     AttributeType.link ||
     AttributeType.header =>
     false,
-  };
-
-  /// Whether this attribute applies to the whole paragraph containing the
-  /// selection rather than the selected characters — currently only
-  /// [header]. `EditingEngine.applyAttribute` expands the edit range to
-  /// paragraph bounds for this type, matching "press H1 anywhere in a
-  /// line" behavior rather than requiring the whole line to be selected.
-  bool get isParagraphScoped => switch (this) {
-    AttributeType.header => true,
-    _ => false,
   };
 }
