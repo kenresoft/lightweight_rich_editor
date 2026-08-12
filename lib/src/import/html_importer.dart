@@ -3,6 +3,7 @@ import 'package:html/parser.dart' as html_parser;
 
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
+import '../utils/list_prefix.dart';
 import '../utils/url_detector.dart';
 
 /// One formatting frame currently "open" while walking the DOM — e.g.
@@ -15,21 +16,35 @@ class _StyleFrame {
 }
 
 /// Tracks the nearest enclosing `<ul>`/`<ol>` while walking, so a `<li>`
-/// knows what kind of marker to emit and, for an ordered list, what
-/// number it's up to.
+/// knows what kind of marker to emit, what number it's up to (for an
+/// ordered list), and how deeply nested it is.
 ///
 /// A fresh [_ListContext] is created every time a `<ul>`/`<ol>` element
 /// is visited — including a *nested* one — so numbering is always
 /// correctly scoped to its own list (a second, unrelated `<ol>` later in
 /// the same paste restarts at 1; a nested `<ol>` inside a `<li>` starts
-/// its own count rather than continuing the outer one). That's ordinary
-/// correct list semantics, independent of the indentation
-/// simplification below.
+/// its own count rather than continuing the outer one). [depth] is
+/// separate from that: it's the outer list's [depth] plus one, so a
+/// top-level list is depth 1 (2-space indent) and each further level of
+/// `<ul>`/`<ol>` nesting adds 2 more spaces — see [indent].
 class _ListContext {
   final bool ordered;
+  final int depth;
   int _counter = 0;
-  _ListContext(this.ordered);
+  _ListContext(this.ordered, this.depth);
   int next() => ++_counter;
+
+  /// The literal leading whitespace for a marker at this depth — real
+  /// characters written into the output text, matching how this
+  /// library represents *all* list indentation (see the removal notes
+  /// on `AttributeType`): there's no separate "nesting level" concept
+  /// stored anywhere, just how many literal spaces happen to precede
+  /// the marker. `EditingEngine`/the renderer/the toolbar all already
+  /// group and detect list runs by comparing this literal indent
+  /// string, regardless of how it got there — generating 2 spaces per
+  /// depth here doesn't require anything downstream to know depth is a
+  /// concept at all.
+  String get indent => '  ' * depth;
 }
 
 /// Parses HTML into plain text plus [TextAttribute]s, for pasting content
@@ -51,10 +66,14 @@ class _ListContext {
 /// this library represents lists everywhere else (see the removal notes
 /// on `AttributeType`: list markers are always literal text, detected
 /// and styled presentationally at render time, never virtual/injected).
-/// Indentation is deliberately flat — every list item gets the same
-/// single-level `'  '` regardless of true DOM nesting depth — rather
-/// than a per-depth indent; a `<li>` with no enclosing `<ul>`/`<ol>`
-/// (malformed fragment) is left as plain block text, same as before.
+/// Nesting depth is real too: each level of `<ul>`/`<ol>` nesting adds 2
+/// more leading spaces (level 1 = `'  '`, level 2 = `'    '`, ...) —
+/// see [_ListContext.indent]. Nothing downstream needs to know "depth"
+/// is a concept: `EditingEngine`/the renderer/the toolbar already group
+/// and detect list runs purely by comparing literal indent strings,
+/// regardless of how many spaces or how they got there. A `<li>` with
+/// no enclosing `<ul>`/`<ol>` (malformed fragment) is left as plain
+/// block text, same as before.
 ///
 /// Depends on `package:html` for actual HTML parsing (handling malformed
 /// markup, entities, nesting) rather than hand-rolling that — unlike
@@ -140,16 +159,32 @@ class HtmlImporter {
     // A <ul>/<ol> starts a fresh list scope for its own direct <li>
     // children (see _ListContext) — including one nested inside a <li>
     // of an outer list, which shadows the outer context for its own
-    // subtree without disturbing the outer list's own counter. A <li>
-    // with no enclosing list (currentList == null) just falls through
-    // to plain block text, unchanged from before.
+    // subtree without disturbing the outer list's own counter, and gets
+    // one level deeper indentation than whatever list (if any) it's
+    // nested inside. A <li> with no enclosing list (currentList ==
+    // null) just falls through to plain block text, unchanged from
+    // before.
     var childListContext = currentList;
     if (tag == 'ul') {
-      childListContext = _ListContext(false);
+      childListContext = _ListContext(false, (currentList?.depth ?? 0) + 1);
     } else if (tag == 'ol') {
-      childListContext = _ListContext(true);
+      childListContext = _ListContext(true, (currentList?.depth ?? 0) + 1);
     } else if (tag == 'li' && currentList != null) {
-      buffer.write(currentList.ordered ? '  ${currentList.next()}. ' : '  - ');
+      // Defensive: if this <li>'s own text content already starts with
+      // something that looks like a literal list prefix (unusual, but
+      // possible if the source HTML had literal '- ' typed inside
+      // otherwise-real <li> markup), don't stack a second, generated
+      // one on top of it. Still advances the counter for an ordered
+      // list even when skipped, so a later sibling's number isn't
+      // thrown off by this one's marker not being written.
+      final liOwnText = node.text.trimLeft();
+      final alreadyHasPrefix = listPrefixLength(liOwnText, 0) > 0;
+      if (!alreadyHasPrefix) {
+        final indent = currentList.indent;
+        buffer.write(currentList.ordered ? '$indent${currentList.next()}. ' : '$indent- ');
+      } else if (currentList.ordered) {
+        currentList.next();
+      }
     }
 
     final List<_StyleFrame> extraFrames = _framesFromStyles(node);

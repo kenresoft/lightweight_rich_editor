@@ -30,12 +30,23 @@ class ClipboardManager {
   /// Copies `selection` to the system clipboard (plain text) and, if a
   /// [delegate] is set, to it as well (with formatting). No-op on a
   /// collapsed selection — there's nothing to copy.
+  ///
+  /// Reads from [EditorDocument.exportAttributes] rather than
+  /// `document.attributeStore.findIntersecting(...)` directly — header
+  /// formatting is read from `document.paragraphs` now (Phase 3 of the
+  /// block-architecture migration), and `exportAttributes` is what
+  /// synthesizes that back into the flat span list this method already
+  /// clips and translates to selection-relative offsets. Without this,
+  /// copying a heading would silently lose its header formatting the
+  /// moment `AttributeStore`'s own header spans stopped being the read
+  /// source elsewhere.
   Future<void> copy(EditorSelection selection) async {
     if (selection.isCollapsed) return;
 
     final text = document.text.substring(selection.start, selection.end);
-    final attributes = document.attributeStore
-        .findIntersecting(selection.start, selection.end)
+    final attributes = document
+        .exportAttributes()
+        .where((attr) => attr.intersects(selection.start, selection.end))
         .map((attr) {
       final clippedStart = attr.start < selection.start ? selection.start : attr.start;
       final clippedEnd = attr.end > selection.end ? selection.end : attr.end;
@@ -47,7 +58,7 @@ class ClipboardManager {
         .toList(growable: false);
 
     delegate?.store(text, attributes);
-    
+
     // Generate HTML to preserve formatting in the system clipboard.
     final html = const HtmlExporter().export(text, attributes);
     await RichClipboardPlatform.setData(text: text, html: html);
@@ -79,8 +90,21 @@ class ClipboardManager {
       return null;
     }
 
+    // Normalized purely for comparison, never for what actually gets
+    // pasted: `rich.text` comes from our own in-memory delegate,
+    // untouched by the OS — it's `plainText` (round-tripped through the
+    // real system clipboard) that some platforms may have normalized
+    // '\n' to '\r\n' on the way. Comparing raw could spuriously miss an
+    // exact, same-session copy that should have taken the rich path,
+    // falling through to a plain-text paste — losing formatting despite
+    // the correct data still being right there in `rich`. Never
+    // normalizing what's actually inserted matters: stripping '\r'
+    // characters from text whose attributes were computed against its
+    // original length would shift every offset after the strip point.
+    final normalizedPlainText = plainText?.replaceAll('\r\n', '\n');
+
     final rich = delegate?.read();
-    if (rich != null && rich.text == plainText) {
+    if (rich != null && rich.text == normalizedPlainText) {
       return commands.pasteRich(selection, rich.text, rich.attributes);
     }
 
@@ -89,7 +113,7 @@ class ClipboardManager {
       final parsed = const HtmlImporter().parse(htmlText);
       // Only use the rich import if it actually found formatting or
       // meaningful structure.
-      if (parsed.attributes.isNotEmpty || (plainText != null && parsed.text != plainText)) {
+      if (parsed.attributes.isNotEmpty || (normalizedPlainText != null && parsed.text != normalizedPlainText)) {
         return commands.pasteRich(selection, parsed.text, parsed.attributes);
       }
     }
@@ -127,23 +151,23 @@ class ClipboardManager {
     if (RegExp(r'^#+ ', multiLine: true).hasMatch(text)) {
       return true;
     }
-    
+
     // 2. Inline markers: bold, strikethrough, code
-    if (text.contains('**') || text.contains('__') || 
+    if (text.contains('**') || text.contains('__') ||
         text.contains('~~') || text.contains('`')) {
       return true;
     }
-    
+
     // 3. Italic markers: single * or _ with content
     if (RegExp(r'([*_]).+\1').hasMatch(text)) {
       return true;
     }
-    
+
     // 4. Links: [text](url)
     if (RegExp(r'\[.*\]\(.*\)').hasMatch(text)) {
       return true;
     }
-    
+
     return false;
   }
 }
