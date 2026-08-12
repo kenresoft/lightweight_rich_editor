@@ -197,69 +197,112 @@ class RichEditorController extends TextEditingController {
     var resultComposing = newValue.composing;
     var ranAutolink = false;
 
-    if (!diff.isNoOp) {
-      if (diff.insertedText == '\n') {
-        final edit = engine.enterKeyEditWithRenumber(
-          EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
-        );
-        history.execute(ReplaceRangeCommand(
-          start: edit.start,
-          end: edit.end,
-          text: edit.text,
-          attributesForInsertion: Map.of(engine.stickyAttributes),
-        ));
-        resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
-        resultComposing = TextRange.empty;
-        // Not autolinking here: the exit-list variant deletes the
-        // prefix, which shifts everything `_maybeAutolink` assumes
-        // about `diff`'s positions still lining up with the document.
-        // Narrow trade-off — no autolink on the exact keystroke where
-        // Enter also exits a list — over reusing position math that no
-        // longer holds.
-      } else if (diff.insertedText.isEmpty && diff.end - diff.start == 1) {
-        // A single-character deletion — live backspace. Routed through
-        // the same consolidated EditingEngine.deleteBackwardEdit the
-        // programmatic CommandDispatcher.deleteBackward path uses, so
-        // live typing gets smart list-marker removal and numbered-list
-        // renumbering too, not just the raw one-character diff. Called
-        // with the caret at diff.end (where it was *before* backspacing,
-        // matching deleteBackwardEdit's own "collapsed selection at the
-        // pre-deletion caret" contract) — document.paragraphs/text still
-        // reflect the pre-deletion state here, since nothing has been
-        // dispatched yet.
-        final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(diff.end));
-        if (edit != null) {
+    // Defensive safety net, not a substitute for fixing bugs at the
+    // source: if anything in this block throws — a real one already
+    // did once (an EditingEngine helper returned an immutable list a
+    // caller then tried to mutate) — the failure mode is severe enough
+    // to guard against explicitly. The exception aborts this method
+    // partway through, after Flutter's own EditableText has already
+    // applied the keystroke to its internal state but before
+    // `document.text`/`super.value` are updated to match. Every
+    // subsequent keystroke's diff is then computed against a stale
+    // `oldText` that no longer matches what's actually on screen —
+    // one crash corrupts the rest of the session, not just the one
+    // keystroke. On catch: force the field back to exactly what
+    // `document` (left unmodified, since nothing committed) already
+    // says, discarding this one keystroke rather than leaving
+    // Flutter's state and the engine's state permanently desynced —
+    // then rethrow, so the error still surfaces for debugging instead
+    // of silently swallowing a real bug.
+    try {
+      if (!diff.isNoOp) {
+        if (diff.insertedText == '\n') {
+          // relativeAttributes, not attributesForInsertion: see
+          // EditingEngine.enterKeyEditWithRenumber's doc comment — this
+          // edit can reconstruct pre-existing text (a mid-line split's
+          // tail, renumbered subsequent items), which needs to keep its
+          // own original formatting rather than having sticky attributes
+          // smeared across the whole combined replacement. Sticky
+          // attributes are still applied, just only to the genuinely new
+          // marker portion — enterKeyEditWithRenumber folds that into the
+          // relativeAttributes it returns, given the current sticky state
+          // as a parameter.
+          final edit = engine.enterKeyEditWithRenumber(
+            EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
+            Map.of(engine.stickyAttributes),
+          );
           history.execute(ReplaceRangeCommand(
             start: edit.start,
             end: edit.end,
             text: edit.text,
-            attributesForInsertion: Map.of(engine.stickyAttributes),
+            relativeAttributes: edit.relativeAttributes,
           ));
           resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
           resultComposing = TextRange.empty;
+          // Not autolinking here: the exit-list variant deletes the
+          // prefix, which shifts everything `_maybeAutolink` assumes
+          // about `diff`'s positions still lining up with the document.
+          // Narrow trade-off — no autolink on the exact keystroke where
+          // Enter also exits a list — over reusing position math that no
+          // longer holds.
+        } else if (diff.insertedText.isEmpty && diff.end - diff.start == 1) {
+          // A single-character deletion — live backspace. Routed through
+          // the same consolidated EditingEngine.deleteBackwardEdit the
+          // programmatic CommandDispatcher.deleteBackward path uses, so
+          // live typing gets smart list-marker removal and numbered-list
+          // renumbering too, not just the raw one-character diff. Called
+          // with the caret at diff.end (where it was *before* backspacing,
+          // matching deleteBackwardEdit's own "collapsed selection at the
+          // pre-deletion caret" contract) — document.paragraphs/text still
+          // reflect the pre-deletion state here, since nothing has been
+          // dispatched yet. relativeAttributes, not attributesForInsertion
+          // — same reasoning as the Enter branch above: the renumbering
+          // case reconstructs existing paragraphs' text and must keep
+          // their own attributes, never sticky ones (there's no "new"
+          // portion here the way Enter's marker is, so no sticky
+          // application at all makes sense for this specific edit).
+          final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(diff.end));
+          if (edit != null) {
+            history.execute(ReplaceRangeCommand(
+              start: edit.start,
+              end: edit.end,
+              text: edit.text,
+              relativeAttributes: edit.relativeAttributes,
+            ));
+            resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
+            resultComposing = TextRange.empty;
+          } else {
+            // Shouldn't happen — diff implies something was deletable —
+            // but fall back to the raw diff defensively rather than
+            // silently dropping the edit.
+            history.execute(ReplaceRangeCommand(
+              start: diff.start,
+              end: diff.end,
+              text: diff.insertedText,
+              attributesForInsertion: Map.of(engine.stickyAttributes),
+            ));
+          }
+          // Backspace never autolinks — _maybeAutolink no-ops on empty
+          // insertedText anyway, but ranAutolink stays false for clarity
+          // of intent, not just because the guard happens to catch it.
         } else {
-          // Shouldn't happen — diff implies something was deletable —
-          // but fall back to the raw diff defensively rather than
-          // silently dropping the edit.
           history.execute(ReplaceRangeCommand(
             start: diff.start,
             end: diff.end,
             text: diff.insertedText,
             attributesForInsertion: Map.of(engine.stickyAttributes),
           ));
+          ranAutolink = true;
         }
-        // Backspace never autolinks — _maybeAutolink no-ops on empty
-        // insertedText anyway, but ranAutolink stays false for clarity
-        // of intent, not just because the guard happens to catch it.
-      } else {
-        history.execute(ReplaceRangeCommand(
-          start: diff.start,
-          end: diff.end,
-          text: diff.insertedText,
-          attributesForInsertion: Map.of(engine.stickyAttributes),
-        ));
-        ranAutolink = true;
       }
+    } catch (_) {
+      super.value = TextEditingValue(
+        text: document.text,
+        selection: TextSelection.collapsed(
+          offset: clampInt(newValue.selection.start, 0, document.length),
+        ),
+      );
+      rethrow;
     }
 
     // Trust the TextField/IME's own reported selection for where the

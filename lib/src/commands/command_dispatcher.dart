@@ -45,12 +45,21 @@ class CommandDispatcher {
   /// typing does.
   EditorSelection insertText(EditorSelection selection, String text) {
     if (text == '\n') {
-      final edit = engine.enterKeyEditWithRenumber(selection);
+      // relativeAttributes, not attributesForInsertion: the edit may
+      // reconstruct pre-existing text (a mid-line split's tail,
+      // renumbered subsequent items), which must keep its own original
+      // formatting rather than inheriting sticky attributes across the
+      // whole thing — see EditingEngine.enterKeyEditWithRenumber's doc
+      // comment for the bug this fixes. Sticky attributes are still
+      // applied, just only to the genuinely new marker portion, which
+      // enterKeyEditWithRenumber already folds into the returned
+      // relativeAttributes itself.
+      final edit = engine.enterKeyEditWithRenumber(selection, Map.of(engine.stickyAttributes));
       dispatch(ReplaceRangeCommand(
         start: edit.start,
         end: edit.end,
         text: edit.text,
-        attributesForInsertion: Map.of(engine.stickyAttributes),
+        relativeAttributes: edit.relativeAttributes,
       ));
       return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
     }
@@ -76,14 +85,21 @@ class CommandDispatcher {
     if (!selection.isCollapsed) return deleteSelection(selection);
     final edit = engine.deleteBackwardEdit(selection);
     if (edit == null) return selection;
-    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text));
+    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
     return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
   }
 
+  /// Same consolidation reasoning as [deleteBackward]: routes through
+  /// `EditingEngine.deleteForwardEdit` instead of a hardcoded
+  /// single-character deletion, so this now gets smart list-marker
+  /// removal (deleting right before a marker removes the whole thing)
+  /// and numbered-list renumbering, matching backspace's behavior.
   EditorSelection deleteForward(EditorSelection selection) {
     if (!selection.isCollapsed) return deleteSelection(selection);
-    if (selection.start >= engine.document.length) return selection;
-    return dispatch(ReplaceRangeCommand(start: selection.start, end: selection.start + 1, text: ''));
+    final edit = engine.deleteForwardEdit(selection);
+    if (edit == null) return selection;
+    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+    return EditorSelection.collapsed(edit.start);
   }
 
   /// Plain-text paste — same as [insertText], named for call-site clarity.
@@ -176,18 +192,16 @@ class CommandDispatcher {
   /// so the caller needs to sync selection the same way [insertText]/
   /// [deleteBackward] do, not the way [toggleBold] does.
   ///
-  /// Only affects the single paragraph `selection.start` is in. A
-  /// selection spanning multiple paragraphs would need several such
-  /// edits — each one shifting every subsequent offset — collapsed into
-  /// one undo step. That needs a batched/composite command mechanism
-  /// (this library has one for `SearchIndex.replaceAll`, per earlier
-  /// notes, but I haven't reviewed that source), so multi-paragraph
-  /// toggling is deliberately not implemented here rather than guessed
-  /// at.
+  /// A selection spanning multiple paragraphs is fully supported —
+  /// `EditingEngine.listToggleEdit`/`_numberedToggleEdit` compute the
+  /// whole affected run (including numbered-run renumbering) as one
+  /// combined replacement, so this never needed a composite/batched
+  /// command the way a naive several-separate-edits approach would
+  /// have.
   EditorSelection _toggleList(EditorSelection selection, ParagraphListType type) {
     final edit = engine.listToggleEdit(selection, type);
     if (edit == null) return selection;
-    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text));
+    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
   }
 
   /// Indents the list item containing `selection.start` by inserting 2
@@ -202,7 +216,7 @@ class CommandDispatcher {
   EditorSelection _listIndent(EditorSelection selection, {required bool outdent}) {
     final edit = engine.listIndentEdit(selection, outdent: outdent);
     if (edit == null) return selection;
-    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text));
+    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
   }
 
   void clearFormatting(EditorSelection selection) {

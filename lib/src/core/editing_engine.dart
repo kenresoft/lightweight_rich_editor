@@ -229,6 +229,40 @@ class EditingEngine {
   /// [deleteRange] instead) or a caret already at document start (nothing
   /// to delete).
   ///
+  /// Extracts inline attributes intersecting `[srcStart, srcEnd)` in the
+  /// current, unmutated document, translated to be relative to
+  /// `destOffset` — as if the copied text started at position 0. For
+  /// structural edits that reconstruct a range's text verbatim (list
+  /// toggle, indent, clear-formatting strip, renumbering) and need to
+  /// carry forward whatever inline formatting (bold, italic, link, ...)
+  /// was already on those characters.
+  ///
+  /// This is what closes a real, reported bug: every one of those
+  /// methods used to return a bare `{start, end, text}`, dispatched as
+  /// `ReplaceRangeCommand(start, end, text)` with no attributes
+  /// specified at all. `replaceRange`'s insertion step falls back to
+  /// `_stickyAttributes` whenever no explicit attributes are given —
+  /// correct for a small, genuinely new insertion (typing a character
+  /// should inherit sticky formatting), actively wrong for a
+  /// paragraph-sized *reconstruction* of existing content: a link on a
+  /// single word could end up smeared across an entire renumbered
+  /// paragraph simply because the caret's leftover sticky state
+  /// happened to include it. Every caller below now passes the result
+  /// of this as `relativeAttributes` on `ReplaceRangeCommand` instead,
+  /// which `EditingEngine.pasteRich` applies at exact, explicit
+  /// positions — never touching `_stickyAttributes` at all.
+  List<TextAttribute> _extractRelativeAttributes(int srcStart, int srcEnd, int destOffset) {
+    if (srcEnd <= srcStart) return <TextAttribute>[];
+    return document.attributeStore.findIntersecting(srcStart, srcEnd).map((attr) {
+      final clippedStart = attr.start < srcStart ? srcStart : attr.start;
+      final clippedEnd = attr.end > srcEnd ? srcEnd : attr.end;
+      return attr.copyWith(
+        start: destOffset + (clippedStart - srcStart),
+        end: destOffset + (clippedEnd - srcStart),
+      );
+    }).toList();
+  }
+
   /// This is the single, consolidated backspace-computation path,
   /// replacing what used to be two independently-drifting copies of
   /// similar logic: [deleteBackward] itself (only reachable if called
@@ -256,9 +290,8 @@ class EditingEngine {
   /// derived-from-text approach used everywhere else list-ness is
   /// checked in this codebase, not stored metadata that could drift
   /// from what's actually typed.
-  ({int start, int end, String text, int cursorOffsetFromStart})? deleteBackwardEdit(
-      EditorSelection selection,
-      ) {
+  ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})?
+  deleteBackwardEdit(EditorSelection selection) {
     if (!selection.isCollapsed) return null;
     if (selection.start == 0) return null;
 
@@ -272,7 +305,10 @@ class EditingEngine {
       }
     }
 
-    return (start: selection.start - 1, end: selection.start, text: '', cursorOffsetFromStart: 0);
+    // Pure deletion (text: '') — never reaches replaceRange's insertion
+    // step at all, so there's no attribute-application risk here;
+    // relativeAttributes is empty purely for return-shape consistency.
+    return (start: selection.start - 1, end: selection.start, text: '', cursorOffsetFromStart: 0, relativeAttributes: const []);
   }
 
   /// The list-marker-removal half of [deleteBackwardEdit] — split out
@@ -281,24 +317,28 @@ class EditingEngine {
   /// non-zero and matching the caret position by the caller).
   ///
   /// A bullet (or a numbered item with nothing numbered after it in the
-  /// same run) just has its prefix removed — the plain case. A numbered
-  /// item with more numbered items following renumbers all of them down
-  /// by one, computed as a single combined replacement spanning from
-  /// this paragraph's start to the end of the affected run — hand-traced
-  /// against a concrete example while designing this, same discipline
-  /// as [enterKeyEditWithRenumber].
-  ({int start, int end, String text, int cursorOffsetFromStart}) _removeListMarkerEdit(
-      ParagraphRecord record,
-      int prefixLen,
-      ) {
+  /// same run) just has its prefix removed — the plain case, pure
+  /// deletion, no attribute risk. A numbered item with more numbered
+  /// items following renumbers all of them down by one, computed as a
+  /// single combined replacement spanning from this paragraph's start
+  /// to the end of the affected run — hand-traced against a concrete
+  /// example while designing this, same discipline as
+  /// [enterKeyEditWithRenumber]. That renumbering case *does* insert
+  /// real text (the reconstructed tail plus every renumbered item after
+  /// it), so it carries [_extractRelativeAttributes] for each piece —
+  /// see that method's doc comment for why.
+  ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})
+  _removeListMarkerEdit(ParagraphRecord record, int prefixLen) {
     final text = document.text;
     final prefix = text.substring(record.start, record.start + prefixLen);
-    final ownContent = text.substring(record.start + prefixLen, record.end);
+    final ownContentStart = record.start + prefixLen;
+    final ownContent = text.substring(ownContentStart, record.end);
     final plain = (
     start: record.start,
     end: record.start + prefixLen,
     text: '',
     cursorOffsetFromStart: 0,
+    relativeAttributes: const <TextAttribute>[],
     );
 
     if (listTypeOfPrefix(prefix) != ParagraphListType.numbered) return plain;
@@ -325,14 +365,18 @@ class EditingEngine {
       lastIndex++;
     }
 
+    final relativeAttrs = _extractRelativeAttributes(ownContentStart, record.end, 0);
     final buffer = StringBuffer(ownContent);
     var number = 0;
     for (var i = currentIndex + 1; i <= lastIndex; i++) {
       number++;
       final r = records[i];
       final len = listPrefixLength(text, r.start);
-      final content = text.substring(r.start + len, r.end);
-      buffer.write('\n$indent$number. $content');
+      final contentStart = r.start + len;
+      buffer.write('\n$indent$number. ');
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
     }
 
     return (
@@ -340,6 +384,7 @@ class EditingEngine {
     end: records[lastIndex].end,
     text: buffer.toString(),
     cursorOffsetFromStart: ownContent.length,
+    relativeAttributes: relativeAttrs,
     );
   }
 
@@ -348,8 +393,55 @@ class EditingEngine {
   /// [deleteBackward].
   EditorSelection deleteForward(EditorSelection selection) {
     if (!selection.isCollapsed) return deleteRange(selection);
-    if (selection.start >= document.length) return selection;
-    return replaceRange(selection.start, selection.start + 1, '');
+    final edit = deleteForwardEdit(selection);
+    if (edit == null) return selection;
+    replaceRange(edit.start, edit.end, edit.text);
+    return EditorSelection.collapsed(edit.start);
+  }
+
+  /// Computes the edit for a forward-delete at a collapsed `selection`
+  /// — the [deleteBackwardEdit]/[deleteBackward] counterpart. Pressing
+  /// Delete right *before* a paragraph's list prefix (at
+  /// `record.start`, the mirror image of backspace's "right after the
+  /// prefix") removes the whole marker in one step, reusing
+  /// [_removeListMarkerEdit] directly — deleting a marker is the same
+  /// operation regardless of which key triggered it, prefix stays real
+  /// text, numbered-run renumbering applies the same way.
+  ///
+  /// Unlike [deleteBackwardEdit], there's no `cursorOffsetFromStart` —
+  /// the resulting caret is always just `edit.start` (where the
+  /// deletion began; forward-delete never moves the caret forward past
+  /// where it already was, unlike backspace jumping back to a marker's
+  /// start).
+  ///
+  /// Deliberately not wired into `RichEditorController.set value`'s
+  /// live-typing diff detection: a single-character-removed diff is
+  /// genuinely ambiguous between backspace and forward-delete — both
+  /// produce an identical text diff, and disambiguating needs comparing
+  /// against the pre-edit selection, which is real but separate work
+  /// from this method itself. Only the programmatic
+  /// `CommandDispatcher.deleteForward` path uses this today.
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? deleteForwardEdit(
+    EditorSelection selection,
+  ) {
+    if (!selection.isCollapsed) return null;
+    if (selection.start >= document.length) return null;
+
+    final record = document.paragraphs.paragraphAt(selection.start);
+    if (record != null) {
+      final prefixLen = listPrefixLength(document.text, record.start);
+      if (prefixLen > 0 && selection.start == record.start) {
+        final markerEdit = _removeListMarkerEdit(record, prefixLen);
+        return (
+          start: markerEdit.start,
+          end: markerEdit.end,
+          text: markerEdit.text,
+          relativeAttributes: markerEdit.relativeAttributes,
+        );
+      }
+    }
+
+    return (start: selection.start, end: selection.start + 1, text: '', relativeAttributes: const []);
   }
 
   // ---------------------------------------------------------------------
@@ -466,16 +558,44 @@ class EditingEngine {
   /// advance, so it can just be computed once, upfront.
   ///
   /// Returns the same shape as [enterKeyEdit] plus `cursorOffsetFromStart`
-  /// — callers must use `start + cursorOffsetFromStart` for the
-  /// resulting caret position, not `start + text.length`: `text` may
-  /// include the rewritten trailing items, but the caret always belongs
-  /// right after the *new* item's own prefix, not at the end of
-  /// everything that got renumbered.
-  ({int start, int end, String text, int cursorOffsetFromStart}) enterKeyEditWithRenumber(
+  /// and `relativeAttributes` — callers must use
+  /// `start + cursorOffsetFromStart` for the resulting caret position,
+  /// not `start + text.length`: `text` may include the rewritten
+  /// trailing items, but the caret always belongs right after the *new*
+  /// item's own prefix, not at the end of everything that got
+  /// renumbered.
+  ///
+  /// `stickyAttributesForInsertion` — the caller's current sticky
+  /// formatting (bold, a link the caret happens to be sitting in, ...) —
+  /// is applied *only* to the genuinely new marker text (`[0,
+  /// base.text.length)` of the result), matching ordinary
+  /// typing-continuation semantics. Everything else this method
+  /// reconstructs (the tail of a mid-line split, every renumbered item
+  /// after it) carries its *own* original attributes via
+  /// [_extractRelativeAttributes] instead of inheriting sticky state —
+  /// this distinction is what a real, reported bug turned out to hinge
+  /// on: applying sticky attributes across the *whole* combined
+  /// replacement (the old behavior, before this parameter existed)
+  /// could smear a link that only covered one word across an entire
+  /// renumbered paragraph, simply because the caret's sticky state
+  /// happened to include it at the moment Enter was pressed.
+  ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})
+  enterKeyEditWithRenumber(
       EditorSelection selection,
+      Map<AttributeType, Object?> stickyAttributesForInsertion,
       ) {
     final base = enterKeyEdit(selection);
-    final plain = (start: base.start, end: base.end, text: base.text, cursorOffsetFromStart: base.text.length);
+    List<TextAttribute> stickyAsRelative(int length) => [
+      for (final entry in stickyAttributesForInsertion.entries)
+        TextAttribute(start: 0, end: length, type: entry.key, value: entry.value),
+    ];
+    final plain = (
+    start: base.start,
+    end: base.end,
+    text: base.text,
+    cursorOffsetFromStart: base.text.length,
+    relativeAttributes: stickyAsRelative(base.text.length),
+    );
 
     if (base.text == '\n') return plain; // exit-list or plain newline — nothing to renumber
     final insertedPrefix = base.text.substring(1);
@@ -523,13 +643,21 @@ class EditingEngine {
     }
 
     var number = int.parse(numberedMatch.group(2)!);
-    final buffer = StringBuffer('\n$indent$number. $tailContent');
+    final buffer = StringBuffer('\n$indent$number. ');
+    final relativeAttrs = stickyAsRelative(buffer.length); // sticky covers just the new marker
+    final tailDestOffset = buffer.length;
+    relativeAttrs.addAll(_extractRelativeAttributes(caret, currentRecord.end, tailDestOffset));
+    buffer.write(tailContent);
+
     for (var i = currentIndex + 1; i <= lastIndex; i++) {
       number++;
       final r = records[i];
       final len = listPrefixLength(text, r.start);
-      final content = text.substring(r.start + len, r.end);
-      buffer.write('\n$indent$number. $content');
+      final contentStart = r.start + len;
+      buffer.write('\n$indent$number. ');
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
     }
 
     return (
@@ -537,6 +665,7 @@ class EditingEngine {
     end: lastIndex > currentIndex ? records[lastIndex].end : currentRecord.end,
     text: buffer.toString(),
     cursorOffsetFromStart: base.text.length,
+    relativeAttributes: relativeAttrs,
     );
   }
 
@@ -564,7 +693,10 @@ class EditingEngine {
   /// "mixed selection" ambiguity in the same way (a partially-bold
   /// selection becoming fully bold is the same "any gap turns it on"
   /// rule, just phrased per-character instead of per-paragraph).
-  ({int start, int end, String text})? listToggleEdit(EditorSelection selection, ParagraphListType type) {
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? listToggleEdit(
+      EditorSelection selection,
+      ParagraphListType type,
+      ) {
     final text = document.text;
     final records = document.paragraphs.records;
     final startRecord = document.paragraphs.paragraphAt(selection.start);
@@ -588,19 +720,22 @@ class EditingEngine {
 
     if (type == ParagraphListType.bullet) {
       final buffer = StringBuffer();
+      final relativeAttrs = <TextAttribute>[];
       for (var i = startIndex; i <= endIndex; i++) {
         if (i > startIndex) buffer.write('\n');
         final r = records[i];
         final prefixLen = listPrefixLength(text, r.start);
-        final content = text.substring(r.start + prefixLen, r.end);
+        final contentStart = r.start + prefixLen;
         // The '  ' default indent on a fresh toggle-on (rather than
         // flush-left) is deliberate: a bare '- ' reads as "just a
         // dash", not as a list — real editors give a list item some
         // breathing room by default.
         if (turningOn) buffer.write('  - ');
-        buffer.write(content);
+        final destOffset = buffer.length;
+        relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+        buffer.write(text.substring(contentStart, r.end));
       }
-      return (start: startRecord.start, end: endRecord.end, text: buffer.toString());
+      return (start: startRecord.start, end: endRecord.end, text: buffer.toString(), relativeAttributes: relativeAttrs);
     }
 
     return _numberedToggleEdit(text, records, startIndex, endIndex, turningOn);
@@ -622,7 +757,7 @@ class EditingEngine {
   /// once the de-listed paragraphs are between them, so each is
   /// renumbered independently starting back at 1, not continuing as if
   /// nothing changed.
-  ({int start, int end, String text}) _numberedToggleEdit(
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes}) _numberedToggleEdit(
       String text,
       List<ParagraphRecord> records,
       int startIndex,
@@ -685,16 +820,20 @@ class EditingEngine {
       }
 
       final buffer = StringBuffer();
+      final relativeAttrs = <TextAttribute>[];
       var number = 0;
       for (var i = runStart; i <= runEnd; i++) {
         if (i > runStart) buffer.write('\n');
         number++;
         final r = records[i];
         final len = listPrefixLength(text, r.start);
-        final content = text.substring(r.start + len, r.end);
-        buffer.write('$indent$number. $content');
+        final contentStart = r.start + len;
+        buffer.write('$indent$number. ');
+        final destOffset = buffer.length;
+        relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+        buffer.write(text.substring(contentStart, r.end));
       }
-      return (start: records[runStart].start, end: records[runEnd].end, text: buffer.toString());
+      return (start: records[runStart].start, end: records[runEnd].end, text: buffer.toString(), relativeAttributes: relativeAttrs);
     }
 
     // Turning off.
@@ -709,19 +848,27 @@ class EditingEngine {
     }
 
     final buffer = StringBuffer();
+    final relativeAttrs = <TextAttribute>[];
     var number = 0;
     for (var i = beforeStart; i < startIndex; i++) {
       if (i > beforeStart) buffer.write('\n');
       number++;
       final r = records[i];
       final len = listPrefixLength(text, r.start);
-      buffer.write('$indent$number. ${text.substring(r.start + len, r.end)}');
+      final contentStart = r.start + len;
+      buffer.write('$indent$number. ');
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
     }
     for (var i = startIndex; i <= endIndex; i++) {
       if (i > beforeStart) buffer.write('\n');
       final r = records[i];
       final len = listPrefixLength(text, r.start);
-      buffer.write(text.substring(r.start + len, r.end)); // no prefix — turning off
+      final contentStart = r.start + len;
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end)); // no prefix — turning off
     }
     number = 0; // the "after" segment is a separate list now — starts over
     for (var i = endIndex + 1; i <= afterEnd; i++) {
@@ -729,10 +876,14 @@ class EditingEngine {
       number++;
       final r = records[i];
       final len = listPrefixLength(text, r.start);
-      buffer.write('$indent$number. ${text.substring(r.start + len, r.end)}');
+      final contentStart = r.start + len;
+      buffer.write('$indent$number. ');
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
     }
 
-    return (start: records[beforeStart].start, end: records[afterEnd].end, text: buffer.toString());
+    return (start: records[beforeStart].start, end: records[afterEnd].end, text: buffer.toString(), relativeAttributes: relativeAttrs);
   }
 
   /// Computes the edit to indent (`outdent: false`, adds 2 leading
@@ -750,7 +901,10 @@ class EditingEngine {
   /// Returns `null` if nothing in range would actually change — no
   /// paragraph in the selection has a list prefix, or every one being
   /// outdented is already at the top level.
-  ({int start, int end, String text})? listIndentEdit(EditorSelection selection, {required bool outdent}) {
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? listIndentEdit(
+      EditorSelection selection, {
+        required bool outdent,
+      }) {
     final text = document.text;
     final records = document.paragraphs.records;
     final startRecord = document.paragraphs.paragraphAt(selection.start);
@@ -761,12 +915,15 @@ class EditingEngine {
     if (startIndex == -1 || endIndex == -1) return null;
 
     final buffer = StringBuffer();
+    final relativeAttrs = <TextAttribute>[];
     var anyChange = false;
     for (var i = startIndex; i <= endIndex; i++) {
       if (i > startIndex) buffer.write('\n');
       final r = records[i];
       final prefixLen = listPrefixLength(text, r.start);
       if (prefixLen == 0) {
+        final destOffset = buffer.length;
+        relativeAttrs.addAll(_extractRelativeAttributes(r.start, r.end, destOffset));
         buffer.write(text.substring(r.start, r.end));
         continue;
       }
@@ -774,17 +931,20 @@ class EditingEngine {
       final prefix = text.substring(r.start, r.start + prefixLen);
       final leadingWs = RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)!;
       final markerRest = prefix.substring(leadingWs.length); // '- ' / '1. ', indent stripped
-      final content = text.substring(r.start + prefixLen, r.end);
+      final contentStart = r.start + prefixLen;
 
       final newIndent = outdent
           ? (leadingWs.length >= 2 ? leadingWs.substring(2) : '')
           : '$leadingWs  ';
       if (newIndent != leadingWs) anyChange = true;
-      buffer.write('$newIndent$markerRest$content');
+      buffer.write('$newIndent$markerRest');
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
     }
 
     if (!anyChange) return null;
-    return (start: startRecord.start, end: endRecord.end, text: buffer.toString());
+    return (start: startRecord.start, end: endRecord.end, text: buffer.toString(), relativeAttributes: relativeAttrs);
   }
 
   /// Toggles `type` over `selection`.
@@ -949,7 +1109,20 @@ class EditingEngine {
 
       final listEdit = clearFormattingListEdit(selection);
       if (listEdit != null) {
-        replaceRange(listEdit.start, listEdit.end, listEdit.text);
+        // pasteRich, not replaceRange: replaceRange has no
+        // relativeAttributes parameter at all — it can only fall back
+        // to sticky attributes (already cleared above, so harmless
+        // here) or apply nothing. listEdit.relativeAttributes carries
+        // whatever inline formatting (bold, a link, ...) the paragraphs
+        // being reconstructed already had, which needs to survive this
+        // strip — the same reasoning as every other structural method
+        // that reconstructs existing text; see
+        // _extractRelativeAttributes's doc comment.
+        pasteRich(
+          EditorSelection(baseOffset: listEdit.start, extentOffset: listEdit.end),
+          listEdit.text,
+          listEdit.relativeAttributes,
+        );
       }
 
       assert(_debugValidateParagraphs());
@@ -966,11 +1139,15 @@ class EditingEngine {
   /// Directly reuses [_numberedToggleEdit]'s "turning off" branch rather
   /// than duplicating it: that branch already strips whatever prefix
   /// each paragraph has (bullet or numbered, regardless of type — see
-  /// its own doc comment) and renumbers any numbered run left
-  /// disconnected by the strip. Exactly what clearing formatting across
-  /// a list needs, already hand-traced when it was built for
+  /// its own doc comment), renumbers any numbered run left disconnected
+  /// by the strip, *and* (since the fix for the link-propagation bug)
+  /// preserves each paragraph's original inline attributes via
+  /// `relativeAttributes`. Exactly what clearing formatting across a
+  /// list needs, already hand-traced when it was built for
   /// [listToggleEdit]'s "turn off" case.
-  ({int start, int end, String text})? clearFormattingListEdit(EditorSelection selection) {
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? clearFormattingListEdit(
+      EditorSelection selection,
+      ) {
     if (selection.isCollapsed) return null;
     final text = document.text;
     final records = document.paragraphs.records;
