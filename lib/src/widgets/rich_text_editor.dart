@@ -7,6 +7,7 @@ import '../controller/rich_editor_controller.dart';
 import '../painters/ruled_lines_painter.dart';
 import '../rendering/editor_style.dart';
 import '../utils/link_launcher.dart';
+import '../utils/list_prefix.dart';
 import 'link_entry_dialog.dart';
 
 /// Toggles bold on the current selection. No Flutter default binding —
@@ -25,6 +26,67 @@ class ToggleUnderlineIntent extends Intent {
 
 class ToggleFindIntent extends Intent {
   const ToggleFindIntent();
+}
+
+class IndentListIntent extends Intent {
+  const IndentListIntent();
+}
+
+class OutdentListIntent extends Intent {
+  const OutdentListIntent();
+}
+
+class ToggleBulletListIntent extends Intent {
+  const ToggleBulletListIntent();
+}
+
+class ToggleNumberedListIntent extends Intent {
+  const ToggleNumberedListIntent();
+}
+
+class SetHeaderIntent extends Intent {
+  const SetHeaderIntent(this.level);
+  final String? level;
+}
+
+/// Unlike the `CallbackAction`s used for the other shortcuts below, Tab
+/// already has a job in Flutter — focus traversal — before this widget
+/// ever sees it. A plain `CallbackAction` is *always* enabled once
+/// registered, which would swallow Tab unconditionally and break
+/// tabbing out of the note editor to whatever's next in the UI, even
+/// when the cursor isn't anywhere near a list. Overriding
+/// [isActionEnabled] instead means Flutter only dispatches here when
+/// there's actually something to indent/outdent; otherwise the intent
+/// falls through to the framework's own default Tab handling, same as
+/// if this Action didn't exist.
+class _IndentListAction extends Action<IndentListIntent> {
+  _IndentListAction(this.controller);
+  final RichEditorController controller;
+
+  @override
+  bool get isActionEnabled =>
+      controller.isListActive(ParagraphListType.bullet) || controller.isListActive(ParagraphListType.numbered);
+
+  @override
+  Object? invoke(IndentListIntent intent) {
+    controller.indentList();
+    return null;
+  }
+}
+
+class _OutdentListAction extends Action<OutdentListIntent> {
+  _OutdentListAction(this.controller);
+  final RichEditorController controller;
+
+  @override
+  bool get isActionEnabled =>
+      controller.isListActive(ParagraphListType.bullet) || controller.isListActive(ParagraphListType.numbered);
+
+  @override
+  Object? invoke(OutdentListIntent intent) {
+    controller.outdentList();
+    return null;
+  }
 }
 
 /// A rich text editor widget that supports ruled lines and formatted text.
@@ -82,6 +144,57 @@ class RichTextEditor extends StatelessWidget {
     }
   }
 
+  /// Makes a list marker act like a single unit for plain Left/Right
+  /// caret movement — pressing Left right after a marker jumps to the
+  /// very start of the paragraph instead of landing one character into
+  /// the marker; pressing Right at the paragraph's start jumps past the
+  /// whole marker to the item's actual text. Pure cursor positioning,
+  /// no text mutation, so this carries none of the caret-safety risk
+  /// virtual/protected markers would — the marker is still ordinary,
+  /// individually-navigable text underneath, exactly as it is for
+  /// backspace (see `EditingEngine.deleteBackwardEdit`'s doc comment for
+  /// the same "closest safe approximation to atomic" reasoning).
+  ///
+  /// Only a bare arrow press: Shift+Arrow (extending a selection) and
+  /// Ctrl/Cmd/Alt+Arrow (word/line jump) keep Flutter's normal behavior
+  /// untouched.
+  KeyEventResult _handleSmartArrowKeys(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    final isLeft = event.logicalKey == LogicalKeyboardKey.arrowLeft;
+    final isRight = event.logicalKey == LogicalKeyboardKey.arrowRight;
+    if (!isLeft && !isRight) return KeyEventResult.ignored;
+
+    final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+    final hasModifier = pressed.contains(LogicalKeyboardKey.shiftLeft) ||
+        pressed.contains(LogicalKeyboardKey.shiftRight) ||
+        pressed.contains(LogicalKeyboardKey.controlLeft) ||
+        pressed.contains(LogicalKeyboardKey.controlRight) ||
+        pressed.contains(LogicalKeyboardKey.metaLeft) ||
+        pressed.contains(LogicalKeyboardKey.metaRight) ||
+        pressed.contains(LogicalKeyboardKey.altLeft) ||
+        pressed.contains(LogicalKeyboardKey.altRight);
+    if (hasModifier) return KeyEventResult.ignored;
+
+    final selection = controller.selection;
+    if (!selection.isValid || !selection.isCollapsed) return KeyEventResult.ignored;
+
+    final caret = selection.start;
+    final record = controller.document.paragraphs.paragraphAt(caret);
+    if (record == null) return KeyEventResult.ignored;
+    final prefixLen = listPrefixLength(controller.document.text, record.start);
+    if (prefixLen == 0) return KeyEventResult.ignored;
+
+    if (isLeft && caret == record.start + prefixLen) {
+      controller.selection = TextSelection.collapsed(offset: record.start);
+      return KeyEventResult.handled;
+    }
+    if (isRight && caret == record.start) {
+      controller.selection = TextSelection.collapsed(offset: record.start + prefixLen);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     // Deliberately read once, outside any controller-listening scope.
@@ -100,6 +213,18 @@ class RichTextEditor extends StatelessWidget {
     // here should be listening to it.
     final renderTheme = controller.renderer.theme;
 
+    // Assigned directly rather than captured-and-chained with whatever
+    // was there before: this widget is stateless and build() can run
+    // many times, and re-capturing "the previous handler" on every
+    // build would wrap it in a new closure each time — an unbounded
+    // chain of nested handlers across rebuilds, not just a style
+    // preference. Known, deliberate trade-off: if a host app ever sets
+    // its own onKeyEvent on this same controller-owned focusNode, this
+    // replaces it rather than composing with it. In practice nothing
+    // else should be reaching into a FocusNode this controller itself
+    // constructed.
+    controller.focusNode.onKeyEvent = _handleSmartArrowKeys;
+
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
         const SingleActivator(LogicalKeyboardKey.keyB, control: true): const ToggleBoldIntent(),
@@ -110,6 +235,16 @@ class RichTextEditor extends StatelessWidget {
         const SingleActivator(LogicalKeyboardKey.keyU, meta: true): const ToggleUnderlineIntent(),
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): const ToggleFindIntent(),
         const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const ToggleFindIntent(),
+        const SingleActivator(LogicalKeyboardKey.tab): const IndentListIntent(),
+        const SingleActivator(LogicalKeyboardKey.tab, shift: true): const OutdentListIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit8, control: true, shift: true): const ToggleBulletListIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit8, meta: true, shift: true): const ToggleBulletListIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit7, control: true, shift: true): const ToggleNumberedListIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit7, meta: true, shift: true): const ToggleNumberedListIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit1, control: true, alt: true): const SetHeaderIntent('h1'),
+        const SingleActivator(LogicalKeyboardKey.digit1, meta: true, alt: true): const SetHeaderIntent('h1'),
+        const SingleActivator(LogicalKeyboardKey.digit2, control: true, alt: true): const SetHeaderIntent('h2'),
+        const SingleActivator(LogicalKeyboardKey.digit2, meta: true, alt: true): const SetHeaderIntent('h2'),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -134,6 +269,26 @@ class RichTextEditor extends StatelessWidget {
           ToggleFindIntent: CallbackAction<ToggleFindIntent>(
             onInvoke: (intent) {
               onToggleFind?.call();
+              return null;
+            },
+          ),
+          IndentListIntent: _IndentListAction(controller),
+          OutdentListIntent: _OutdentListAction(controller),
+          ToggleBulletListIntent: CallbackAction<ToggleBulletListIntent>(
+            onInvoke: (intent) {
+              controller.toggleBulletList();
+              return null;
+            },
+          ),
+          ToggleNumberedListIntent: CallbackAction<ToggleNumberedListIntent>(
+            onInvoke: (intent) {
+              controller.toggleNumberedList();
+              return null;
+            },
+          ),
+          SetHeaderIntent: CallbackAction<SetHeaderIntent>(
+            onInvoke: (intent) {
+              controller.setHeader(intent.level);
               return null;
             },
           ),

@@ -85,6 +85,18 @@ class _StyleEvent {
 /// cache's invalidation key (`AttributeStore.revision`); they're just no
 /// longer what decides the rendered font size here.
 ///
+/// Every paragraph start also gets a synthetic sweep event (see
+/// `_MarkerKind.paragraphBoundary`) purely to force the sweep to stop
+/// there — without it, a paragraph boundary that didn't happen to
+/// coincide with any *other* attribute's start/end could be skipped
+/// over entirely as part of a larger segment between two unrelated
+/// events, meaning `currentHeaderLevel` would never be re-queried for
+/// that paragraph even though `ParagraphIndex.headerLevel` was correct
+/// the whole time. This was the actual cause of "header data is right
+/// but the paragraph never visibly changes" — not a caching issue
+/// (`_cachedParagraphRevision` below is still correct and still
+/// necessary, just not sufficient on its own).
+///
 /// Results are cached against [AttributeStore.revision] plus the other
 /// call inputs, so re-rendering after a selection-only change (no text
 /// or formatting edit) is a cache hit.
@@ -157,7 +169,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     // revision counter, a header-only change (no text change, no
     // attributeStore change) would be invisible to this cache check,
     // and buildTextSpan would keep returning the stale, pre-header span
-    // forever. This is the fix for that.
+    // forever.
     final paragraphRevision = document.paragraphs.revision;
 
     if (_cachedSpan != null &&
@@ -243,7 +255,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         selectionHighlightRange.end > selectionHighlightRange.start;
 
     final spans = document.attributes;
-    final hasListPrefix = _containsListPrefix(text);
+    final hasListPrefix = _containsListPrefix(document);
     if (spans.isEmpty &&
         !hasComposing &&
         !hasMatchHighlight &&
@@ -268,25 +280,26 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     return TextSpan(style: style, children: _buildChildren(document, events, style));
   }
 
-  /// Whether any paragraph in `text` starts with a literal list prefix
-  /// — used only to decide whether [_render] can take its plain-`TextSpan`
+  /// Whether any paragraph starts with a literal list prefix — used
+  /// only to decide whether [_render] can take its plain-`TextSpan`
   /// fast path or needs the full event sweep to style that prefix.
   ///
-  /// One pass over `text`: `pos` only ever advances to `next + 1`, so
-  /// the repeated `text.indexOf('\n', pos)` calls together cover each
-  /// character once, not once per paragraph — O(document length) total,
-  /// same order as building the plain-text span itself. This is
-  /// deliberately *not* the per-newline pattern the old list-attribute
-  /// code used (see the removal notes on `AttributeType`): there's no
-  /// nested O(document length) call — like `_paragraphBounds` used to
-  /// be — inside this loop.
-  bool _containsListPrefix(String text) {
-    var pos = 0;
-    while (pos <= text.length) {
-      if (listPrefixLength(text, pos) > 0) return true;
-      final next = text.indexOf('\n', pos);
-      if (next == -1) break;
-      pos = next + 1;
+  /// Iterates `document.paragraphs.records` — already computed, already
+  /// O(paragraphs) to walk — checking each record's own start with the
+  /// bounded [listPrefixLength]. O(paragraphs) total, strictly cheaper
+  /// than the O(document length) `text`-rescanning this used to do
+  /// (paragraphs ≤ characters, always). Deliberately not a *stored*
+  /// `hasAnyList` field on `ParagraphIndex`: unlike `hasAnyHeader`
+  /// (which just reads the already-reliable `headerLevel` field on each
+  /// record), list-ness has no stored field to read — computing it
+  /// would need `ParagraphIndex` to have text access it deliberately
+  /// doesn't have, or a cached boolean with no way to stay correct
+  /// after `applyInsertion`/`applyDeletion`, which don't receive text
+  /// either. This gets the same complexity win without either problem.
+  bool _containsListPrefix(EditorDocument document) {
+    final text = document.text;
+    for (final record in document.paragraphs.records) {
+      if (listPrefixLength(text, record.start) > 0) return true;
     }
     return false;
   }
@@ -309,6 +322,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       events.add(_StyleEvent(offset: end, type: attr.type, isStart: false, value: attr.value));
     }
 
+    // Forces the sweep to stop at every paragraph start, even one with
+    // no other attribute beginning or ending exactly there — see the
+    // class doc comment for why this matters for header specifically.
     for (final record in document.paragraphs.records) {
       if (record.start > 0) {
         events.add(_StyleEvent(
@@ -399,13 +415,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       if (nextPos > currentPos) {
         final isParagraphStart = currentPos == 0 || text.codeUnitAt(currentPos - 1) == 0x0A;
         if (isParagraphStart) {
-          // Phase 3 of the block-architecture migration: headerLevel now
-          // reads from ParagraphIndex, not the AttributeType.header
-          // event sweep below. AttributeStore still carries header
-          // spans too (dual-write, kept for EditingEngine's consistency
-          // assertion and because AttributeType.header itself hasn't
-          // been removed yet) — activeValues[AttributeType.header] is
-          // simply unused for styling now rather than ripped out.
+          // Header now reads from ParagraphIndex, not an
+          // AttributeType.header event in the sweep above —
+          // activeValues[AttributeType.header] is simply unused for
+          // styling. Correctness here depends on the paragraphBoundary
+          // events above guaranteeing isParagraphStart is actually
+          // checked at every paragraph, not just wherever some other
+          // event happens to land.
           currentHeaderLevel = document.paragraphs.paragraphAt(currentPos)?.headerLevel;
         }
         final prefixLen = isParagraphStart ? listPrefixLength(text, currentPos) : 0;

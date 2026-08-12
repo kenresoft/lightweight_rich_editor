@@ -921,10 +921,19 @@ class EditingEngine {
   ///
   /// Also clears `headerLevel` on every paragraph `selection` overlaps
   /// (unexpanded — same bounds used for the `AttributeStore` clear right
-  /// above, not paragraph-bounds-expanded). Undo is
-  /// [ClearFormattingCommand]'s responsibility, not this method's — it
-  /// snapshots both `AttributeStore` spans and `ParagraphIndex` header
-  /// levels before calling this.
+  /// above, not paragraph-bounds-expanded), and strips any literal list
+  /// marker from those paragraphs too — a real text mutation, computed
+  /// by [clearFormattingListEdit] and applied via the ordinary
+  /// [replaceRange] path. Wrapped in `transactions.run` since this is
+  /// now genuinely two kinds of change (attribute/header state, then
+  /// possibly a text edit) composed into one logical operation — without
+  /// it, `replaceRange`'s own internal `notify()` plus this method's
+  /// final one would trigger two rebuilds instead of one.
+  ///
+  /// Undo is [ClearFormattingCommand]'s responsibility, not this
+  /// method's — it snapshots `AttributeStore` spans, `ParagraphIndex`
+  /// header levels, *and* (new) whatever text [clearFormattingListEdit]
+  /// is about to rewrite, all before calling this.
   void clearFormatting(EditorSelection selection) {
     if (selection.isCollapsed) {
       if (_stickyAttributes.isEmpty) return;
@@ -933,11 +942,55 @@ class EditingEngine {
       return;
     }
 
-    document.attributeStore.clearRange(selection.start, selection.end);
-    _stickyAttributes.clear();
-    document.paragraphs.setHeaderLevel(selection.start, selection.end, null);
-    assert(_debugValidateParagraphs());
-    transactions.notify();
+    transactions.run(() {
+      document.attributeStore.clearRange(selection.start, selection.end);
+      _stickyAttributes.clear();
+      document.paragraphs.setHeaderLevel(selection.start, selection.end, null);
+
+      final listEdit = clearFormattingListEdit(selection);
+      if (listEdit != null) {
+        replaceRange(listEdit.start, listEdit.end, listEdit.text);
+      }
+
+      assert(_debugValidateParagraphs());
+      transactions.notify();
+    });
+  }
+
+  /// Computes the edit to strip literal list markers from every
+  /// paragraph `selection` overlaps, if any have one — pure computation,
+  /// same shape and safety reasoning as [listToggleEdit]. Returns `null`
+  /// if `selection` is collapsed or no paragraph in range has a marker
+  /// to strip (avoids a needless no-op replacement).
+  ///
+  /// Directly reuses [_numberedToggleEdit]'s "turning off" branch rather
+  /// than duplicating it: that branch already strips whatever prefix
+  /// each paragraph has (bullet or numbered, regardless of type — see
+  /// its own doc comment) and renumbers any numbered run left
+  /// disconnected by the strip. Exactly what clearing formatting across
+  /// a list needs, already hand-traced when it was built for
+  /// [listToggleEdit]'s "turn off" case.
+  ({int start, int end, String text})? clearFormattingListEdit(EditorSelection selection) {
+    if (selection.isCollapsed) return null;
+    final text = document.text;
+    final records = document.paragraphs.records;
+    final startRecord = document.paragraphs.paragraphAt(selection.start);
+    if (startRecord == null) return null;
+    final endRecord = document.paragraphs.paragraphAt(selection.end) ?? startRecord;
+    final startIndex = records.indexOf(startRecord);
+    final endIndex = records.indexOf(endRecord);
+    if (startIndex == -1 || endIndex == -1) return null;
+
+    var anyMarker = false;
+    for (var i = startIndex; i <= endIndex; i++) {
+      if (listPrefixLength(text, records[i].start) > 0) {
+        anyMarker = true;
+        break;
+      }
+    }
+    if (!anyMarker) return null;
+
+    return _numberedToggleEdit(text, records, startIndex, endIndex, false);
   }
 
   // ---------------------------------------------------------------------

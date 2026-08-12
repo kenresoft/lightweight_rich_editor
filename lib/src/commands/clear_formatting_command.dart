@@ -8,23 +8,25 @@ import 'editor_command.dart';
 /// clears pending sticky formatting instead. Snapshots whichever of
 /// those it's about to clear so [undo] can restore it exactly.
 ///
-/// Also clears `headerLevel` on every paragraph `selection` overlaps —
-/// header lives in `ParagraphIndex` now, not `AttributeStore` (see the
-/// block-architecture design notes), so `EditingEngine.clearFormatting`
-/// has to reach it separately from the inline-attribute clearing
-/// `_previousSpans` already covers. Uses the selection's exact bounds,
-/// not a paragraph-bounds-expanded range — matching how clearing every
-/// other attribute type already only touches what the selection
-/// literally overlaps, not the whole enclosing paragraph. `headerLevel`
-/// is never part of `stickyAttributes`, so the collapsed-selection
-/// branch is unaffected — clearing formatting at a bare caret has never
-/// retroactively un-headed the current paragraph, and still doesn't.
+/// Also snapshots the text `EditingEngine.clearFormattingListEdit` is
+/// about to rewrite (stripping literal list markers), if any — this is
+/// a real text mutation, unlike the attribute/header clearing, so it
+/// needs its own undo path: `_listEditStart`/`_listEditNewLength`
+/// record where and how much text `clearFormatting` will have replaced
+/// that range with, and `_previousListText` is what to put back.
+/// Snapshotting happens in [execute] (before `engine.clearFormatting`
+/// actually runs), same principle as [ReplaceRangeCommand]'s own
+/// `_removedText`/`_removedSpans` — capture what's about to be
+/// overwritten before it is, not try to reconstruct it after the fact.
 class ClearFormattingCommand extends EditorCommand {
   final EditorSelection selection;
 
   List<TextAttribute>? _previousSpans;
   Map<AttributeType, Object?>? _previousSticky;
   List<({int start, int end, String? headerLevel})>? _previousHeaderLevels;
+  int? _listEditStart;
+  int? _listEditNewLength;
+  String? _previousListText;
 
   ClearFormattingCommand(this.selection);
 
@@ -42,6 +44,13 @@ class ClearFormattingCommand extends EditorCommand {
           .recordsOverlapping(selection.start, selection.end)
           .map((r) => (start: r.start, end: r.end, headerLevel: r.headerLevel))
           .toList(growable: false);
+
+      final listEdit = engine.clearFormattingListEdit(selection);
+      if (listEdit != null) {
+        _listEditStart = listEdit.start;
+        _listEditNewLength = listEdit.text.length;
+        _previousListText = engine.document.text.substring(listEdit.start, listEdit.end);
+      }
     }
     engine.clearFormatting(selection);
     return selection;
@@ -54,6 +63,17 @@ class ClearFormattingCommand extends EditorCommand {
       return selection;
     }
     return engine.transactions.run(() {
+      // Text first: _previousHeaderLevels/_previousSpans are in
+      // *original* (pre-clear) coordinates, which only line up with the
+      // document again once the list-marker strip (if any) has been
+      // reversed and paragraph structure is back to what it was.
+      if (_listEditStart != null) {
+        engine.replaceRange(
+          _listEditStart!,
+          _listEditStart! + (_listEditNewLength ?? 0),
+          _previousListText ?? '',
+        );
+      }
       final store = engine.document.attributeStore;
       for (final span in _previousSpans ?? const <TextAttribute>[]) {
         store.insert(span);
