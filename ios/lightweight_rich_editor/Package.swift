@@ -1,20 +1,26 @@
 // swift-tools-version: 5.9
+
 import PackageDescription
 
 let package = Package(
     name: "lightweight_rich_editor",
     platforms: [
-        .iOS(.v12),
-        .macOS(.v10_14)
+        .iOS("13.0"),
+        .macOS("10.15")
     ],
     products: [
         .library(name: "lightweight-rich-editor", targets: ["lightweight_rich_editor"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(name: "FlutterFramework", path: "../FlutterFramework")
+    ],
     targets: [
         .target(
             name: "lightweight_rich_editor",
-            path: "darwin"
+            dependencies: [
+                .product(name: "FlutterFramework", package: "FlutterFramework")
+            ],
+            resources: []
         )
     ]
 )
