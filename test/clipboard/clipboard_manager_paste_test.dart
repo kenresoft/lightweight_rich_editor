@@ -39,8 +39,8 @@ void main() {
         return null;
       });
 
-      final result = await clipboard.paste(const EditorSelection.collapsed(0));
-      
+      await clipboard.paste(const EditorSelection.collapsed(0));
+
       expect(document.text, 'Bold text');
       expect(document.attributes.any((a) => a.type == AttributeType.bold), isTrue);
     });

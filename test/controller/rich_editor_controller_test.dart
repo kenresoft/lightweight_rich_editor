@@ -93,10 +93,14 @@ void main() {
 
       controller.setHeader('h1');
 
-      final store = controller.document.attributeStore;
+      // Header is ParagraphIndex-owned metadata, not an AttributeStore
+      // span — see lib/ARCHITECTURE.md's "why headers are stored in
+      // ParagraphIndex" section — so it's read from `paragraphs`, not
+      // `attributeStore`.
+      final paragraphs = controller.document.paragraphs;
       final lineTwoStart = 'line one\n'.length;
-      expect(store.coversRange(lineTwoStart, controller.document.text.length, AttributeType.header), isTrue);
-      expect(store.findAt(3, type: AttributeType.header), isEmpty); // "line one" untouched
+      expect(paragraphs.paragraphAt(lineTwoStart)!.headerLevel, 'h1');
+      expect(paragraphs.paragraphAt(3)!.headerLevel, isNull); // "line one" untouched
     });
 
     test('formatting a selection does not change text length or selection', () {
