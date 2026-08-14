@@ -286,12 +286,35 @@ class RichEditorController extends TextEditingController {
           // insertedText anyway, but ranAutolink stays false for clarity
           // of intent, not just because the guard happens to catch it.
         } else {
+          // Same "range edit can orphan a numbered run" concern as
+          // CommandDispatcher.deleteSelection — this branch is what
+          // actually runs when a real device backspaces over a
+          // multi-paragraph selection (or types over one), not the
+          // programmatic path, so it needs the same follow-up check.
+          // Two separate undo steps when a repair is needed, same
+          // reasoning as CommandDispatcher.deleteSelection's doc comment.
           history.execute(ReplaceRangeCommand(
             start: diff.start,
             end: diff.end,
             text: diff.insertedText,
             attributesForInsertion: Map.of(engine.stickyAttributes),
           ));
+          // Not relying on history.execute's return value here — every
+          // other call site in this file discards it too, and computing
+          // the post-edit position directly from diff (start + however
+          // much was inserted) is exactly where the merge boundary
+          // landed regardless.
+          final repairEdit = engine.repairListNumbering(
+            EditorSelection.collapsed(diff.start + diff.insertedText.length),
+          );
+          if (repairEdit != null) {
+            history.execute(ReplaceRangeCommand(
+              start: repairEdit.start,
+              end: repairEdit.end,
+              text: repairEdit.text,
+              relativeAttributes: repairEdit.relativeAttributes,
+            ));
+          }
           ranAutolink = true;
         }
       }
@@ -501,16 +524,16 @@ class RichEditorController extends TextEditingController {
   /// should rely on to read clearly.
   void deleteSelection() => _syncSelection(commands.deleteSelection(_currentSelection));
 
-  void pasteText(String text) => _syncSelection(commands.paste(_currentSelection, text));
+  void pasteText(String text) => _repairAndSync(commands.paste(_currentSelection, text));
 
   void pasteRichText(String text, List<TextAttribute> relativeAttributes) =>
-      _syncSelection(commands.pasteRich(_currentSelection, text, relativeAttributes));
+      _repairAndSync(commands.pasteRich(_currentSelection, text, relativeAttributes));
 
   /// Parses `markdown` (a deliberately scoped subset — see
   /// [MarkdownImporter]) and pastes the result at the current selection.
   void pasteMarkdown(String markdown) {
     final parsed = const MarkdownImporter().parse(markdown);
-    _syncSelection(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
+    _repairAndSync(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
   }
 
   /// Parses `html` (see [HtmlImporter] for what's recognized) and pastes
@@ -523,7 +546,7 @@ class RichEditorController extends TextEditingController {
   /// plugin, a platform channel, drag-and-drop, a web `paste` event).
   void pasteHtml(String html) {
     final parsed = const HtmlImporter().parse(html);
-    _syncSelection(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
+    _repairAndSync(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
   }
 
   /// Copies the current selection to the system clipboard (and to
@@ -539,7 +562,33 @@ class RichEditorController extends TextEditingController {
   /// clipboard. See [ClipboardManager.paste].
   Future<void> paste() async {
     final result = await clipboard.paste(_currentSelection);
-    if (result != null) _syncSelection(result);
+    if (result != null) _repairAndSync(result);
+  }
+
+  /// Syncs selection, then checks whether the paragraph the paste/import
+  /// landed in (or the one right after it) is part of a numbered run
+  /// whose markers are no longer sequential, and repairs it if so — see
+  /// `EditingEngine.repairListNumbering`'s doc comment. This is the
+  /// "Paste and Import" half of that method's intended use; the other
+  /// half (range deletions orphaning a run) is handled directly in
+  /// `CommandDispatcher.deleteSelection` and this class's `set value`.
+  ///
+  /// External content is the case this matters most for: pasted or
+  /// imported text can arrive with numbering that was never generated
+  /// by this editor's own toggle/renumber logic at all (a list typed in
+  /// some other app, an inconsistently-numbered HTML/Markdown source),
+  /// so there's no guarantee it was ever sequential to begin with —
+  /// unlike this editor's own edits, which stay self-consistent by
+  /// construction.
+  void _repairAndSync(EditorSelection resultSelection) {
+    _syncSelection(resultSelection);
+    final edit = engine.repairListNumbering(resultSelection);
+    if (edit == null) return;
+    _syncSelection(commands.pasteRich(
+      EditorSelection(baseOffset: edit.start, extentOffset: edit.end),
+      edit.text,
+      edit.relativeAttributes,
+    ));
   }
 
   void toggleBold() => commands.toggleBold(_currentSelection);

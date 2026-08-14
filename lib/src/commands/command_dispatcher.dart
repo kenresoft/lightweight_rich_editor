@@ -71,9 +71,34 @@ class CommandDispatcher {
     ));
   }
 
+  /// A range deletion previously had zero list-awareness at all —
+  /// every other structural edit in this class goes through some
+  /// EditingEngine compute-method that accounts for list markers, but
+  /// this one was a bare ReplaceRangeCommand. That was a real,
+  /// confirmed bug (reported as "the previously reported blind spot"):
+  /// deleting a selection spanning list items could remove or merge
+  /// markers in ways that silently left subsequent numbered items with
+  /// stale numbers. Now runs EditingEngine.repairListNumbering as a
+  /// follow-up check afterward — see that method's doc comment for why
+  /// it checks the *next* paragraph too, not just the one the cursor
+  /// lands in.
+  ///
+  /// Deliberately two separate undo steps when a repair is needed, not
+  /// one: undoing once reverts just the repair (leaving the raw
+  /// deletion's numbers as they were immediately after it); undoing
+  /// again removes the deletion itself. An honestly-labeled trade-off,
+  /// not a hidden inconsistency.
   EditorSelection deleteSelection(EditorSelection selection) {
     if (selection.isCollapsed) return selection;
-    return dispatch(ReplaceRangeCommand(start: selection.start, end: selection.end, text: ''));
+    final result = dispatch(ReplaceRangeCommand(start: selection.start, end: selection.end, text: ''));
+    return _repairNumberingIfNeeded(result);
+  }
+
+  EditorSelection _repairNumberingIfNeeded(EditorSelection resultSelection) {
+    final edit = engine.repairListNumbering(resultSelection);
+    if (edit == null) return resultSelection;
+    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+    return resultSelection;
   }
 
   /// Previously constructed its own hardcoded single-character

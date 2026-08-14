@@ -308,7 +308,28 @@ class EditingEngine {
     // Pure deletion (text: '') — never reaches replaceRange's insertion
     // step at all, so there's no attribute-application risk here;
     // relativeAttributes is empty purely for return-shape consistency.
-    return (start: selection.start - 1, end: selection.start, text: '', cursorOffsetFromStart: 0, relativeAttributes: const []);
+    //
+    // A start of `selection.start - 1` deletes exactly one UTF-16 code
+    // unit — wrong if that unit is the low half of a surrogate pair
+    // (any character outside the Basic Multilingual Plane, including
+    // most emoji: U+1F600 and up encode as two UTF-16 units). Deleting
+    // only the low half would leave an orphaned, invalid high surrogate
+    // in the document text. Checking codeUnitAt(selection.start - 1)
+    // for the low-surrogate range (0xDC00–0xDFFF) and, if so, deleting
+    // one code unit further back catches this — a real fix for a
+    // single emoji/astral character, though not a full fix for a
+    // multi-codepoint ZWJ sequence (a family emoji joining several
+    // people-emoji with zero-width joiners): that needs actual grapheme
+    // cluster boundary detection, a materially bigger feature this
+    // narrower fix doesn't attempt.
+    var deleteStart = selection.start - 1;
+    if (deleteStart > 0) {
+      final unit = text.codeUnitAt(deleteStart);
+      if (unit >= 0xDC00 && unit <= 0xDFFF) {
+        deleteStart -= 1;
+      }
+    }
+    return (start: deleteStart, end: selection.start, text: '', cursorOffsetFromStart: 0, relativeAttributes: const []);
   }
 
   /// The list-marker-removal half of [deleteBackwardEdit] — split out
@@ -373,7 +394,13 @@ class EditingEngine {
       final r = records[i];
       final len = listPrefixLength(text, r.start);
       final contentStart = r.start + len;
-      buffer.write('\n$indent$number. ');
+      // ownContent empty means the marker's own paragraph has nothing
+      // left after prefix removal — it collapses away entirely rather
+      // than surviving as a blank line, so the separator that used to
+      // precede it is only written once there's already something in
+      // the buffer to separate from.
+      if (buffer.isNotEmpty) buffer.write('\n');
+      buffer.write('$indent$number. ');
       final destOffset = buffer.length;
       relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
       buffer.write(text.substring(contentStart, r.end));
@@ -422,8 +449,8 @@ class EditingEngine {
   /// from this method itself. Only the programmatic
   /// `CommandDispatcher.deleteForward` path uses this today.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? deleteForwardEdit(
-    EditorSelection selection,
-  ) {
+      EditorSelection selection,
+      ) {
     if (!selection.isCollapsed) return null;
     if (selection.start >= document.length) return null;
 
@@ -433,15 +460,27 @@ class EditingEngine {
       if (prefixLen > 0 && selection.start == record.start) {
         final markerEdit = _removeListMarkerEdit(record, prefixLen);
         return (
-          start: markerEdit.start,
-          end: markerEdit.end,
-          text: markerEdit.text,
-          relativeAttributes: markerEdit.relativeAttributes,
+        start: markerEdit.start,
+        end: markerEdit.end,
+        text: markerEdit.text,
+        relativeAttributes: markerEdit.relativeAttributes,
         );
       }
     }
 
-    return (start: selection.start, end: selection.start + 1, text: '', relativeAttributes: const []);
+    // Same surrogate-pair concern as deleteBackwardEdit's plain
+    // fallback, mirrored for the forward direction: a high surrogate
+    // (0xD800–0xDBFF) at selection.start needs its paired low surrogate
+    // included too, or this would delete only half of an astral
+    // character (most emoji included).
+    var deleteEnd = selection.start + 1;
+    if (deleteEnd < document.length) {
+      final unit = document.text.codeUnitAt(selection.start);
+      if (unit >= 0xD800 && unit <= 0xDBFF) {
+        deleteEnd += 1;
+      }
+    }
+    return (start: selection.start, end: deleteEnd, text: '', relativeAttributes: const []);
   }
 
   // ---------------------------------------------------------------------
@@ -769,8 +808,7 @@ class EditingEngine {
       final len = listPrefixLength(text, r.start);
       if (len == 0) return '  ';
       final prefix = text.substring(r.start, r.start + len);
-      final ws = RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)!;
-      return ws.isEmpty ? '  ' : ws;
+      return RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)!;
     }
 
     bool matchesNumberedIndent(int i, String indent) {
@@ -1128,6 +1166,119 @@ class EditingEngine {
       assert(_debugValidateParagraphs());
       transactions.notify();
     });
+  }
+
+  /// Rewrites every marker in the entire contiguous numbered list
+  /// touching `selection` to be sequential (1, 2, 3, ...), regardless
+  /// of what the existing numbers currently say. Unlike the renumbering
+  /// built into [enterKeyEditWithRenumber]/[_removeListMarkerEdit]
+  /// (which only ever looks forward from a single, specific edit
+  /// point), this repairs the whole run wherever it is relative to
+  /// `selection` — useful after content arrives from a path that
+  /// doesn't already have its own dedicated renumbering logic: a range
+  /// deletion spanning list items (which can remove or merge markers in
+  /// ways no single-keystroke method accounts for), or content arriving
+  /// from outside the normal edit paths (paste, import).
+  ///
+  /// Checks the paragraph at `selection.start` first; if that one isn't
+  /// itself numbered, falls back to checking the *next* paragraph
+  /// before giving up. This fallback is what makes range-deletion
+  /// repair actually work: deleting across paragraph boundaries can
+  /// merge away a paragraph's own marker entirely (its own prefix
+  /// consumed by the deletion, along with whatever came before it),
+  /// landing the cursor on now-unmarked text — while a numbered run
+  /// that used to continue right after the deleted range is still
+  /// sitting there, orphaned, immediately following. Checking only the
+  /// cursor's own paragraph would silently miss exactly that case.
+  ///
+  /// Returns `null` if neither the selection's own paragraph nor the
+  /// next one is part of a numbered list, or if the run's numbers are
+  /// already correct (avoids a needless no-op replacement/undo step).
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? repairListNumbering(
+      EditorSelection selection,
+      ) {
+    final text = document.text;
+    final records = document.paragraphs.records;
+    var record = document.paragraphs.paragraphAt(selection.start);
+    if (record == null) return null;
+
+    bool isNumberedRecord(ParagraphRecord r) {
+      final len = listPrefixLength(text, r.start);
+      if (len == 0) return false;
+      return listTypeOfPrefix(text.substring(r.start, r.start + len)) == ParagraphListType.numbered;
+    }
+
+    if (!isNumberedRecord(record)) {
+      final currentIdx = records.indexOf(record);
+      if (currentIdx == -1 || currentIdx + 1 >= records.length) return null;
+      final next = records[currentIdx + 1];
+      if (!isNumberedRecord(next)) return null;
+      record = next;
+    }
+
+    final prefixLen = listPrefixLength(text, record.start);
+    final prefix = text.substring(record.start, record.start + prefixLen);
+    final indent = RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)!;
+    final currentIndex = records.indexOf(record);
+    if (currentIndex == -1) return null;
+
+    bool matchesRun(int i) {
+      if (i < 0 || i >= records.length) return false;
+      final r = records[i];
+      final len = listPrefixLength(text, r.start);
+      if (len == 0) return false;
+      final p = text.substring(r.start, r.start + len);
+      return listTypeOfPrefix(p) == ParagraphListType.numbered &&
+          RegExp(r'^[ \t]*').firstMatch(p)!.group(0)! == indent;
+    }
+
+    var runStart = currentIndex;
+    while (runStart > 0 && matchesRun(runStart - 1)) {
+      runStart--;
+    }
+    var runEnd = currentIndex;
+    while (runEnd < records.length - 1 && matchesRun(runEnd + 1)) {
+      runEnd++;
+    }
+
+    // If every number in the run already matches its position, there's
+    // nothing to rewrite.
+    var alreadyCorrect = true;
+    var expected = 0;
+    for (var i = runStart; i <= runEnd; i++) {
+      expected++;
+      final r = records[i];
+      final len = listPrefixLength(text, r.start);
+      final numMatch = RegExp(r'^\d+').firstMatch(text.substring(r.start + indent.length, r.start + len));
+      final current = numMatch != null ? int.tryParse(numMatch.group(0)!) : null;
+      if (current != expected) {
+        alreadyCorrect = false;
+        break;
+      }
+    }
+    if (alreadyCorrect) return null;
+
+    final buffer = StringBuffer();
+    final relativeAttrs = <TextAttribute>[];
+    var number = 0;
+    for (var i = runStart; i <= runEnd; i++) {
+      if (i > runStart) buffer.write('\n');
+      number++;
+      final r = records[i];
+      final len = listPrefixLength(text, r.start);
+      final contentStart = r.start + len;
+      buffer.write('$indent$number. ');
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
+    }
+
+    return (
+    start: records[runStart].start,
+    end: records[runEnd].end,
+    text: buffer.toString(),
+    relativeAttributes: relativeAttrs,
+    );
   }
 
   /// Computes the edit to strip literal list markers from every
