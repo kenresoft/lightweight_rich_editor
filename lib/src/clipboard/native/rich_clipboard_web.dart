@@ -1,10 +1,20 @@
 import 'dart:async';
 import 'dart:js_interop';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:web/web.dart' as web;
 
 class LightweightRichEditorWeb {
   static void registerWith(dynamic registrar) {
+    // Web plugin registration (`web_plugin_registrant.dart`) runs before
+    // `main()` calls `runApp()`, so the binary messenger this channel
+    // needs doesn't exist yet unless something initializes the binding
+    // first. `ensureInitialized()` is idempotent — safe to call here even
+    // though the app's own `main()` doesn't (and shouldn't need to) call
+    // it again — and this is the exact fix Flutter's own assertion
+    // message names for "setMethodCallHandler before the binary
+    // messenger has been initialized".
+    WidgetsFlutterBinding.ensureInitialized();
     final channel = MethodChannel(
       'com.kenresoft.lightweight_rich_editor/rich_clipboard',
       const StandardMethodCodec(),

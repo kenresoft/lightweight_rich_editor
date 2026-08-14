@@ -15,7 +15,13 @@ import '../utils/url_detector.dart';
 /// list formatting was removed from [AttributeType] (see its doc comment
 /// for why), so a line starting with one of these is imported as literal
 /// text, prefix included, rather than silently stripping the prefix and
-/// losing the visual list shape the source note had.
+/// losing the visual list shape the source note had. This includes
+/// checkbox syntax (`- [ ] `/`- [x] `): it's just another list prefix as
+/// far as this importer is concerned, so it already round-trips as
+/// literal text with no special-casing needed.
+///
+/// No alignment syntax is recognized on import, matching
+/// `MarkdownExporter` never emitting any — see that class's doc comment.
 class MarkdownImporter {
   const MarkdownImporter();
 

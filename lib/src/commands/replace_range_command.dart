@@ -1,5 +1,6 @@
 import '../core/editing_engine.dart';
 import '../core/editor_selection.dart';
+import '../core/paragraph_record.dart';
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
 import 'editor_command.dart';
@@ -24,10 +25,10 @@ import 'editor_command.dart';
 /// that exact snapshot via [EditingEngine.restoreRange] rather than
 /// re-deriving it from sticky attributes or guessing.
 ///
-/// [_removedHeaderLevels] is a second, separate snapshot alongside
-/// [_removedSpans] — header lives in `ParagraphIndex` now, not
-/// `AttributeStore` (see the block-architecture design notes), so a
-/// deleted paragraph's `headerLevel` isn't recoverable from
+/// [_removedBlockMetadata] is a second, separate snapshot alongside
+/// [_removedSpans] — `headerLevel`/`alignment` live in `ParagraphIndex`
+/// now, not `AttributeStore` (see the block-architecture design notes),
+/// so a deleted paragraph's block metadata isn't recoverable from
 /// `_removedSpans` the way it used to be. Concretely: deleting a
 /// paragraph headed via `SetHeaderLevelCommand` (as opposed to an old
 /// paragraph loaded from a note saved before that migration) leaves
@@ -36,11 +37,17 @@ import 'editor_command.dart';
 /// restore the text without the heading. This snapshot is what closes
 /// that gap. It's redundant (harmless, not wrong) for a pure insert —
 /// `ParagraphIndex.applyDeletion`'s "keep the leftmost fragment's
-/// headerLevel on merge" rule is the exact inverse of
-/// `applyInsertion`'s "keep the first fragment's headerLevel on split",
-/// so undoing a pure insert via a symmetric deletion already restores
-/// the original headerLevel on its own; the snapshot only does real
-/// work for delete/replace.
+/// metadata on merge" rule is the exact inverse of `applyInsertion`'s
+/// "keep the first fragment's metadata on split", so undoing a pure
+/// insert via a symmetric deletion already restores the original
+/// metadata on its own; the snapshot only does real work for
+/// delete/replace.
+///
+/// Snapshots full `ParagraphRecord`s (via `recordsOverlapping`) rather
+/// than a bespoke per-field tuple, restored through
+/// `ParagraphIndex.restoreBlockMetadata` — see that method's doc comment
+/// for why: a future stored block field doesn't need this file touched
+/// again to snapshot/restore it too.
 class ReplaceRangeCommand extends EditorCommand {
   final int start;
   final int end;
@@ -50,7 +57,7 @@ class ReplaceRangeCommand extends EditorCommand {
 
   String? _removedText;
   List<TextAttribute>? _removedSpans;
-  List<({int start, int end, String? headerLevel})>? _removedHeaderLevels;
+  List<ParagraphRecord>? _removedBlockMetadata;
 
   ReplaceRangeCommand({
     required this.start,
@@ -77,10 +84,7 @@ class ReplaceRangeCommand extends EditorCommand {
 
     _removedText = engine.document.buffer.substring(safeStart, safeEnd);
     _removedSpans = store.findIntersecting(safeStart, safeEnd);
-    _removedHeaderLevels = engine.document.paragraphs
-        .recordsOverlapping(safeStart, safeEnd)
-        .map((r) => (start: r.start, end: r.end, headerLevel: r.headerLevel))
-        .toList(growable: false);
+    _removedBlockMetadata = engine.document.paragraphs.recordsOverlapping(safeStart, safeEnd);
 
     if (relativeAttributes != null) {
       return engine.pasteRich(
@@ -100,9 +104,7 @@ class ReplaceRangeCommand extends EditorCommand {
         engine.replaceRange(start, insertedEnd, '');
       }
       final result = engine.restoreRange(start, _removedText ?? '', _removedSpans ?? const []);
-      for (final snapshot in _removedHeaderLevels ?? const []) {
-        engine.document.paragraphs.setHeaderLevel(snapshot.start, snapshot.end, snapshot.headerLevel);
-      }
+      engine.document.paragraphs.restoreBlockMetadata(_removedBlockMetadata ?? const []);
       engine.transactions.notify();
       return result;
     });

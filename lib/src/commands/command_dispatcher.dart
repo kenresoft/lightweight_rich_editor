@@ -2,12 +2,16 @@ import '../commands/apply_attribute_command.dart';
 import '../commands/clear_formatting_command.dart';
 import '../commands/editor_command.dart';
 import '../commands/replace_range_command.dart';
+import '../commands/set_alignment_command.dart';
 import '../commands/set_header_level_command.dart';
+import '../commands/set_text_direction_command.dart';
 import '../commands/toggle_attribute_command.dart';
 import '../core/editing_engine.dart';
 import '../core/editor_selection.dart';
 import '../history/history_manager.dart';
 import '../models/attribute_type.dart';
+import '../models/paragraph_alignment.dart';
+import '../models/paragraph_text_direction.dart';
 import '../models/text_attribute.dart';
 import '../utils/list_prefix.dart';
 
@@ -191,6 +195,25 @@ class CommandDispatcher {
     dispatch(SetHeaderLevelCommand(selection, level));
   }
 
+  /// `alignment` is `null` (default/left), `center`, or `right`. Applies
+  /// to the whole paragraph containing `selection`, not just the
+  /// selected text. Same reasoning and undo semantics as [setHeader] —
+  /// see [SetAlignmentCommand]. See [ParagraphAlignment]'s doc comment
+  /// for the important caveat that this has no live rendering effect in
+  /// the editor yet.
+  void setAlignment(EditorSelection selection, ParagraphAlignment? alignment) {
+    dispatch(SetAlignmentCommand(selection, alignment));
+  }
+
+  /// `textDirection` is `null` (unspecified), `ltr`, or `rtl`. Applies to
+  /// the whole paragraph containing `selection`. Same reasoning and undo
+  /// semantics as [setAlignment] — see [SetTextDirectionCommand]. See
+  /// [ParagraphTextDirection]'s doc comment for the caveat this has no
+  /// live rendering effect yet.
+  void setTextDirection(EditorSelection selection, ParagraphTextDirection? textDirection) {
+    dispatch(SetTextDirectionCommand(selection, textDirection));
+  }
+
   /// Toggles a literal `'- '` prefix on the paragraph containing
   /// `selection.start`.
   EditorSelection toggleBulletList(EditorSelection selection) => _toggleList(selection, ParagraphListType.bullet);
@@ -225,6 +248,17 @@ class CommandDispatcher {
   /// have.
   EditorSelection _toggleList(EditorSelection selection, ParagraphListType type) {
     final edit = engine.listToggleEdit(selection, type);
+    if (edit == null) return selection;
+    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+  }
+
+  /// Toggles task-list checkbox state on the paragraph(s) `selection`
+  /// spans. Literal text, like every other list operation — see
+  /// [EditingEngine.toggleCheckedEdit]'s doc comment — so this dispatches
+  /// through the same [ReplaceRangeCommand] path as [_toggleList], not a
+  /// bespoke Command.
+  EditorSelection toggleTaskItem(EditorSelection selection) {
+    final edit = engine.toggleCheckedEdit(selection);
     if (edit == null) return selection;
     return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
   }

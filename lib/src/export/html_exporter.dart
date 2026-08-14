@@ -147,6 +147,23 @@ class HtmlExporter {
       case AttributeType.header:
         final tag = value == 'h1' ? 'h1' : 'h2';
         return isOpen ? '<$tag>' : '</$tag>';
+      case AttributeType.align:
+        // Reuses the exact same paragraph-spanning-attribute mechanism
+        // header does — the AttributeType.align span synthesized by
+        // `EditorDocument.exportAttributes` always covers a whole
+        // paragraph (including its list prefix, if any), so this opens
+        // right at the start of `_renderInline`'s window and force-closes
+        // at its end, composing correctly whether or not the paragraph
+        // is also a `<li>`/`<h1>`. `value` is the CSS keyword itself
+        // (`ParagraphAlignment.name`: 'left'/'center'/'right').
+        return isOpen ? '<div style="text-align:$value">' : '</div>';
+      case AttributeType.textDirection:
+        // Same paragraph-spanning mechanism as align, one line up — see
+        // that case's doc comment. `dir` is a plain HTML attribute
+        // (not a CSS style) because that's the idiomatic way to express
+        // direction, and it's what `HtmlImporter` looks for on the way
+        // back in. `value` is `ParagraphTextDirection.name` ('ltr'/'rtl').
+        return isOpen ? '<div dir="$value">' : '</div>';
       default:
         return '';
     }

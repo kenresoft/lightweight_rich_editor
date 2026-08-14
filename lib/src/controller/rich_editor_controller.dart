@@ -5,6 +5,7 @@ import '../clipboard/in_memory_rich_clipboard_delegate.dart';
 import '../clipboard/rich_clipboard_delegate.dart';
 import '../commands/command_dispatcher.dart';
 import '../commands/replace_range_command.dart';
+import '../commands/set_header_level_command.dart';
 import '../core/editing_engine.dart';
 import '../core/editor_document.dart';
 import '../core/editor_selection.dart';
@@ -16,6 +17,8 @@ import '../import/html_importer.dart';
 import '../import/markdown_importer.dart';
 import '../metrics/editor_metrics.dart';
 import '../models/attribute_type.dart';
+import '../models/paragraph_alignment.dart';
+import '../models/paragraph_text_direction.dart';
 import '../models/text_attribute.dart';
 import '../rendering/render_theme.dart';
 import '../rendering/text_span_renderer.dart';
@@ -126,6 +129,13 @@ class RichEditorController extends TextEditingController {
     metrics = EditorMetrics(document: document, history: history);
     search = SearchIndex(document: document, commands: commands);
     this.focusNode.addListener(_handleFocusChange);
+    // Tapping a checkbox glyph toggles that specific paragraph, not
+    // whatever the current selection happens to be — same reasoning as
+    // routing a link tap through `onTapLink` rather than a selection-based
+    // action.
+    renderer.onToggleCheckbox = (paragraphStart) {
+      _syncSelection(commands.toggleTaskItem(EditorSelection.collapsed(paragraphStart)));
+    };
   }
 
   void _handleFocusChange() {
@@ -286,36 +296,61 @@ class RichEditorController extends TextEditingController {
           // insertedText anyway, but ranAutolink stays false for clarity
           // of intent, not just because the guard happens to catch it.
         } else {
-          // Same "range edit can orphan a numbered run" concern as
-          // CommandDispatcher.deleteSelection — this branch is what
-          // actually runs when a real device backspaces over a
-          // multi-paragraph selection (or types over one), not the
-          // programmatic path, so it needs the same follow-up check.
-          // Two separate undo steps when a repair is needed, same
-          // reasoning as CommandDispatcher.deleteSelection's doc comment.
-          history.execute(ReplaceRangeCommand(
-            start: diff.start,
-            end: diff.end,
-            text: diff.insertedText,
-            attributesForInsertion: Map.of(engine.stickyAttributes),
-          ));
-          // Not relying on history.execute's return value here — every
-          // other call site in this file discards it too, and computing
-          // the post-edit position directly from diff (start + however
-          // much was inserted) is exactly where the merge boundary
-          // landed regardless.
-          final repairEdit = engine.repairListNumbering(
-            EditorSelection.collapsed(diff.start + diff.insertedText.length),
-          );
-          if (repairEdit != null) {
+          // Markdown-style header shortcut: a bare '#'/'##'/... at the
+          // very start of an otherwise-empty paragraph, followed by the
+          // space the user just typed. Checked before the generic
+          // handling below, not folded into it — a match consumes the
+          // space entirely (never inserted) rather than treating this as
+          // ordinary text entry.
+          final autoHeaderLevel = diff.insertedText == ' ' && diff.start == diff.end
+              ? engine.autoFormatHeaderLevel(diff.start)
+              : null;
+
+          if (autoHeaderLevel != null) {
+            final paragraphStart = document.paragraphs.paragraphAt(diff.start)!.start;
+            // Two separate undo steps, deliberately — same "one keystroke,
+            // two commits" trade-off already used below for
+            // repairListNumbering's follow-up: stripping the literal
+            // '#'/'##' is a text edit, setting headerLevel is metadata: two
+            // different kinds of change, restored independently on undo.
+            history.execute(ReplaceRangeCommand(start: paragraphStart, end: diff.start, text: ''));
+            history.execute(SetHeaderLevelCommand(EditorSelection.collapsed(paragraphStart), autoHeaderLevel));
+            resultSelection = TextSelection.collapsed(offset: paragraphStart);
+            resultComposing = TextRange.empty;
+            // Not autolinking here: there's no text left after becoming a
+            // heading for _maybeAutolink to look at.
+          } else {
+            // Same "range edit can orphan a numbered run" concern as
+            // CommandDispatcher.deleteSelection — this branch is what
+            // actually runs when a real device backspaces over a
+            // multi-paragraph selection (or types over one), not the
+            // programmatic path, so it needs the same follow-up check.
+            // Two separate undo steps when a repair is needed, same
+            // reasoning as CommandDispatcher.deleteSelection's doc comment.
             history.execute(ReplaceRangeCommand(
-              start: repairEdit.start,
-              end: repairEdit.end,
-              text: repairEdit.text,
-              relativeAttributes: repairEdit.relativeAttributes,
+              start: diff.start,
+              end: diff.end,
+              text: diff.insertedText,
+              attributesForInsertion: Map.of(engine.stickyAttributes),
             ));
+            // Not relying on history.execute's return value here — every
+            // other call site in this file discards it too, and computing
+            // the post-edit position directly from diff (start + however
+            // much was inserted) is exactly where the merge boundary
+            // landed regardless.
+            final repairEdit = engine.repairListNumbering(
+              EditorSelection.collapsed(diff.start + diff.insertedText.length),
+            );
+            if (repairEdit != null) {
+              history.execute(ReplaceRangeCommand(
+                start: repairEdit.start,
+                end: repairEdit.end,
+                text: repairEdit.text,
+                relativeAttributes: repairEdit.relativeAttributes,
+              ));
+            }
+            ranAutolink = true;
           }
-          ranAutolink = true;
         }
       }
     } catch (_) {
@@ -631,6 +666,23 @@ class RichEditorController extends TextEditingController {
     return listTypeOfPrefix(document.text.substring(record.start, record.start + prefixLen)) == type;
   }
 
+  void toggleTaskItem() => _syncSelection(commands.toggleTaskItem(_currentSelection));
+
+  /// Whether the paragraph containing the current selection is a
+  /// task-list item, and if so, whether it's checked — `null` if it
+  /// isn't a checklist item at all. Purely derived from text
+  /// ([checkboxStateOfPrefix]), same as [isListActive] — no stored
+  /// checked state to read. Drives the checklist toolbar button/toggle's
+  /// display state.
+  bool? isTaskChecked() {
+    final sel = _currentSelection;
+    final record = document.paragraphs.paragraphAt(sel.start);
+    if (record == null) return null;
+    final prefixLen = listPrefixLength(document.text, record.start);
+    if (prefixLen == 0) return null;
+    return checkboxStateOfPrefix(document.text.substring(record.start, record.start + prefixLen));
+  }
+
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
   void setSize(num? size) => commands.setSize(_currentSelection, size);
 
@@ -646,6 +698,9 @@ class RichEditorController extends TextEditingController {
 
   void setLink(String? url) => commands.setLink(_currentSelection, url);
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
+  void setAlignment(ParagraphAlignment? alignment) => commands.setAlignment(_currentSelection, alignment);
+  void setTextDirection(ParagraphTextDirection? textDirection) =>
+      commands.setTextDirection(_currentSelection, textDirection);
 
   void clearFormatting() => commands.clearFormatting(_currentSelection);
 
@@ -674,7 +729,7 @@ class RichEditorController extends TextEditingController {
   /// would silently go stale the moment a heading is set via
   /// `CommandDispatcher.setHeader`.
   bool isAttributeActive(AttributeType type) {
-    if (type == AttributeType.header) {
+    if (type == AttributeType.header || type == AttributeType.align || type == AttributeType.textDirection) {
       return activeAttributeValue(type) != null;
     }
     final sel = _currentSelection;
@@ -708,6 +763,28 @@ class RichEditorController extends TextEditingController {
       final level = overlapping.first.headerLevel;
       final allAgree = overlapping.every((r) => r.headerLevel == level);
       return allAgree ? level : null;
+    }
+    if (type == AttributeType.align) {
+      final sel = _currentSelection;
+      final startRecord = document.paragraphs.paragraphAt(sel.start);
+      if (startRecord == null) return null;
+      if (sel.isCollapsed) return startRecord.alignment;
+      final overlapping = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+      if (overlapping.isEmpty) return null;
+      final alignment = overlapping.first.alignment;
+      final allAgree = overlapping.every((r) => r.alignment == alignment);
+      return allAgree ? alignment : null;
+    }
+    if (type == AttributeType.textDirection) {
+      final sel = _currentSelection;
+      final startRecord = document.paragraphs.paragraphAt(sel.start);
+      if (startRecord == null) return null;
+      if (sel.isCollapsed) return startRecord.textDirection;
+      final overlapping = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+      if (overlapping.isEmpty) return null;
+      final textDirection = overlapping.first.textDirection;
+      final allAgree = overlapping.every((r) => r.textDirection == textDirection);
+      return allAgree ? textDirection : null;
     }
     final sel = _currentSelection;
     if (sel.isCollapsed) {

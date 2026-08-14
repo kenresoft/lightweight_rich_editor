@@ -1,3 +1,5 @@
+import '../models/paragraph_alignment.dart';
+import '../models/paragraph_text_direction.dart';
 import 'paragraph_record.dart';
 
 /// Maintains one [ParagraphRecord] per paragraph in a document — the
@@ -138,18 +140,34 @@ class ParagraphIndex {
     final fragments = <ParagraphRecord>[];
     var fragmentStart = grown.start;
     String? headerLevel = grown.headerLevel;
+    ParagraphAlignment? alignment = grown.alignment;
+    ParagraphTextDirection? textDirection = grown.textDirection;
 
     var searchOffset = 0;
     while (true) {
       final relative = insertedText.indexOf('\n', searchOffset);
       if (relative == -1) break;
       final newlineAbsolute = index + relative;
-      fragments.add(ParagraphRecord(start: fragmentStart, end: newlineAbsolute, headerLevel: headerLevel));
+      fragments.add(ParagraphRecord(
+        start: fragmentStart,
+        end: newlineAbsolute,
+        headerLevel: headerLevel,
+        alignment: alignment,
+        textDirection: textDirection,
+      ));
       fragmentStart = newlineAbsolute + 1;
       headerLevel = null; // only the first fragment keeps it
+      alignment = null; // same rule as headerLevel
+      textDirection = null; // same rule as headerLevel
       searchOffset = relative + 1;
     }
-    fragments.add(ParagraphRecord(start: fragmentStart, end: grown.end, headerLevel: headerLevel));
+    fragments.add(ParagraphRecord(
+      start: fragmentStart,
+      end: grown.end,
+      headerLevel: headerLevel,
+      alignment: alignment,
+      textDirection: textDirection,
+    ));
 
     _records
       ..removeAt(containingIndex)
@@ -186,6 +204,8 @@ class ParagraphIndex {
       start: first.start,
       end: last.end - deletedLength,
       headerLevel: first.headerLevel,
+      alignment: first.alignment,
+      textDirection: first.textDirection,
     );
 
     final tail = _records
@@ -210,7 +230,30 @@ class ParagraphIndex {
   /// select exactly the same records a `setHeaderLevel` call is about to
   /// mutate, rather than risking the two conditions drifting apart if
   /// one were ever edited without the other.
-  bool _overlaps(ParagraphRecord r, int start, int end) => r.start < end && r.end >= start;
+  ///
+  /// A zero-width query (`start == end`) is a special case, not just a
+  /// degenerate one: the general half-open check below (`r.start < end`)
+  /// can never be satisfied by a record whose own `[start, end]` is
+  /// *also* zero-width — i.e. a genuinely empty paragraph — because two
+  /// equal bounds can never satisfy a strict `<`. Concretely, this broke
+  /// `setHeaderLevel`/`setAlignment` on an empty paragraph (e.g.
+  /// converting a bare `'# '` to a heading, which strips the marker and
+  /// leaves the paragraph empty *before* the header level is set):
+  /// `paragraphBoundsFor` correctly resolves the collapsed selection to
+  /// that paragraph's own `[0, 0]`, but the old check silently matched
+  /// no record at all, so the header level never actually got set. A
+  /// zero-width query is really asking "which record contains this
+  /// single point", so it falls back to [ParagraphRecord.contains]
+  /// instead — safe for every existing caller: [recordsOverlapping]'s
+  /// other callers ([ReplaceRangeCommand]/[ClearFormattingCommand]) only
+  /// ever pass a zero-width range for a pure insert, where the resulting
+  /// snapshot is already documented as redundant-but-harmless (see
+  /// `ReplaceRangeCommand`'s own doc comment), so matching one extra
+  /// (correct, self-consistent) record there changes nothing observable.
+  bool _overlaps(ParagraphRecord r, int start, int end) {
+    if (start == end) return r.contains(start);
+    return r.start < end && r.end >= start;
+  }
 
   /// Every record overlapping `[start, end)`.
   List<ParagraphRecord> recordsOverlapping(int start, int end) {
@@ -231,6 +274,70 @@ class ParagraphIndex {
       final r = _records[i];
       if (_overlaps(r, start, end)) {
         _records[i] = r.copyWith(headerLevel: headerLevel, clearHeaderLevel: headerLevel == null);
+      }
+    }
+    _revision++;
+  }
+
+  /// Sets `alignment` on every record overlapping `[start, end)` — same
+  /// shape and reasoning as [setHeaderLevel]; see [ParagraphAlignment]'s
+  /// doc comment for the important caveat that this has no live
+  /// rendering effect yet.
+  void setAlignment(int start, int end, ParagraphAlignment? alignment) {
+    for (var i = 0; i < _records.length; i++) {
+      final r = _records[i];
+      if (_overlaps(r, start, end)) {
+        _records[i] = r.copyWith(alignment: alignment, clearAlignment: alignment == null);
+      }
+    }
+    _revision++;
+  }
+
+  /// Sets `textDirection` on every record overlapping `[start, end)` —
+  /// same shape and reasoning as [setAlignment]; see
+  /// [ParagraphTextDirection]'s doc comment for the same no-live-rendering
+  /// caveat.
+  void setTextDirection(int start, int end, ParagraphTextDirection? textDirection) {
+    for (var i = 0; i < _records.length; i++) {
+      final r = _records[i];
+      if (_overlaps(r, start, end)) {
+        _records[i] = r.copyWith(textDirection: textDirection, clearTextDirection: textDirection == null);
+      }
+    }
+    _revision++;
+  }
+
+  /// Restores `headerLevel`/`alignment` on whichever current records
+  /// overlap each `snapshot`'s original `[start, end)` — the shared undo
+  /// primitive behind `ReplaceRangeCommand`/`ClearFormattingCommand`,
+  /// which both need to put stored block metadata back exactly the way
+  /// [setHeaderLevel]/[setAlignment] found it before they ran. Takes full
+  /// `ParagraphRecord` snapshots (as returned by [recordsOverlapping])
+  /// rather than a bespoke per-field tuple, specifically so a future
+  /// stored field doesn't need a third near-identical snapshot/restore
+  /// implementation in each of those command files — one new field here
+  /// covers all of them.
+  ///
+  /// Only overlap, not exact `start`/`end` equality, is required to find
+  /// the record to restore onto: by the time undo runs, the text (and
+  /// therefore paragraph boundaries) has already been restored to
+  /// exactly its pre-edit shape by the caller, so `snapshot.start`/
+  /// `snapshot.end` — captured in those original, pre-edit coordinates —
+  /// line up with a real current record again.
+  void restoreBlockMetadata(List<ParagraphRecord> snapshots) {
+    for (final snapshot in snapshots) {
+      for (var i = 0; i < _records.length; i++) {
+        final r = _records[i];
+        if (_overlaps(r, snapshot.start, snapshot.end)) {
+          _records[i] = r.copyWith(
+            headerLevel: snapshot.headerLevel,
+            clearHeaderLevel: snapshot.headerLevel == null,
+            alignment: snapshot.alignment,
+            clearAlignment: snapshot.alignment == null,
+            textDirection: snapshot.textDirection,
+            clearTextDirection: snapshot.textDirection == null,
+          );
+        }
       }
     }
     _revision++;

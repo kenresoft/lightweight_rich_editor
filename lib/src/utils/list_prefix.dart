@@ -18,6 +18,14 @@ import 'clamp_int.dart';
 /// text). This pattern just widens what counts as "a list prefix" to
 /// recognize indentation that was already there.
 ///
+/// A bullet marker may optionally be followed by a checkbox segment
+/// (`'[ ] '`/`'[x] '`/`'[X] '`) — standard GFM task-list syntax, and the
+/// same literal-text convention as the bullet/number itself: `'- [ ] '`
+/// is real, individually-editable characters, not stored state (see
+/// [checkboxStateOfPrefix]). Numbered items never get a checkbox
+/// segment — task lists aren't ordered in any convention this library
+/// follows.
+///
 /// This is a purely textual pattern with no relationship to
 /// `AttributeType` — list "formatting" is literal characters a user (or
 /// an import) typed, detected and styled presentationally wherever
@@ -25,7 +33,7 @@ import 'clamp_int.dart';
 /// `RenderEditable`'s caret math; literal text detected at render/edit
 /// time can't do that — there's nothing here that isn't already in
 /// `document.text`.
-final RegExp listPrefixPattern = RegExp(r'^[ \t]*(?:[-*+] |\d{1,9}\. )');
+final RegExp listPrefixPattern = RegExp(r'^[ \t]*(?:[-*+] (?:\[[ xX]\] )?|\d{1,9}\. )');
 
 /// Length of the list-style prefix (if any, indentation included)
 /// starting at `paragraphStart` in `text`, or 0 if the paragraph doesn't
@@ -45,16 +53,20 @@ int listPrefixLength(String text, int paragraphStart) {
 }
 
 /// The literal prefix text that continues this list on the next line
-/// after Enter, indentation included: unchanged for bullet markers
-/// (`'  - '` stays `'  - '`), incremented for a numbered marker
+/// after Enter, indentation included: unchanged for a plain bullet
+/// marker (`'  - '` stays `'  - '`), incremented for a numbered marker
 /// (`'  3. '` -> `'  4. '`) — nested/indented numbered items keep their
-/// indentation while still counting up correctly.
+/// indentation while still counting up correctly. A checkbox segment
+/// resets to unchecked (`'- [x] '` -> `'- [ ] '`) rather than carrying
+/// the previous item's checked state onto a new, not-yet-done item.
 String nextListPrefix(String prefix) {
   final numbered = RegExp(r'^([ \t]*)(\d+)(\. )$').firstMatch(prefix);
-  if (numbered == null) return prefix;
-  final leading = numbered.group(1)!;
-  final n = int.parse(numbered.group(2)!);
-  return '$leading${n + 1}${numbered.group(3)}';
+  if (numbered != null) {
+    final leading = numbered.group(1)!;
+    final n = int.parse(numbered.group(2)!);
+    return '$leading${n + 1}${numbered.group(3)}';
+  }
+  return prefix.replaceFirst(RegExp(r'\[[xX]\] $'), '[ ] ');
 }
 
 /// Which kind of list a matched prefix represents. Not a stored
@@ -74,4 +86,41 @@ ParagraphListType? listTypeOfPrefix(String prefix) {
   final trimmed = prefix.trimLeft();
   if (trimmed.isEmpty) return null;
   return RegExp(r'^\d').hasMatch(trimmed) ? ParagraphListType.numbered : ParagraphListType.bullet;
+}
+
+/// Whether a matched `prefix` (as returned by [listPrefixPattern]/
+/// [listPrefixLength]) is a task-list checkbox, and if so, whether it's
+/// checked: `null` if `prefix` has no checkbox segment at all (a plain
+/// bullet, or any numbered item — see [listPrefixPattern]'s doc comment
+/// on why numbered items never have one), `true`/`false` for `'[x] '`/
+/// `'[X] '` vs `'[ ] '`.
+bool? checkboxStateOfPrefix(String prefix) {
+  final match = RegExp(r'\[([ xX])\] $').firstMatch(prefix);
+  if (match == null) return null;
+  return match.group(1) != ' ';
+}
+
+/// The leading run of spaces/tabs at the very start of the paragraph
+/// beginning at `paragraphStart` — nesting indentation, whether or not
+/// that paragraph actually has a list prefix after it (an unindented
+/// paragraph simply returns `''`). The single canonical place this is
+/// computed: every caller that used to hand-roll
+/// `RegExp(r'^[ \t]*').firstMatch(...)` against a slice of `text` should
+/// call this instead, so indentation is derived exactly one way
+/// everywhere it's checked (list-run matching, `ParagraphBlock`
+/// derivation, ...) rather than several near-identical private copies
+/// that can silently drift apart — see `EditingEngine._numberedToggleEdit`'s
+/// former private `indentOf` for a concrete case where that drift caused
+/// a real bug: it collapsed a genuine zero-width (flush-left) indent to
+/// a hardcoded `'  '`, breaking numbered-run matching for the common
+/// unindented-list case.
+///
+/// Deliberately not restricted to paragraphs that actually have a list
+/// prefix — indentation is a property of the paragraph's leading
+/// whitespace, independent of whether what follows happens to be a list
+/// marker.
+String listIndentWhitespace(String text, int paragraphStart) {
+  final windowEnd = clampInt(paragraphStart + 24, paragraphStart, text.length);
+  final window = text.substring(paragraphStart, windowEnd);
+  return RegExp(r'^[ \t]*').firstMatch(window)!.group(0)!;
 }

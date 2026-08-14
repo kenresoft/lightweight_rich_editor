@@ -106,6 +106,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   /// Called when the user taps a link span, with the link's URL.
   void Function(String url)? onTapLink;
 
+  /// Called when the user taps a task-list checkbox glyph (`'[ ] '`/
+  /// `'[x] '`), with the offset of that paragraph's start — enough for
+  /// the host to look up and toggle that specific item. `null` (the
+  /// default) means checkbox prefixes render but aren't tappable, same
+  /// as [onTapLink] being unset for links.
+  void Function(int paragraphStart)? onToggleCheckbox;
+
   /// Whether links should be interactive (clickable) in the rendered
   /// span. In an editable field, this should usually be `false` to
   /// allow cursor placement and selection on links; the host can
@@ -115,6 +122,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   TextSpanRenderer({
     this.theme = RichTextRenderTheme.standard,
     this.onTapLink,
+    this.onToggleCheckbox,
     this.interactiveLinks = true,
   });
 
@@ -224,6 +232,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     if (linkUrl == null || onTapLink == null || !interactiveLinks) return null;
     final url = linkUrl;
     final recognizer = TapGestureRecognizer()..onTap = () => onTapLink?.call(url);
+    _recognizers.add(recognizer);
+    return recognizer;
+  }
+
+  TapGestureRecognizer? _checkboxRecognizerFor(int paragraphStart) {
+    if (onToggleCheckbox == null) return null;
+    final recognizer = TapGestureRecognizer()..onTap = () => onToggleCheckbox?.call(paragraphStart);
     _recognizers.add(recognizer);
     return recognizer;
   }
@@ -384,6 +399,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     var currentPos = 0;
     var eventIndex = 0;
     String? currentHeaderLevel;
+    bool? currentChecked;
 
     while (currentPos < text.length) {
       while (eventIndex < events.length && events[eventIndex].offset <= currentPos) {
@@ -426,6 +442,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         }
         final prefixLen = isParagraphStart ? listPrefixLength(text, currentPos) : 0;
         final prefixEnd = clampInt(currentPos + prefixLen, currentPos, nextPos);
+        if (isParagraphStart) {
+          currentChecked = prefixLen > 0 ? checkboxStateOfPrefix(text.substring(currentPos, prefixEnd)) : null;
+        }
 
         final resolvedStyle = _resolveStyle(
           baseStyle,
@@ -438,13 +457,16 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
         // The prefix run is styled but otherwise ordinary text — same
         // character count as what's in the document, just a different
-        // TextStyle. No recognizer on it: a link overlapping a literal
-        // '- ' at a paragraph start is a nonsensical combination not
-        // worth complicating this split for.
+        // TextStyle. No link recognizer on it: a link overlapping a
+        // literal '- ' at a paragraph start is a nonsensical combination
+        // not worth complicating this split for. A checkbox prefix does
+        // get a recognizer, though — that's the whole point of it being
+        // tappable.
         if (prefixEnd > currentPos) {
           children.add(TextSpan(
             text: text.substring(currentPos, prefixEnd),
             style: _listPrefixStyle(resolvedStyle),
+            recognizer: currentChecked != null ? _checkboxRecognizerFor(currentPos) : null,
           ));
         }
 
@@ -452,9 +474,21 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           final linkUrl = activeValues[AttributeType.link]!.isEmpty
               ? null
               : activeValues[AttributeType.link]!.last as String?;
+          // A checked item's own content (not the checkbox glyph) gets a
+          // line-through on top of whatever else is active, so a bold or
+          // linked word inside a checked item still reads as struck.
+          final contentStyle = currentChecked == true
+              ? resolvedStyle.copyWith(
+            decoration: TextDecoration.combine([
+              if (resolvedStyle.decoration != null && resolvedStyle.decoration != TextDecoration.none)
+                resolvedStyle.decoration!,
+              TextDecoration.lineThrough,
+            ]),
+          )
+              : resolvedStyle;
           children.add(TextSpan(
             text: text.substring(prefixEnd, nextPos),
-            style: resolvedStyle,
+            style: contentStyle,
             recognizer: _recognizerFor(linkUrl),
           ));
         }

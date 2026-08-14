@@ -43,7 +43,7 @@ class SetHeaderLevelCommand extends EditorCommand {
 
   @override
   EditorSelection execute(EditingEngine engine) {
-    final range = engine.headerBoundsFor(selection);
+    final range = engine.paragraphBoundsFor(selection);
     _previous = engine.document.paragraphs
         .recordsOverlapping(range.start, range.end)
         .map((r) => _HeaderSnapshot(r.start, r.end, r.headerLevel))

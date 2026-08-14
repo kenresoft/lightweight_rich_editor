@@ -1,5 +1,6 @@
 import '../core/editing_engine.dart';
 import '../core/editor_selection.dart';
+import '../core/paragraph_record.dart';
 import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
 import 'editor_command.dart';
@@ -23,7 +24,7 @@ class ClearFormattingCommand extends EditorCommand {
 
   List<TextAttribute>? _previousSpans;
   Map<AttributeType, Object?>? _previousSticky;
-  List<({int start, int end, String? headerLevel})>? _previousHeaderLevels;
+  List<ParagraphRecord>? _previousBlockMetadata;
   int? _listEditStart;
   int? _listEditNewLength;
   String? _previousListText;
@@ -40,10 +41,8 @@ class ClearFormattingCommand extends EditorCommand {
     } else {
       _previousSpans =
           engine.document.attributeStore.findIntersecting(selection.start, selection.end);
-      _previousHeaderLevels = engine.document.paragraphs
-          .recordsOverlapping(selection.start, selection.end)
-          .map((r) => (start: r.start, end: r.end, headerLevel: r.headerLevel))
-          .toList(growable: false);
+      _previousBlockMetadata =
+          engine.document.paragraphs.recordsOverlapping(selection.start, selection.end);
 
       final listEdit = engine.clearFormattingListEdit(selection);
       if (listEdit != null) {
@@ -63,7 +62,7 @@ class ClearFormattingCommand extends EditorCommand {
       return selection;
     }
     return engine.transactions.run(() {
-      // Text first: _previousHeaderLevels/_previousSpans are in
+      // Text first: _previousBlockMetadata/_previousSpans are in
       // *original* (pre-clear) coordinates, which only line up with the
       // document again once the list-marker strip (if any) has been
       // reversed and paragraph structure is back to what it was.
@@ -79,9 +78,7 @@ class ClearFormattingCommand extends EditorCommand {
         store.insert(span);
       }
       store.optimize();
-      for (final snapshot in _previousHeaderLevels ?? const []) {
-        engine.document.paragraphs.setHeaderLevel(snapshot.start, snapshot.end, snapshot.headerLevel);
-      }
+      engine.document.paragraphs.restoreBlockMetadata(_previousBlockMetadata ?? const []);
       engine.transactions.notify();
       return selection;
     });

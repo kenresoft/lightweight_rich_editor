@@ -9,6 +9,7 @@ import '../rendering/editor_style.dart';
 import '../utils/link_launcher.dart';
 import '../utils/list_prefix.dart';
 import 'link_entry_dialog.dart';
+import 'link_preview_bar.dart';
 
 /// Toggles bold on the current selection. No Flutter default binding —
 /// registered below via [Shortcuts].
@@ -42,6 +43,10 @@ class ToggleBulletListIntent extends Intent {
 
 class ToggleNumberedListIntent extends Intent {
   const ToggleNumberedListIntent();
+}
+
+class ToggleTaskItemIntent extends Intent {
+  const ToggleTaskItemIntent();
 }
 
 class SetHeaderIntent extends Intent {
@@ -241,6 +246,8 @@ class RichTextEditor extends StatelessWidget {
         const SingleActivator(LogicalKeyboardKey.digit8, meta: true, shift: true): const ToggleBulletListIntent(),
         const SingleActivator(LogicalKeyboardKey.digit7, control: true, shift: true): const ToggleNumberedListIntent(),
         const SingleActivator(LogicalKeyboardKey.digit7, meta: true, shift: true): const ToggleNumberedListIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit9, control: true, shift: true): const ToggleTaskItemIntent(),
+        const SingleActivator(LogicalKeyboardKey.digit9, meta: true, shift: true): const ToggleTaskItemIntent(),
         const SingleActivator(LogicalKeyboardKey.digit1, control: true, alt: true): const SetHeaderIntent('h1'),
         const SingleActivator(LogicalKeyboardKey.digit1, meta: true, alt: true): const SetHeaderIntent('h1'),
         const SingleActivator(LogicalKeyboardKey.digit2, control: true, alt: true): const SetHeaderIntent('h2'),
@@ -277,6 +284,12 @@ class RichTextEditor extends StatelessWidget {
           ToggleBulletListIntent: CallbackAction<ToggleBulletListIntent>(
             onInvoke: (intent) {
               controller.toggleBulletList();
+              return null;
+            },
+          ),
+          ToggleTaskItemIntent: CallbackAction<ToggleTaskItemIntent>(
+            onInvoke: (intent) {
+              controller.toggleTaskItem();
               return null;
             },
           ),
@@ -518,6 +531,25 @@ class RichTextEditor extends StatelessWidget {
                     ),
                   ),
                 ),
+              ),
+            ),
+            // Tap-triggered link preview — see LinkPreviewBar's own doc
+            // comment for why this is tap/fixed-position rather than
+            // hover/caret-anchored. Rebuilds on every controller
+            // notification (every selection change included), same
+            // pattern FormatToolbar already uses to stay in sync.
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: 8,
+              child: ListenableBuilder(
+                listenable: controller,
+                builder: (context, child) {
+                  final sel = controller.selection;
+                  final url = sel.isValid && sel.isCollapsed ? controller.linkUrlAt(sel.start) : null;
+                  if (url == null) return const SizedBox.shrink();
+                  return LinkPreviewBar(url: url, onOpen: () => _openLink(context, url));
+                },
               ),
             ),
           ],

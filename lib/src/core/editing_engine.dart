@@ -1,4 +1,6 @@
 import '../models/attribute_type.dart';
+import '../models/paragraph_alignment.dart';
+import '../models/paragraph_text_direction.dart';
 import '../models/text_attribute.dart';
 import '../utils/list_prefix.dart';
 import 'editor_document.dart';
@@ -506,7 +508,7 @@ class EditingEngine {
   /// concrete performance win this migration was motivated by, actually
   /// landing here. Exposed publicly so [SetHeaderLevelCommand] can
   /// compute the exact same range to snapshot for undo.
-  EditorSelection headerBoundsFor(EditorSelection selection) {
+  EditorSelection paragraphBoundsFor(EditorSelection selection) {
     final startRecord = document.paragraphs.paragraphAt(selection.start);
     final endRecord = document.paragraphs.paragraphAt(selection.end);
     final rangeStart = startRecord?.start ?? selection.start;
@@ -522,10 +524,59 @@ class EditingEngine {
   /// [SetHeaderLevelCommand], not [applyAttribute] — header no longer
   /// goes through the generic attribute path at all.
   void setHeaderLevel(EditorSelection selection, String? headerLevel) {
-    final range = headerBoundsFor(selection);
+    final range = paragraphBoundsFor(selection);
     document.paragraphs.setHeaderLevel(range.start, range.end, headerLevel);
     assert(_debugValidateParagraphs());
     transactions.notify();
+  }
+
+  /// Sets `alignment` on the paragraph(s) containing `selection` — same
+  /// shape and reasoning as [setHeaderLevel]; driven by
+  /// [SetAlignmentCommand]. See [ParagraphAlignment]'s doc comment for
+  /// why this has no live rendering effect yet.
+  void setAlignment(EditorSelection selection, ParagraphAlignment? alignment) {
+    final range = paragraphBoundsFor(selection);
+    document.paragraphs.setAlignment(range.start, range.end, alignment);
+    assert(_debugValidateParagraphs());
+    transactions.notify();
+  }
+
+  /// Sets `textDirection` on the paragraph(s) containing `selection` —
+  /// same shape and reasoning as [setAlignment]; driven by
+  /// [SetTextDirectionCommand]. See [ParagraphTextDirection]'s doc
+  /// comment for why this has no live rendering effect yet.
+  void setTextDirection(EditorSelection selection, ParagraphTextDirection? textDirection) {
+    final range = paragraphBoundsFor(selection);
+    document.paragraphs.setTextDirection(range.start, range.end, textDirection);
+    assert(_debugValidateParagraphs());
+    transactions.notify();
+  }
+
+  /// Pure query, no mutation — mirrors [enterKeyEdit]'s "compute, caller
+  /// dispatches" shape. Answers "if a space were inserted right now at
+  /// `spaceInsertPos`, would this be a markdown-style header shortcut
+  /// (`'# '`/`'## '`/.../`'###### '`)?" — `null` if not.
+  ///
+  /// Only headers need this: list markers (`'- '`, `'1. '`, `'- [ ] '`)
+  /// already render and continue correctly the instant they're typed,
+  /// with no special-casing at all — [listPrefixLength]/[listTypeOfPrefix]
+  /// derive list-ness from literal text on every render, and
+  /// [enterKeyEdit] already continues a matched prefix on Enter. Header
+  /// has no textual representation (see [ParagraphIndex]'s doc comment),
+  /// so nothing turns a literally-typed `'#'` into `headerLevel` on its
+  /// own — this is the one shortcut that actually needs new logic.
+  ///
+  /// `'#{1,6}'` with nothing else before it in the paragraph collapses to
+  /// `'h1'`/`'h2'` exactly like [MarkdownImporter]'s own
+  /// `_stripPrefix` — this editor only models two header levels, so
+  /// three-through-six hashes collapse the same way a pasted `### `
+  /// already does.
+  String? autoFormatHeaderLevel(int spaceInsertPos) {
+    final record = document.paragraphs.paragraphAt(spaceInsertPos);
+    if (record == null) return null;
+    final prefix = document.text.substring(record.start, spaceInsertPos);
+    if (!RegExp(r'^#{1,6}$').hasMatch(prefix)) return null;
+    return prefix.length == 1 ? 'h1' : 'h2';
   }
 
   /// Computes the replacement for a live Enter keypress at `selection`:
@@ -805,10 +856,8 @@ class EditingEngine {
       ) {
     String indentOf(int i) {
       final r = records[i];
-      final len = listPrefixLength(text, r.start);
-      if (len == 0) return '  ';
-      final prefix = text.substring(r.start, r.start + len);
-      return RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)!;
+      if (listPrefixLength(text, r.start) == 0) return '  ';
+      return listIndentWhitespace(text, r.start);
     }
 
     bool matchesNumberedIndent(int i, String indent) {
@@ -922,6 +971,74 @@ class EditingEngine {
     }
 
     return (start: records[beforeStart].start, end: records[afterEnd].end, text: buffer.toString(), relativeAttributes: relativeAttrs);
+  }
+
+  /// Computes the edit to toggle task-list checkbox state on every
+  /// paragraph `selection` spans, as one atomic combined replacement —
+  /// same shape and safety reasoning as [listToggleEdit]. Per paragraph,
+  /// independently (a checkbox tap always flips just that item, not a
+  /// group decision the way bullet/numbered on/off is):
+  /// - plain paragraph (no list prefix at all) -> promoted to a fresh
+  ///   unchecked task item (`'  - [ ] '`), same default indent
+  ///   [listToggleEdit] uses for a brand-new bullet.
+  /// - bullet with no checkbox yet -> a `'[ ] '` checkbox is inserted
+  ///   right after the marker.
+  /// - already a checklist item -> the checked state flips.
+  /// - numbered item -> passed through unchanged; numbered lists aren't
+  ///   task-list-compatible (see [listPrefixPattern]'s doc comment).
+  ///
+  /// Returns `null` if every paragraph in range is numbered (nothing to
+  /// change at all) — mirrors [clearFormattingListEdit]'s
+  /// nothing-to-do-here convention, avoiding a needless no-op edit.
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? toggleCheckedEdit(
+      EditorSelection selection,
+      ) {
+    final text = document.text;
+    final records = document.paragraphs.records;
+    final startRecord = document.paragraphs.paragraphAt(selection.start);
+    if (startRecord == null) return null;
+    final endRecord = document.paragraphs.paragraphAt(selection.end) ?? startRecord;
+    final startIndex = records.indexOf(startRecord);
+    final endIndex = records.indexOf(endRecord);
+    if (startIndex == -1 || endIndex == -1) return null;
+
+    final buffer = StringBuffer();
+    final relativeAttrs = <TextAttribute>[];
+    var changedAny = false;
+
+    for (var i = startIndex; i <= endIndex; i++) {
+      if (i > startIndex) buffer.write('\n');
+      final r = records[i];
+      final prefixLen = listPrefixLength(text, r.start);
+      final contentStart = r.start + prefixLen;
+
+      if (prefixLen == 0) {
+        buffer.write('  - [ ] ');
+        changedAny = true;
+      } else {
+        final prefix = text.substring(r.start, contentStart);
+        if (listTypeOfPrefix(prefix) == ParagraphListType.numbered) {
+          buffer.write(prefix);
+        } else {
+          final checked = checkboxStateOfPrefix(prefix);
+          if (checked == null) {
+            buffer.write('$prefix[ ] ');
+          } else if (checked) {
+            buffer.write(prefix.replaceFirst(RegExp(r'\[[xX]\] $'), '[ ] '));
+          } else {
+            buffer.write(prefix.replaceFirst(RegExp(r'\[ \] $'), '[x] '));
+          }
+          changedAny = true;
+        }
+      }
+
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
+    }
+
+    if (!changedAny) return null;
+    return (start: startRecord.start, end: endRecord.end, text: buffer.toString(), relativeAttributes: relativeAttrs);
   }
 
   /// Computes the edit to indent (`outdent: false`, adds 2 leading
@@ -1144,6 +1261,8 @@ class EditingEngine {
       document.attributeStore.clearRange(selection.start, selection.end);
       _stickyAttributes.clear();
       document.paragraphs.setHeaderLevel(selection.start, selection.end, null);
+      document.paragraphs.setAlignment(selection.start, selection.end, null);
+      document.paragraphs.setTextDirection(selection.start, selection.end, null);
 
       final listEdit = clearFormattingListEdit(selection);
       if (listEdit != null) {
@@ -1364,6 +1483,25 @@ class EditingEngine {
       if (attr.type == AttributeType.header && attr.end > attr.start) {
         document.paragraphs.setHeaderLevel(attr.start, attr.end, attr.value as String?);
       }
+      // Same reasoning as the header branch just above — alignment is
+      // ParagraphIndex-owned everywhere it's live, so an
+      // AttributeType.align entry only ever arrives here via pasted
+      // content (HtmlImporter) and needs the equivalent explicit write.
+      if (attr.type == AttributeType.align && attr.end > attr.start) {
+        document.paragraphs.setAlignment(
+          attr.start,
+          attr.end,
+          attr.value == null ? null : ParagraphAlignment.values.byName(attr.value as String),
+        );
+      }
+      // Same reasoning as the align branch just above.
+      if (attr.type == AttributeType.textDirection && attr.end > attr.start) {
+        document.paragraphs.setTextDirection(
+          attr.start,
+          attr.end,
+          attr.value == null ? null : ParagraphTextDirection.values.byName(attr.value as String),
+        );
+      }
     }
     store.optimize();
     if (text.contains('\n')) {
@@ -1439,6 +1577,22 @@ class EditingEngine {
         // this branch — see its doc comment.
         if (attr.type == AttributeType.header && attr.end > attr.start) {
           document.paragraphs.setHeaderLevel(start + attr.start, start + attr.end, attr.value as String?);
+        }
+        // Same reasoning as the header branch above.
+        if (attr.type == AttributeType.align && attr.end > attr.start) {
+          document.paragraphs.setAlignment(
+            start + attr.start,
+            start + attr.end,
+            attr.value == null ? null : ParagraphAlignment.values.byName(attr.value as String),
+          );
+        }
+        // Same reasoning as the align branch above.
+        if (attr.type == AttributeType.textDirection && attr.end > attr.start) {
+          document.paragraphs.setTextDirection(
+            start + attr.start,
+            start + attr.end,
+            attr.value == null ? null : ParagraphTextDirection.values.byName(attr.value as String),
+          );
         }
       }
       store.optimize();

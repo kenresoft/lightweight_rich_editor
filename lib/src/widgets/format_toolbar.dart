@@ -119,6 +119,14 @@ class FormatToolbar extends StatelessWidget {
                     tooltip: 'Numbered List',
                   ),
                   ToolButton(
+                    icon: controller.isTaskChecked() == true
+                        ? Icons.check_box
+                        : Icons.check_box_outlined,
+                    isActive: controller.isTaskChecked() != null,
+                    onPressed: controller.toggleTaskItem,
+                    tooltip: 'Checklist',
+                  ),
+                  ToolButton(
                     icon: Icons.format_indent_decrease,
                     isActive: false,
                     onPressed: controller.outdentList,

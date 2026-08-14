@@ -1,9 +1,15 @@
+import '../models/paragraph_alignment.dart';
+import '../models/paragraph_text_direction.dart';
+
 /// One paragraph's boundaries and block-level metadata.
 ///
-/// Deliberately minimal — [headerLevel] is the only populated field.
-/// This is not a catch-all block model: new fields (list type, indent
-/// level, checked state, alignment) get added only when a concrete,
-/// approved feature needs them, following the same "small and
+/// [headerLevel], [alignment], and [textDirection] are the only populated
+/// fields. This is not a catch-all block model: new fields (list type,
+/// indent level, checked state — deliberately *not* added here; see
+/// `EditingEngine.listToggleEdit`'s doc comment on why those stay literal
+/// text, derived on demand via `ParagraphBlock` rather than stored) get
+/// added only when a concrete, approved feature needs them and has no
+/// possible textual representation, following the same "small and
 /// intentionally closed" discipline `AttributeType` already follows.
 class ParagraphRecord {
   /// Inclusive offset of this paragraph's first character.
@@ -22,10 +28,26 @@ class ParagraphRecord {
   /// call sites), not a new value space of its own.
   final String? headerLevel;
 
+  /// `null` (the default/left) | `center` | `right`. See
+  /// [ParagraphAlignment]'s own doc comment for the important caveat:
+  /// stored and round-tripped, but not yet rendered with any live visual
+  /// effect — the single `TextField` this package renders through can't
+  /// vary `textAlign` per paragraph.
+  final ParagraphAlignment? alignment;
+
+  /// `null` (unspecified — ambient `Directionality`) | `ltr` | `rtl`. See
+  /// [ParagraphTextDirection]'s own doc comment for the same
+  /// no-live-rendering-effect caveat [alignment] has, and why
+  /// mixed-direction text *within* one paragraph doesn't need this field
+  /// at all (it already renders correctly via Flutter's own bidi engine).
+  final ParagraphTextDirection? textDirection;
+
   const ParagraphRecord({
     required this.start,
     required this.end,
     this.headerLevel,
+    this.alignment,
+    this.textDirection,
   });
 
   /// Whether `offset` belongs to this paragraph. Inclusive on both
@@ -38,11 +60,17 @@ class ParagraphRecord {
     int? end,
     String? headerLevel,
     bool clearHeaderLevel = false,
+    ParagraphAlignment? alignment,
+    bool clearAlignment = false,
+    ParagraphTextDirection? textDirection,
+    bool clearTextDirection = false,
   }) {
     return ParagraphRecord(
       start: start ?? this.start,
       end: end ?? this.end,
       headerLevel: clearHeaderLevel ? null : (headerLevel ?? this.headerLevel),
+      alignment: clearAlignment ? null : (alignment ?? this.alignment),
+      textDirection: clearTextDirection ? null : (textDirection ?? this.textDirection),
     );
   }
 
@@ -51,11 +79,14 @@ class ParagraphRecord {
       other is ParagraphRecord &&
           other.start == start &&
           other.end == end &&
-          other.headerLevel == headerLevel;
+          other.headerLevel == headerLevel &&
+          other.alignment == alignment &&
+          other.textDirection == textDirection;
 
   @override
-  int get hashCode => Object.hash(start, end, headerLevel);
+  int get hashCode => Object.hash(start, end, headerLevel, alignment, textDirection);
 
   @override
-  String toString() => 'ParagraphRecord($start, $end, headerLevel: $headerLevel)';
+  String toString() =>
+      'ParagraphRecord($start, $end, headerLevel: $headerLevel, alignment: $alignment, textDirection: $textDirection)';
 }

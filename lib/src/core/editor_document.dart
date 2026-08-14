@@ -1,6 +1,9 @@
 import 'attribute_store.dart';
+import 'paragraph_block.dart';
 import 'paragraph_index.dart';
 import '../models/attribute_type.dart';
+import '../models/paragraph_alignment.dart';
+import '../models/paragraph_text_direction.dart';
 import '../models/text_buffer.dart';
 import '../models/text_attribute.dart';
 
@@ -31,7 +34,7 @@ class EditorDocument {
         _attributes = attributes ?? AttributeStore() {
     _attributes.clampTo(_buffer.length);
     _paragraphs = ParagraphIndex.rebuild(_buffer.text);
-    _seedParagraphHeaderLevels();
+    _seedParagraphBlockMetadata();
   }
 
   /// Builds a document from plain text and a set of spans, clamping and
@@ -76,6 +79,18 @@ class EditorDocument {
   /// deliberate, permanent split rather than something to eliminate.
   ParagraphIndex get paragraphs => _paragraphs;
 
+  /// The fully-resolved [ParagraphBlock] (list type, checked state,
+  /// indent level, header level) for the paragraph containing `offset`,
+  /// or `null` if `offset` is out of bounds. The one canonical place to
+  /// ask "what kind of block is this" — see [ParagraphBlock]'s own doc
+  /// comment for why this replaces callers hand-deriving the same
+  /// properties themselves.
+  ParagraphBlock? blockAt(int offset) {
+    final record = _paragraphs.paragraphAt(offset);
+    if (record == null) return null;
+    return ParagraphBlock.derive(record, text);
+  }
+
   /// A read-only snapshot of every span currently in the document.
   List<TextAttribute> get attributes => _attributes.spans;
 
@@ -84,23 +99,32 @@ class EditorDocument {
   /// `ClipboardManager` expect, and have expected all along; nothing
   /// about their own code needs to change for this. Inline attributes
   /// (bold, italic, links, ...) come straight from [attributeStore].
-  /// Header spans are synthesized fresh from [paragraphs] instead —
-  /// [paragraphs] is header's only live representation (see
+  /// Header and alignment spans are synthesized fresh from [paragraphs]
+  /// instead — [paragraphs] is their only live representation (see
   /// [paragraphs]'s doc comment); [attributeStore] can still contain a
-  /// header span (from paste, or from [_seedParagraphHeaderLevels]) that
-  /// nothing keeps in sync with further edits, so reading header from
-  /// there directly would risk exporting something no longer true.
+  /// stale header/align span (from paste, or from
+  /// [_seedParagraphBlockMetadata]) that nothing keeps in sync with
+  /// further edits, so reading either directly from there would risk
+  /// exporting something no longer true.
   ///
   /// Empty paragraphs never contribute a span here — same
   /// zero-width-span-is-dropped rule `AttributeStore.insert` already
   /// follows, kept consistent rather than exported as something
   /// `attributeStore`-based export could never have produced.
   List<TextAttribute> exportAttributes() {
-    final inline = _attributes.spans.where((a) => a.type != AttributeType.header);
+    final inline = _attributes.spans.where(
+      (a) => a.type != AttributeType.header && a.type != AttributeType.align && a.type != AttributeType.textDirection,
+    );
     final headers = _paragraphs.records.where((r) => r.headerLevel != null && r.end > r.start).map(
           (r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.header, value: r.headerLevel),
     );
-    return [...inline, ...headers];
+    final alignments = _paragraphs.records.where((r) => r.alignment != null && r.end > r.start).map(
+          (r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.align, value: r.alignment!.name),
+    );
+    final textDirections = _paragraphs.records.where((r) => r.textDirection != null && r.end > r.start).map(
+          (r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.textDirection, value: r.textDirection!.name),
+    );
+    return [...inline, ...headers, ...alignments, ...textDirections];
   }
 
   /// Replaces the entire document in one step — used for loading a note
@@ -112,25 +136,25 @@ class EditorDocument {
     _attributes.clampTo(_buffer.length);
     _attributes.optimize();
     _paragraphs = ParagraphIndex.rebuild(_buffer.text);
-    _seedParagraphHeaderLevels();
+    _seedParagraphBlockMetadata();
   }
 
   void clear() => reset('');
 
-  /// Seeds `_paragraphs`' `headerLevel` fields from whatever
-  /// `AttributeType.header` spans are already in `_attributes` — needed
-  /// because [ParagraphIndex.rebuild] only knows about `'\n'` positions,
-  /// not formatting.
+  /// Seeds `_paragraphs`' `headerLevel`/`alignment` fields from whatever
+  /// `AttributeType.header`/`AttributeType.align` spans are already in
+  /// `_attributes` — needed because [ParagraphIndex.rebuild] only knows
+  /// about `'\n'` positions, not formatting.
   ///
   /// This isn't specifically about *old* saved notes — there's no
   /// legacy on-disk data this library needs to worry about right now.
   /// It's the general contract for [EditorDocument.fromText]/[fromJson]:
   /// whatever the caller passes as initial `attributes` may contain a
-  /// header entry (that's still a completely ordinary shape — see
-  /// `AttributeType.header`'s own doc comment on why it remains the
-  /// interchange format), and without this, that header would silently
+  /// header or align entry (that's still a completely ordinary shape —
+  /// see `AttributeType.header`'s own doc comment on why they remain the
+  /// interchange format), and without this, that metadata would silently
   /// go nowhere — sitting inertly in [attributeStore], which nothing
-  /// reads for header anymore, instead of being reflected in
+  /// reads either from anymore, instead of being reflected in
   /// [paragraphs], which is what actually drives rendering/export/
   /// toolbar state. Cheap and self-contained enough that there's no real
   /// cost to keeping this correct even though nothing in this app's
@@ -138,13 +162,27 @@ class EditorDocument {
   ///
   /// Empty paragraphs are skipped, matching `AttributeStore.insert`'s
   /// own zero-width-span-is-dropped rule — an empty paragraph can never
-  /// have had a real header span to seed from in the first place.
-  void _seedParagraphHeaderLevels() {
+  /// have had a real header/align span to seed from in the first place.
+  void _seedParagraphBlockMetadata() {
     for (final record in _paragraphs.records) {
       if (record.start >= record.end) continue;
       final headerSpans = _attributes.findAt(record.start, type: AttributeType.header);
       if (headerSpans.isNotEmpty) {
         _paragraphs.setHeaderLevel(record.start, record.end, headerSpans.first.value as String?);
+      }
+      final alignSpans = _attributes.findAt(record.start, type: AttributeType.align);
+      if (alignSpans.isNotEmpty) {
+        final value = alignSpans.first.value as String?;
+        _paragraphs.setAlignment(record.start, record.end, value == null ? null : ParagraphAlignment.values.byName(value));
+      }
+      final directionSpans = _attributes.findAt(record.start, type: AttributeType.textDirection);
+      if (directionSpans.isNotEmpty) {
+        final value = directionSpans.first.value as String?;
+        _paragraphs.setTextDirection(
+          record.start,
+          record.end,
+          value == null ? null : ParagraphTextDirection.values.byName(value),
+        );
       }
     }
   }

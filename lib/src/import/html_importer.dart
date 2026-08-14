@@ -194,6 +194,16 @@ class HtmlImporter {
     if (frame != null) currentStack = [...currentStack, frame];
     currentStack = [...currentStack, ...extraFrames];
 
+    // A plain HTML attribute, not a style declaration — `dir="rtl"`/
+    // `dir="ltr"` on any element, matching what HtmlExporter emits for
+    // AttributeType.textDirection. Any other value (or none) is ignored,
+    // same "unrecognized value, not imported" posture as
+    // _framesFromStyles takes for text-align: justify.
+    final dir = node.attributes['dir'];
+    if (dir == 'rtl' || dir == 'ltr') {
+      currentStack = [...currentStack, _StyleFrame(AttributeType.textDirection, dir)];
+    }
+
     if (tag == 'a') {
       final href = node.attributes['href'];
       if (href != null && href.isNotEmpty) {
@@ -233,6 +243,14 @@ class HtmlImporter {
         if (value.contains('line-through')) {
           frames.add(const _StyleFrame(AttributeType.strikethrough, null));
         }
+      } else if (property == 'text-align' &&
+          (value == 'left' || value == 'center' || value == 'right')) {
+        // Matches ParagraphAlignment.name exactly, so
+        // EditingEngine.pasteRich's AttributeType.align branch can parse
+        // it straight back via ParagraphAlignment.values.byName. 'justify'
+        // has no ParagraphAlignment counterpart and is left unrecognized
+        // rather than silently mapped to something else.
+        frames.add(_StyleFrame(AttributeType.align, value));
       }
     }
     return frames;

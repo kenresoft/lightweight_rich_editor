@@ -12,6 +12,16 @@ import '../models/text_attribute.dart';
 /// marker syntax (`**` opens and closes bold, unlike HTML's distinct
 /// `<b>`/`</b>`) — `_markerFor` already returns the same string for
 /// both, so no other change was needed to reuse the pattern.
+///
+/// `AttributeType.align`/`AttributeType.textDirection` are deliberately
+/// unhandled here (`_markerFor`'s `default` case) — unlike `header`,
+/// there's no native CommonMark syntax for paragraph alignment or
+/// direction, and inventing a raw-HTML escape-hatch convention is more
+/// risk than a not-yet-visually-rendered property (see
+/// `ParagraphAlignment`'s/`ParagraphTextDirection`'s doc comments)
+/// currently justifies. Both survive document JSON save/load and HTML
+/// export/import; a Markdown round-trip is a deliberate gap, not an
+/// oversight.
 class MarkdownExporter {
   const MarkdownExporter();
 

@@ -31,6 +31,19 @@
 /// separate channel, for no benefit to anything that's actually live.
 /// See the block-architecture design notes for the full migration
 /// history.
+///
+/// [align] follows [header]'s exact template — `ParagraphIndex`-owned
+/// (`ParagraphRecord.alignment`) everywhere it's live, kept in this enum
+/// purely as the interchange format for `EditorDocument.exportAttributes`/
+/// `EditingEngine.pasteRich`/`HtmlExporter`/`HtmlImporter`. With one
+/// difference worth flagging: unlike header, alignment has no live
+/// *rendering* representation either — see `ParagraphAlignment`'s doc
+/// comment for why (a single `TextField` can't vary `textAlign` per
+/// paragraph). It's stored and round-tripped, not yet visually rendered.
+///
+/// [textDirection] follows [align]'s exact template
+/// (`ParagraphRecord.textDirection`), same no-live-rendering caveat — see
+/// [ParagraphTextDirection]'s doc comment.
 enum AttributeType {
   bold,
   italic,
@@ -41,7 +54,9 @@ enum AttributeType {
   color,
   size,
   link,
-  header;
+  header,
+  align,
+  textDirection;
 
   /// Whether this attribute is a simple on/off toggle with no payload.
   bool get isToggle => switch (this) {
@@ -55,7 +70,9 @@ enum AttributeType {
     AttributeType.color ||
     AttributeType.size ||
     AttributeType.link ||
-    AttributeType.header =>
+    AttributeType.header ||
+    AttributeType.align ||
+    AttributeType.textDirection =>
     false,
   };
 }
