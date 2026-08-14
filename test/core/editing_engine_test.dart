@@ -12,6 +12,8 @@ import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 import 'package:lightweight_rich_editor/src/core/editing_engine.dart';
 import 'package:lightweight_rich_editor/src/core/editor_selection.dart';
 import 'package:lightweight_rich_editor/src/core/transaction_manager.dart';
+import 'package:lightweight_rich_editor/src/models/paragraph_alignment.dart';
+import 'package:lightweight_rich_editor/src/models/paragraph_text_direction.dart';
 import 'package:lightweight_rich_editor/src/utils/list_prefix.dart';
 
 EditingEngine _engineFor(String text, [List<TextAttribute> attributes = const []]) {
@@ -433,6 +435,152 @@ void main() {
       expect(edit, isNotNull);
       expect(edit!.start, 4);
       expect(edit.end, 5);
+    });
+  });
+
+  group('toggleCheckedEdit', () {
+    test('promotes a plain paragraph to a fresh unchecked task item', () {
+      final engine = _engineFor('Buy milk');
+      final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      expect(engine.document.text, '  - [ ] Buy milk');
+    });
+
+    test('adds an unchecked checkbox to a plain bullet', () {
+      final engine = _engineFor('- Buy milk');
+      final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      expect(engine.document.text, '- [ ] Buy milk');
+    });
+
+    test('flips an unchecked item to checked', () {
+      final engine = _engineFor('- [ ] Buy milk');
+      final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      expect(engine.document.text, '- [x] Buy milk');
+    });
+
+    test('flips a checked item back to unchecked', () {
+      final engine = _engineFor('- [x] Buy milk');
+      final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      expect(engine.document.text, '- [ ] Buy milk');
+    });
+
+    test('is a no-op on a numbered item — numbered lists are not task-list-compatible', () {
+      final engine = _engineFor('1. Buy milk');
+      final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
+      expect(edit, isNull);
+    });
+
+    test('preserves an inline attribute, shifted to match the new marker length', () {
+      const text = 'Buy Bold milk';
+      final boldStart = text.indexOf('Bold');
+      final boldEnd = boldStart + 'Bold'.length;
+      final engine = _engineFor(text, [
+        TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold),
+      ]);
+      final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      final markerLen = '  - [ ] '.length;
+      final restored = engine.document.attributeStore.findAt(markerLen + boldStart + 1, type: AttributeType.bold);
+      expect(restored, isNotEmpty);
+    });
+
+    test('a mixed multi-paragraph selection toggles each paragraph independently', () {
+      final engine = _engineFor('- [ ] One\n- [x] Two\nThree');
+      final selection = EditorSelection(baseOffset: 0, extentOffset: engine.document.text.length);
+      final edit = engine.toggleCheckedEdit(selection);
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      expect(engine.document.text, '- [x] One\n- [ ] Two\n  - [ ] Three');
+    });
+  });
+
+  group('setAlignment', () {
+    test('sets alignment on the paragraph containing a collapsed caret', () {
+      final engine = _engineFor('line one\nline two');
+      engine.setAlignment(EditorSelection.collapsed(11), ParagraphAlignment.center);
+      final lineTwoStart = 'line one\n'.length;
+      expect(engine.document.paragraphs.paragraphAt(lineTwoStart)!.alignment, ParagraphAlignment.center);
+      expect(engine.document.paragraphs.paragraphAt(3)!.alignment, isNull); // "line one" untouched
+    });
+
+    test('null clears alignment', () {
+      final engine = _engineFor('Some text');
+      engine.setAlignment(EditorSelection.collapsed(0), ParagraphAlignment.right);
+      engine.setAlignment(EditorSelection.collapsed(0), null);
+      expect(engine.document.paragraphs.paragraphAt(0)!.alignment, isNull);
+    });
+
+    test('does not change text length or content', () {
+      final engine = _engineFor('Some text');
+      engine.setAlignment(EditorSelection.collapsed(0), ParagraphAlignment.center);
+      expect(engine.document.text, 'Some text');
+    });
+  });
+
+  group('setTextDirection', () {
+    test('sets textDirection on the paragraph containing a collapsed caret', () {
+      final engine = _engineFor('line one\nline two');
+      engine.setTextDirection(EditorSelection.collapsed(11), ParagraphTextDirection.rtl);
+      final lineTwoStart = 'line one\n'.length;
+      expect(engine.document.paragraphs.paragraphAt(lineTwoStart)!.textDirection, ParagraphTextDirection.rtl);
+      expect(engine.document.paragraphs.paragraphAt(3)!.textDirection, isNull); // "line one" untouched
+    });
+
+    test('null clears textDirection', () {
+      final engine = _engineFor('Some text');
+      engine.setTextDirection(EditorSelection.collapsed(0), ParagraphTextDirection.rtl);
+      engine.setTextDirection(EditorSelection.collapsed(0), null);
+      expect(engine.document.paragraphs.paragraphAt(0)!.textDirection, isNull);
+    });
+
+    test('does not change text length or content', () {
+      final engine = _engineFor('Some text');
+      engine.setTextDirection(EditorSelection.collapsed(0), ParagraphTextDirection.rtl);
+      expect(engine.document.text, 'Some text');
+    });
+  });
+
+  group('autoFormatHeaderLevel', () {
+    test('a single # at paragraph start is h1', () {
+      final engine = _engineFor('#');
+      expect(engine.autoFormatHeaderLevel(1), 'h1');
+    });
+
+    test('two through six #s collapse to h2, matching MarkdownImporter', () {
+      for (final hashes in ['##', '###', '####', '#####', '######']) {
+        final engine = _engineFor(hashes);
+        expect(engine.autoFormatHeaderLevel(hashes.length), 'h2', reason: hashes);
+      }
+    });
+
+    test('seven #s is not a header shortcut', () {
+      final engine = _engineFor('#######');
+      expect(engine.autoFormatHeaderLevel(7), isNull);
+    });
+
+    test('anything other than bare hashes before the caret does not trigger', () {
+      final engine = _engineFor('not a #heading');
+      expect(engine.autoFormatHeaderLevel(14), isNull);
+    });
+
+    test('a # that is not at the very start of the paragraph does not trigger', () {
+      final engine = _engineFor('line one\n line two #');
+      final caret = 'line one\n line two #'.length;
+      expect(engine.autoFormatHeaderLevel(caret), isNull);
+    });
+
+    test('only checks the paragraph containing spaceInsertPos, not the whole document', () {
+      final engine = _engineFor('# Already a heading\n#');
+      final secondParagraphCaret = engine.document.text.length;
+      expect(engine.autoFormatHeaderLevel(secondParagraphCaret), 'h1');
     });
   });
 }

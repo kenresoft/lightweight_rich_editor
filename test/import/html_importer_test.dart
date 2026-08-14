@@ -78,5 +78,31 @@ void main() {
       expect(result.attributes.any((a) => a.type == AttributeType.bold), isTrue);
       expect(result.attributes.any((a) => a.type == AttributeType.italic), isTrue);
     });
+
+    test('text-align style produces an AttributeType.align attribute', () {
+      final result = importer.parse('<div style="text-align: center;">Centered</div>');
+      expect(result.text, 'Centered');
+      expect(result.attributes.single.type, AttributeType.align);
+      expect(result.attributes.single.value, 'center');
+    });
+
+    test('an unrecognized text-align value (justify) is not imported', () {
+      final result = importer.parse('<div style="text-align: justify;">Text</div>');
+      expect(result.text, 'Text');
+      expect(result.attributes.where((a) => a.type == AttributeType.align), isEmpty);
+    });
+
+    test('dir="rtl" attribute produces an AttributeType.textDirection attribute', () {
+      final result = importer.parse('<div dir="rtl">Text</div>');
+      expect(result.text, 'Text');
+      expect(result.attributes.single.type, AttributeType.textDirection);
+      expect(result.attributes.single.value, 'rtl');
+    });
+
+    test('an unrecognized dir value is not imported', () {
+      final result = importer.parse('<div dir="auto">Text</div>');
+      expect(result.text, 'Text');
+      expect(result.attributes.where((a) => a.type == AttributeType.textDirection), isEmpty);
+    });
   });
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
+import 'package:lightweight_rich_editor/src/models/paragraph_alignment.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -63,6 +64,87 @@ void main() {
       expect(controller.document.text, 'the');
       expect(controller.selection, const TextSelection.collapsed(offset: 0));
     });
+
+    test('typing "# " converts the paragraph to an H1, consuming the marker', () {
+      final controller = RichEditorController(text: '');
+      controller.value = const TextEditingValue(text: '#', selection: TextSelection.collapsed(offset: 1));
+      controller.value = const TextEditingValue(text: '# ', selection: TextSelection.collapsed(offset: 2));
+
+      expect(controller.document.text, '');
+      expect(controller.document.paragraphs.paragraphAt(0)!.headerLevel, 'h1');
+      expect(controller.selection, const TextSelection.collapsed(offset: 0));
+    });
+
+    test('typing "## " converts the paragraph to an H2', () {
+      final controller = RichEditorController(text: '');
+      controller.value = const TextEditingValue(text: '#', selection: TextSelection.collapsed(offset: 1));
+      controller.value = const TextEditingValue(text: '##', selection: TextSelection.collapsed(offset: 2));
+      controller.value = const TextEditingValue(text: '## ', selection: TextSelection.collapsed(offset: 3));
+
+      expect(controller.document.text, '');
+      expect(controller.document.paragraphs.paragraphAt(0)!.headerLevel, 'h2');
+    });
+
+    test('undoing a "# " auto-format restores the marker text and header level in two steps', () {
+      final controller = RichEditorController(text: '');
+      controller.value = const TextEditingValue(text: '#', selection: TextSelection.collapsed(offset: 1));
+      controller.value = const TextEditingValue(text: '# ', selection: TextSelection.collapsed(offset: 2));
+      expect(controller.document.paragraphs.paragraphAt(0)!.headerLevel, 'h1');
+      expect(controller.document.text, '');
+
+      controller.undo(); // undoes SetHeaderLevelCommand — metadata only, text unaffected
+      expect(controller.document.paragraphs.paragraphAt(0)!.headerLevel, isNull);
+      expect(controller.document.text, '');
+
+      controller.undo(); // undoes the ReplaceRangeCommand that stripped '#'
+      expect(controller.document.text, '#');
+    });
+
+    test('a space typed after a non-shortcut "#" elsewhere in the line is ordinary text', () {
+      final controller = RichEditorController(text: 'not a #heading');
+      controller.value = const TextEditingValue(
+        text: 'not a #heading ',
+        selection: TextSelection.collapsed(offset: 16),
+      );
+
+      expect(controller.document.text, 'not a #heading ');
+      expect(controller.document.paragraphs.paragraphAt(0)!.headerLevel, isNull);
+    });
+
+    // Regression/documentation test, not a feature under test: unlike
+    // headers, list markers need zero special-casing in this live-typing
+    // path at all. listPrefixLength/listTypeOfPrefix already derive
+    // list-ness from literal text on every render
+    // (TextSpanRenderer._containsListPrefix), and EditingEngine.enterKeyEdit
+    // already continues a matched prefix on Enter — so typing '- '/'1. '/
+    // '- [ ] ' already "just works" the instant the characters land in the
+    // document, with no auto-format trigger needed. This test exists to
+    // catch a future regression if that ever stops being true.
+    test('typing "- " already renders as a list item with no auto-format code involved', () {
+      final controller = RichEditorController(text: '');
+      controller.value = const TextEditingValue(text: '-', selection: TextSelection.collapsed(offset: 1));
+      controller.value = const TextEditingValue(text: '- ', selection: TextSelection.collapsed(offset: 2));
+      controller.value = const TextEditingValue(text: '- item', selection: TextSelection.collapsed(offset: 6));
+
+      // Still literal text — no stored list-type field exists to check.
+      expect(controller.document.text, '- item');
+
+      // Pressing Enter continues the list, exactly as it would for a
+      // prefix that arrived via paste or initial load.
+      controller.insertText('\n');
+      expect(controller.document.text, '- item\n- ');
+    });
+
+    test('typing "1. " already renumbers a following item on Enter with no auto-format code involved', () {
+      final controller = RichEditorController(text: '');
+      controller.value = const TextEditingValue(text: '1', selection: TextSelection.collapsed(offset: 1));
+      controller.value = const TextEditingValue(text: '1.', selection: TextSelection.collapsed(offset: 2));
+      controller.value = const TextEditingValue(text: '1. ', selection: TextSelection.collapsed(offset: 3));
+      controller.value = const TextEditingValue(text: '1. one', selection: TextSelection.collapsed(offset: 6));
+
+      controller.insertText('\n');
+      expect(controller.document.text, '1. one\n2. ');
+    });
   });
 
   group('RichEditorController — programmatic editing API', () {
@@ -103,6 +185,39 @@ void main() {
       expect(paragraphs.paragraphAt(3)!.headerLevel, isNull); // "line one" untouched
     });
 
+    test('setAlignment applies to the whole paragraph from a collapsed caret, and undoes', () {
+      final controller = RichEditorController(text: 'line one\nline two');
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection.collapsed(offset: 11), // inside "line two"
+      );
+
+      controller.setAlignment(ParagraphAlignment.center);
+
+      final paragraphs = controller.document.paragraphs;
+      final lineTwoStart = 'line one\n'.length;
+      expect(paragraphs.paragraphAt(lineTwoStart)!.alignment, ParagraphAlignment.center);
+      expect(paragraphs.paragraphAt(3)!.alignment, isNull); // "line one" untouched
+      expect(controller.activeAttributeValue(AttributeType.align), ParagraphAlignment.center);
+      expect(controller.isAttributeActive(AttributeType.align), isTrue);
+
+      controller.undo();
+      expect(paragraphs.paragraphAt(lineTwoStart)!.alignment, isNull);
+    });
+
+    test('toggleTaskItem promotes a paragraph and isTaskChecked reflects it', () {
+      final controller = RichEditorController(text: 'Buy milk');
+      controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 0));
+
+      expect(controller.isTaskChecked(), isNull);
+      controller.toggleTaskItem();
+      expect(controller.document.text, '  - [ ] Buy milk');
+      expect(controller.isTaskChecked(), isFalse);
+
+      controller.toggleTaskItem();
+      expect(controller.document.text, '  - [x] Buy milk');
+      expect(controller.isTaskChecked(), isTrue);
+    });
+
     test('formatting a selection does not change text length or selection', () {
       final controller = RichEditorController(text: 'hello world');
       const sel = TextSelection(baseOffset: 0, extentOffset: 5);
@@ -112,6 +227,35 @@ void main() {
 
       expect(controller.document.text, 'hello world');
       expect(controller.selection, sel);
+    });
+
+    // The mechanism a toolbar popup relies on to keep formatting applying
+    // to the text the user actually selected, even after the live
+    // TextField selection has moved to the popup itself (e.g. tapping a
+    // dropdown item steals focus) — see FormatToolbar's _HeaderMenu/
+    // _ColorMenu, which call setSelectionHighlight(controller.selection)
+    // on open specifically so this holds.
+    test('setSelectionHighlight overrides which range programmatic formatting targets', () {
+      final controller = RichEditorController(text: 'line one\nline two');
+      // The "live" selection is inside "line one" ...
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection.collapsed(offset: 3),
+      );
+      // ... but a highlight preserves a different range, inside "line two",
+      // simulating a popup menu having since stolen the live selection.
+      final lineTwoStart = 'line one\n'.length;
+      controller.setSelectionHighlight(TextRange(start: lineTwoStart, end: lineTwoStart + 4));
+
+      controller.setHeader('h1');
+
+      expect(controller.document.paragraphs.paragraphAt(lineTwoStart)!.headerLevel, 'h1');
+      expect(controller.document.paragraphs.paragraphAt(3)!.headerLevel, isNull); // "line one" untouched
+      expect(controller.activeAttributeValue(AttributeType.header), 'h1');
+
+      controller.setSelectionHighlight(null);
+      // Once cleared, formatting queries fall back to the live selection
+      // again — still inside "line one", which was never given a header.
+      expect(controller.activeAttributeValue(AttributeType.header), isNull);
     });
 
     test('calling an editing method before the field is ever focused does not crash', () {

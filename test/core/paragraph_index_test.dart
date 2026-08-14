@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/src/core/paragraph_index.dart';
 import 'package:lightweight_rich_editor/src/core/paragraph_record.dart';
+import 'package:lightweight_rich_editor/src/models/paragraph_alignment.dart';
+import 'package:lightweight_rich_editor/src/models/paragraph_text_direction.dart';
 
 void main() {
   group('ParagraphIndex.rebuild', () {
@@ -169,6 +171,133 @@ void main() {
       index.setHeaderLevel(0, 3, 'h1');
       index.setHeaderLevel(0, 3, null);
       expect(index.records, [const ParagraphRecord(start: 0, end: 3)]);
+    });
+
+    test('sets on a genuinely empty paragraph — regression for the zero-width '
+        'overlap bug (a plain "<" check can never match a zero-width record '
+        'against a zero-width query)', () {
+      final index = ParagraphIndex.rebuild('');
+      index.setHeaderLevel(0, 0, 'h1');
+      expect(index.records, [const ParagraphRecord(start: 0, end: 0, headerLevel: 'h1')]);
+    });
+
+    test('a zero-width query at an empty paragraph does not leak onto a '
+        'neighboring non-empty one', () {
+      final index = ParagraphIndex.rebuild('\nBBB');
+      index.setHeaderLevel(0, 0, 'h1');
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 0, headerLevel: 'h1'),
+        const ParagraphRecord(start: 1, end: 4),
+      ]);
+    });
+  });
+
+  group('ParagraphIndex.setAlignment', () {
+    test('sets on a single paragraph', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB');
+      index.setAlignment(0, 3, ParagraphAlignment.center);
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 3, alignment: ParagraphAlignment.center),
+        const ParagraphRecord(start: 4, end: 7),
+      ]);
+    });
+
+    test('a range spanning multiple paragraphs sets all of them', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB\nCCC');
+      index.setAlignment(0, 11, ParagraphAlignment.right);
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 3, alignment: ParagraphAlignment.right),
+        const ParagraphRecord(start: 4, end: 7, alignment: ParagraphAlignment.right),
+        const ParagraphRecord(start: 8, end: 11, alignment: ParagraphAlignment.right),
+      ]);
+    });
+
+    test('null clears alignment', () {
+      final index = ParagraphIndex.rebuild('AAA');
+      index.setAlignment(0, 3, ParagraphAlignment.center);
+      index.setAlignment(0, 3, null);
+      expect(index.records, [const ParagraphRecord(start: 0, end: 3)]);
+    });
+
+    test('survives a split, first fragment only, same rule as headerLevel', () {
+      final index = ParagraphIndex.rebuild('My Paragraph');
+      index.setAlignment(0, 12, ParagraphAlignment.center);
+      index.applyInsertion(3, 'X\nY'); // "My " + "X\nY" + "Paragraph"
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 4, alignment: ParagraphAlignment.center), // "MyX"
+        const ParagraphRecord(start: 5, end: 15), // "YParagraph" — does not keep it
+      ]);
+    });
+
+    test('merged record keeps the leftmost fragment\'s alignment, same rule as headerLevel', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB\nCCC');
+      index.setAlignment(0, 3, ParagraphAlignment.right);
+      index.applyDeletion(3, 8); // -> "AAACCC"
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 6, alignment: ParagraphAlignment.right),
+      ]);
+    });
+  });
+
+  group('ParagraphIndex.setTextDirection', () {
+    test('sets on a single paragraph', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB');
+      index.setTextDirection(0, 3, ParagraphTextDirection.rtl);
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 3, textDirection: ParagraphTextDirection.rtl),
+        const ParagraphRecord(start: 4, end: 7),
+      ]);
+    });
+
+    test('a range spanning multiple paragraphs sets all of them', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB\nCCC');
+      index.setTextDirection(0, 11, ParagraphTextDirection.rtl);
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 3, textDirection: ParagraphTextDirection.rtl),
+        const ParagraphRecord(start: 4, end: 7, textDirection: ParagraphTextDirection.rtl),
+        const ParagraphRecord(start: 8, end: 11, textDirection: ParagraphTextDirection.rtl),
+      ]);
+    });
+
+    test('null clears textDirection', () {
+      final index = ParagraphIndex.rebuild('AAA');
+      index.setTextDirection(0, 3, ParagraphTextDirection.rtl);
+      index.setTextDirection(0, 3, null);
+      expect(index.records, [const ParagraphRecord(start: 0, end: 3)]);
+    });
+
+    test('survives a split, first fragment only, same rule as headerLevel', () {
+      final index = ParagraphIndex.rebuild('My Paragraph');
+      index.setTextDirection(0, 12, ParagraphTextDirection.rtl);
+      index.applyInsertion(3, 'X\nY'); // "My " + "X\nY" + "Paragraph"
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 4, textDirection: ParagraphTextDirection.rtl), // "MyX"
+        const ParagraphRecord(start: 5, end: 15), // "YParagraph" — does not keep it
+      ]);
+    });
+
+    test('merged record keeps the leftmost fragment\'s textDirection, same rule as headerLevel', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB\nCCC');
+      index.setTextDirection(0, 3, ParagraphTextDirection.rtl);
+      index.applyDeletion(3, 8); // -> "AAACCC"
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 6, textDirection: ParagraphTextDirection.rtl),
+      ]);
+    });
+  });
+
+  group('ParagraphIndex.restoreBlockMetadata', () {
+    test('restores headerLevel, alignment, and textDirection together onto overlapping current records', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB');
+      final before = index.records; // all null
+      index.setHeaderLevel(0, 3, 'h1');
+      index.setAlignment(0, 3, ParagraphAlignment.center);
+      index.setTextDirection(0, 3, ParagraphTextDirection.rtl);
+      index.restoreBlockMetadata(before);
+      expect(index.records, [
+        const ParagraphRecord(start: 0, end: 3),
+        const ParagraphRecord(start: 4, end: 7),
+      ]);
     });
   });
 }
