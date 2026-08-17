@@ -1164,9 +1164,6 @@ class EditingEngine {
     store.clearRange(range.start, range.end, type: type);
     if (!alreadyCovered) {
       store.insert(TextAttribute(start: range.start, end: range.end, type: type));
-      _stickyAttributes[type] = null;
-    } else {
-      _stickyAttributes.remove(type);
     }
     store.optimize(type: type);
 
@@ -1179,6 +1176,24 @@ class EditingEngine {
   /// Not for [AttributeType.header] — use [setHeaderLevel] instead;
   /// header no longer goes through the generic attribute path at all
   /// (see the block-architecture design notes).
+  ///
+  /// Deliberately does **not** touch [stickyAttributes] for a
+  /// non-collapsed `selection` — this closes a real, reported bug.
+  /// `stickyAttributes` is only meaningful for a collapsed caret (see its
+  /// doc comment); it used to also be set as a side effect of a *range*
+  /// apply, on the theory that it mirrored "keep bolding as you keep
+  /// typing right after a bolded selection". It didn't actually serve
+  /// that case — the moment the caret next collapses anywhere,
+  /// `syncStickyAttributesAt` already recomputes sticky state fresh from
+  /// the real spans at that position, making the range-apply's own write
+  /// redundant for it. What that write *did* do is outlive the edit: it
+  /// stuck around across any later selection change that stays
+  /// non-collapsed (a subsequent drag-select, and critically "select
+  /// all") with nothing to clear it, so a value as specific as a link's
+  /// URL could silently attach to completely unrelated text — e.g.
+  /// select all + paste plain text inheriting the URL of a link applied
+  /// earlier, nowhere near the pasted content. Toggle attributes have the
+  /// same fix in [toggleAttribute], for the same reason.
   void applyAttribute(AttributeType type, EditorSelection selection, Object? value) {
     assert(type != AttributeType.header, 'use setHeaderLevel for header, not applyAttribute');
 
@@ -1204,7 +1219,6 @@ class EditingEngine {
 
     store.insert(TextAttribute(start: range.start, end: range.end, type: type, value: value));
     store.optimize(type: type);
-    _stickyAttributes[type] = value;
 
     transactions.notify();
   }

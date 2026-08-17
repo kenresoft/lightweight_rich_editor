@@ -97,22 +97,22 @@ class RichEditorController extends TextEditingController {
     RichClipboardDelegate? richClipboardDelegate,
     void Function(String url)? onTapLink,
     bool interactiveLinks = false,
-  })  : document = EditorDocument.fromText(text, initialAttributes),
-  // Defaults to the standard external-browser launcher
-  // (`launchLinkUrl`) when the host doesn't supply its own
-  // `onTapLink` — so both manually-created and autolinked links
-  // are tappable out of the box. Hosts that want different
-  // behavior still override it via the constructor param exactly
-  // as before; see `hasCustomTapHandler`.
-        renderer = TextSpanRenderer(
-          theme: theme,
-          onTapLink: onTapLink ?? launchLinkUrl,
-          interactiveLinks: interactiveLinks,
-        ),
-        hasCustomTapHandler = onTapLink != null,
-        focusNode = focusNode ?? FocusNode(),
-        _ownsFocusNode = focusNode == null,
-        super(text: text) {
+  }) : document = EditorDocument.fromText(text, initialAttributes),
+       // Defaults to the standard external-browser launcher
+       // (`launchLinkUrl`) when the host doesn't supply its own
+       // `onTapLink` — so both manually-created and autolinked links
+       // are tappable out of the box. Hosts that want different
+       // behavior still override it via the constructor param exactly
+       // as before; see `hasCustomTapHandler`.
+       renderer = TextSpanRenderer(
+         theme: theme,
+         onTapLink: onTapLink ?? launchLinkUrl,
+         interactiveLinks: interactiveLinks,
+       ),
+       hasCustomTapHandler = onTapLink != null,
+       focusNode = focusNode ?? FocusNode(),
+       _ownsFocusNode = focusNode == null,
+       super(text: text) {
     transactions = TransactionManager(_handleCommit);
     engine = EditingEngine(document: document, transactions: transactions);
     history = HistoryManager(
@@ -124,7 +124,7 @@ class RichEditorController extends TextEditingController {
     clipboard = ClipboardManager(
       document: document,
       commands: commands,
-      delegate: richClipboardDelegate ?? InMemoryRichClipboardDelegate(),
+      delegate: richClipboardDelegate ?? InMemoryRichClipboardDelegate.shared,
     );
     metrics = EditorMetrics(document: document, history: history);
     search = SearchIndex(document: document, commands: commands);
@@ -134,7 +134,9 @@ class RichEditorController extends TextEditingController {
     // routing a link tap through `onTapLink` rather than a selection-based
     // action.
     renderer.onToggleCheckbox = (paragraphStart) {
-      _syncSelection(commands.toggleTaskItem(EditorSelection.collapsed(paragraphStart)));
+      _syncSelection(
+        commands.toggleTaskItem(EditorSelection.collapsed(paragraphStart)),
+      );
     };
   }
 
@@ -150,6 +152,41 @@ class RichEditorController extends TextEditingController {
     if (_ownsFocusNode) focusNode.dispose();
     renderer.dispose();
     super.dispose();
+  }
+
+  /// Forces the editor's underlying platform text-input connection to
+  /// re-attach after some *other* interactive widget the host placed
+  /// near the editor (a custom app-bar button, a floating action button,
+  /// anything outside this library's own [FormatToolbar]) has just been
+  /// tapped.
+  ///
+  /// On Flutter web specifically, tapping practically any interactive
+  /// widget elsewhere on the page blurs the editor's hidden text-input
+  /// element at the browser level — [focusNode] still reports itself as
+  /// focused (Flutter's own bookkeeping is fine), but the OS/browser
+  /// text-input connection has been torn down, so the very next
+  /// keystroke typed is silently dropped until the user clicks back into
+  /// the text. `FormatToolbar`'s own buttons already call this
+  /// internally after every action, which is why typing right after
+  /// clicking Bold "just works" — a host's *own* UI (a dark-mode toggle
+  /// in an app bar is a real example that hits exactly this) doesn't get
+  /// that for free, since it isn't part of this library's toolbar. Call
+  /// this right after any such interaction your app performs, and the
+  /// same fix applies.
+  ///
+  /// Deliberately a synchronous `unfocus()` immediately followed by
+  /// `requestFocus()` — a bare `requestFocus()` alone is a no-op when
+  /// Flutter already considers the node focused, and it never re-attaches
+  /// the connection; deferring the `requestFocus()` to the next frame
+  /// (an earlier approach) works too but paints a visible one-frame
+  /// "unfocused" flicker (cursor/selection handles disappearing and
+  /// reappearing) that calling both synchronously avoids entirely, since
+  /// Flutter's frame pipeline coalesces the two into a single rebuild —
+  /// see `FormatToolbar`'s internal `_reclaimEditorFocus` for the full
+  /// reasoning and how this was verified live.
+  void reclaimFocus() {
+    focusNode.unfocus();
+    focusNode.requestFocus();
   }
 
   // ---------------------------------------------------------------------
@@ -241,13 +278,17 @@ class RichEditorController extends TextEditingController {
             EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
             Map.of(engine.stickyAttributes),
           );
-          history.execute(ReplaceRangeCommand(
-            start: edit.start,
-            end: edit.end,
-            text: edit.text,
-            relativeAttributes: edit.relativeAttributes,
-          ));
-          resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
+          history.execute(
+            ReplaceRangeCommand(
+              start: edit.start,
+              end: edit.end,
+              text: edit.text,
+              relativeAttributes: edit.relativeAttributes,
+            ),
+          );
+          resultSelection = TextSelection.collapsed(
+            offset: edit.start + edit.cursorOffsetFromStart,
+          );
           resultComposing = TextRange.empty;
           // Not autolinking here: the exit-list variant deletes the
           // prefix, which shifts everything `_maybeAutolink` assumes
@@ -271,26 +312,34 @@ class RichEditorController extends TextEditingController {
           // their own attributes, never sticky ones (there's no "new"
           // portion here the way Enter's marker is, so no sticky
           // application at all makes sense for this specific edit).
-          final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(diff.end));
+          final edit = engine.deleteBackwardEdit(
+            EditorSelection.collapsed(diff.end),
+          );
           if (edit != null) {
-            history.execute(ReplaceRangeCommand(
-              start: edit.start,
-              end: edit.end,
-              text: edit.text,
-              relativeAttributes: edit.relativeAttributes,
-            ));
-            resultSelection = TextSelection.collapsed(offset: edit.start + edit.cursorOffsetFromStart);
+            history.execute(
+              ReplaceRangeCommand(
+                start: edit.start,
+                end: edit.end,
+                text: edit.text,
+                relativeAttributes: edit.relativeAttributes,
+              ),
+            );
+            resultSelection = TextSelection.collapsed(
+              offset: edit.start + edit.cursorOffsetFromStart,
+            );
             resultComposing = TextRange.empty;
           } else {
             // Shouldn't happen — diff implies something was deletable —
             // but fall back to the raw diff defensively rather than
             // silently dropping the edit.
-            history.execute(ReplaceRangeCommand(
-              start: diff.start,
-              end: diff.end,
-              text: diff.insertedText,
-              attributesForInsertion: Map.of(engine.stickyAttributes),
-            ));
+            history.execute(
+              ReplaceRangeCommand(
+                start: diff.start,
+                end: diff.end,
+                text: diff.insertedText,
+                attributesForInsertion: Map.of(engine.stickyAttributes),
+              ),
+            );
           }
           // Backspace never autolinks — _maybeAutolink no-ops on empty
           // insertedText anyway, but ranAutolink stays false for clarity
@@ -302,24 +351,95 @@ class RichEditorController extends TextEditingController {
           // handling below, not folded into it — a match consumes the
           // space entirely (never inserted) rather than treating this as
           // ordinary text entry.
-          final autoHeaderLevel = diff.insertedText == ' ' && diff.start == diff.end
+          final autoHeaderLevel =
+              diff.insertedText == ' ' && diff.start == diff.end
               ? engine.autoFormatHeaderLevel(diff.start)
               : null;
 
           if (autoHeaderLevel != null) {
-            final paragraphStart = document.paragraphs.paragraphAt(diff.start)!.start;
+            final paragraphStart = document.paragraphs
+                .paragraphAt(diff.start)!
+                .start;
             // Two separate undo steps, deliberately — same "one keystroke,
             // two commits" trade-off already used below for
             // repairListNumbering's follow-up: stripping the literal
             // '#'/'##' is a text edit, setting headerLevel is metadata: two
             // different kinds of change, restored independently on undo.
-            history.execute(ReplaceRangeCommand(start: paragraphStart, end: diff.start, text: ''));
-            history.execute(SetHeaderLevelCommand(EditorSelection.collapsed(paragraphStart), autoHeaderLevel));
+            history.execute(
+              ReplaceRangeCommand(
+                start: paragraphStart,
+                end: diff.start,
+                text: '',
+              ),
+            );
+            history.execute(
+              SetHeaderLevelCommand(
+                EditorSelection.collapsed(paragraphStart),
+                autoHeaderLevel,
+              ),
+            );
             resultSelection = TextSelection.collapsed(offset: paragraphStart);
             resultComposing = TextRange.empty;
             // Not autolinking here: there's no text left after becoming a
             // heading for _maybeAutolink to look at.
           } else {
+            // A bulk insert (see _maybeAutolink's doc comment: never a
+            // live keystroke, always an already-finished chunk) gets its
+            // autolinks computed *before* dispatch and folded into this
+            // same `ReplaceRangeCommand` as `relativeAttributes`, rather
+            // than inserted first and linked after the fact via a
+            // separate `commands.setLink` call per URL. A real, reported
+            // bug: doing it after the fact put each autolinked URL on
+            // the undo stack as its own step, so undoing a single paste
+            // took N+1 presses — one per link, plus one for the text —
+            // unwinding the links one at a time before ever touching the
+            // pasted text itself, instead of the whole paste
+            // disappearing on the first undo like every other editor.
+            // Single-character live typing (the only other caller of
+            // `ranAutolink`) is unaffected — it still goes through
+            // `_maybeAutolink`'s separate-command path below exactly as
+            // before, since that one *keystroke* being its own undo step
+            // (distinct from the autolink it triggers) is a deliberate,
+            // pre-existing design choice, not part of this bug.
+            final urls = diff.insertedText.length > 1
+                ? detectAllUrls(diff.insertedText)
+                : const <DetectedUrl>[];
+
+            if (urls.isEmpty) {
+              history.execute(
+                ReplaceRangeCommand(
+                  start: diff.start,
+                  end: diff.end,
+                  text: diff.insertedText,
+                  attributesForInsertion: Map.of(engine.stickyAttributes),
+                ),
+              );
+              ranAutolink = diff.insertedText.length == 1;
+            } else {
+              final sticky = engine.stickyAttributes;
+              final relativeAttributes = <TextAttribute>[
+                for (final entry in sticky.entries)
+                  if (entry.key != AttributeType.link)
+                    TextAttribute(
+                      start: 0,
+                      end: diff.insertedText.length,
+                      type: entry.key,
+                      value: entry.value,
+                    ),
+                for (final u in urls)
+                  TextAttribute(start: u.start, end: u.end, type: AttributeType.link, value: u.href),
+              ];
+              history.execute(
+                ReplaceRangeCommand(
+                  start: diff.start,
+                  end: diff.end,
+                  text: diff.insertedText,
+                  relativeAttributes: relativeAttributes,
+                ),
+              );
+              ranAutolink = false;
+            }
+
             // Same "range edit can orphan a numbered run" concern as
             // CommandDispatcher.deleteSelection — this branch is what
             // actually runs when a real device backspaces over a
@@ -327,12 +447,6 @@ class RichEditorController extends TextEditingController {
             // programmatic path, so it needs the same follow-up check.
             // Two separate undo steps when a repair is needed, same
             // reasoning as CommandDispatcher.deleteSelection's doc comment.
-            history.execute(ReplaceRangeCommand(
-              start: diff.start,
-              end: diff.end,
-              text: diff.insertedText,
-              attributesForInsertion: Map.of(engine.stickyAttributes),
-            ));
             // Not relying on history.execute's return value here — every
             // other call site in this file discards it too, and computing
             // the post-edit position directly from diff (start + however
@@ -342,14 +456,15 @@ class RichEditorController extends TextEditingController {
               EditorSelection.collapsed(diff.start + diff.insertedText.length),
             );
             if (repairEdit != null) {
-              history.execute(ReplaceRangeCommand(
-                start: repairEdit.start,
-                end: repairEdit.end,
-                text: repairEdit.text,
-                relativeAttributes: repairEdit.relativeAttributes,
-              ));
+              history.execute(
+                ReplaceRangeCommand(
+                  start: repairEdit.start,
+                  end: repairEdit.end,
+                  text: repairEdit.text,
+                  relativeAttributes: repairEdit.relativeAttributes,
+                ),
+              );
             }
-            ranAutolink = true;
           }
         }
       }
@@ -380,16 +495,38 @@ class RichEditorController extends TextEditingController {
     }
   }
 
-  /// After a text-changing edit, checks whether the just-inserted text
-  /// ended on an autolink boundary (space/newline/tab) and, if the
-  /// token immediately before that boundary is a confidently
-  /// URL-shaped token, applies the link attribute over it via
+  /// After a single-character live keystroke, checks whether it just
+  /// completed an autolink boundary (space/newline/tab) and, if the
+  /// token immediately before that boundary is a confidently URL-shaped
+  /// token, applies the link attribute over it via
   /// [CommandDispatcher.setLink] — the exact same path the manual link
   /// dialog uses, so an autolinked URL is its own undo step and is
   /// editable/removable exactly like a manually-inserted link.
   ///
-  /// Deliberately runs *after* `super.value = ...` above rather than
-  /// before. By the time `commands.setLink` fires
+  /// Only ever called for a genuine one-character diff — every other
+  /// caller of `ranAutolink` is a *bulk* insert (never a live keystroke;
+  /// always an already-finished chunk arriving as one atomic unit — a
+  /// real device's own keyboard pasting directly via its clipboard
+  /// suggestion, autocomplete, voice input), which computes and applies
+  /// its own autolinks *before* dispatch instead, baked into the very
+  /// same `ReplaceRangeCommand` as `relativeAttributes` — see the `set
+  /// value` override's general-insert branch. That split exists because
+  /// this method's contract — undo the *character* and the *link* it
+  /// triggered as two separate steps — is a deliberate, pre-existing
+  /// design choice for live typing, but is exactly the bug a bulk paste
+  /// hit: doing it after the fact, one `setLink` call per URL, put every
+  /// autolinked URL from a single paste on the undo stack as its own
+  /// step, so undoing the paste took N+1 presses instead of one.
+  ///
+  /// Only ever inspects the single token immediately before the
+  /// boundary that was just typed — never the whole document — which is
+  /// what keeps this from firing while a URL is still being typed: a
+  /// boundary char has to have actually just been inserted for
+  /// `diff.insertedText` to end with one, and no URL contains a
+  /// space/newline/tab.
+  ///
+  /// Deliberately runs *after* `super.value = ...` in `set value` rather
+  /// than before. By the time `commands.setLink` fires
   /// `transactions.notify()` -> `_handleCommit` -> `_applyValue`,
   /// `this.selection` already equals the correct, final, IME-reported
   /// selection — so `_handleCommit`'s clamp-and-reapply computes a
@@ -397,13 +534,6 @@ class RichEditorController extends TextEditingController {
   /// documented "notify anyway" path for pure-formatting changes,
   /// instead of momentarily computing a stale, pre-edit-selection
   /// guess and then immediately overwriting it.
-  ///
-  /// Only ever inspects the single token immediately before the
-  /// boundary that was just typed — never the whole document — which
-  /// is what keeps this from firing while a URL is still being typed:
-  /// a boundary char has to have actually just been inserted for
-  /// `diff.insertedText` to end with one, and no URL contains a
-  /// space/newline/tab.
   void _maybeAutolink(TextDiff diff) {
     if (diff.insertedText.isEmpty) return;
     final lastChar = diff.insertedText[diff.insertedText.length - 1];
@@ -413,10 +543,16 @@ class RichEditorController extends TextEditingController {
     final detected = detectUrlBeforeBoundary(document.text, boundaryIndex);
     if (detected == null) return;
 
-    final existing = document.attributeStore.findIntersecting(detected.start, detected.end, type: AttributeType.link);
+    final existing = document.attributeStore.findIntersecting(
+      detected.start,
+      detected.end,
+      type: AttributeType.link,
+    );
     if (existing.isNotEmpty) {
       final link = existing.first;
-      if (link.start == detected.start && link.end == detected.end && link.value == detected.href) {
+      if (link.start == detected.start &&
+          link.end == detected.end &&
+          link.value == detected.href) {
         return;
       }
     }
@@ -425,18 +561,6 @@ class RichEditorController extends TextEditingController {
       EditorSelection(baseOffset: detected.start, extentOffset: detected.end),
       detected.href,
     );
-
-    // `EditingEngine.applyAttribute` sets the link as a *sticky*
-    // attribute after applying it to a range — correct for something
-    // like bold (keep bolding as you keep typing right after a bolded
-    // selection), wrong here: without this, the very next character
-    // typed after the space would silently inherit the link. A
-    // collapsed selection at the boundary clears sticky state only —
-    // it never touches the document/store (see
-    // `EditingEngine.removeAttribute`) — so this is not an undo step,
-    // same as `syncStickyAttributesAt` above being called directly on
-    // `engine` rather than through `commands`/`history`.
-    engine.removeAttribute(AttributeType.link, EditorSelection.collapsed(detected.end));
 
     // Defensive: make sure the next keystroke starts a fresh
     // typing/coalescing session rather than risking a merge with
@@ -493,19 +617,23 @@ class RichEditorController extends TextEditingController {
       baseOffset: clampInt(selection.baseOffset, 0, length),
       extentOffset: clampInt(selection.extentOffset, 0, length),
     );
-    _applyValue(value.copyWith(
-      text: newText,
-      selection: clamped,
-      composing: newText == value.text ? value.composing : TextRange.empty,
-    ));
+    _applyValue(
+      value.copyWith(
+        text: newText,
+        selection: clamped,
+        composing: newText == value.text ? value.composing : TextRange.empty,
+      ),
+    );
   }
 
   void _syncSelection(EditorSelection result) {
-    _applyValue(value.copyWith(
-      text: document.text,
-      selection: _toTextSelection(result),
-      composing: TextRange.empty,
-    ));
+    _applyValue(
+      value.copyWith(
+        text: document.text,
+        selection: _toTextSelection(result),
+        composing: TextRange.empty,
+      ),
+    );
   }
 
   /// The current selection as an [EditorSelection], defensively clamped.
@@ -545,11 +673,14 @@ class RichEditorController extends TextEditingController {
   // goes through the `set value` override above instead.
   // ---------------------------------------------------------------------
 
-  void insertText(String text) => _syncSelection(commands.insertText(_currentSelection, text));
+  void insertText(String text) =>
+      _syncSelection(commands.insertText(_currentSelection, text));
 
-  void deleteBackward() => _syncSelection(commands.deleteBackward(_currentSelection));
+  void deleteBackward() =>
+      _syncSelection(commands.deleteBackward(_currentSelection));
 
-  void deleteForward() => _syncSelection(commands.deleteForward(_currentSelection));
+  void deleteForward() =>
+      _syncSelection(commands.deleteForward(_currentSelection));
 
   /// Deletes the current selection outright. No-op if the selection is
   /// collapsed. Prefer this over `deleteBackward()` at call sites (like
@@ -557,18 +688,71 @@ class RichEditorController extends TextEditingController {
   /// to fall back to the same behavior for a non-collapsed selection,
   /// but that's an implementation detail, not something a call site
   /// should rely on to read clearly.
-  void deleteSelection() => _syncSelection(commands.deleteSelection(_currentSelection));
+  void deleteSelection() =>
+      _syncSelection(commands.deleteSelection(_currentSelection));
 
-  void pasteText(String text) => _repairAndSync(commands.paste(_currentSelection, text));
+  /// Pastes `text` as plain content at the current selection — the
+  /// programmatic equivalent of typing it in.
+  ///
+  /// Any bare URL inside `text` is autolinked immediately, the same as
+  /// [paste] (the system-clipboard path, via `ClipboardManager`) already
+  /// does — a real, reported bug: only `ClipboardManager.paste()` ran
+  /// autolink detection, so any paste path that doesn't go through the
+  /// OS clipboard (drag-and-drop, a share-sheet handoff, a host's own
+  /// "insert this text" action) left a pasted URL sitting there unlinked
+  /// until the user happened to type a boundary character (space,
+  /// newline, tab — never actually "Enter" specifically, despite how
+  /// that's sometimes described) right after it.
+  ///
+  /// `text` is normalized to '\n' line endings before anything else runs
+  /// — a host calling this with clipboard- or drag-and-drop-sourced text
+  /// (its own doc comment above already names both as expected callers)
+  /// may well be handing over '\r\n', same as `ClipboardManager.paste`'s
+  /// own text can be; see that method's doc comment for the full
+  /// explanation of why an un-normalized '\r' silently breaks autolink
+  /// detection for every URL on the affected line, not just malformats
+  /// the text itself.
+  void pasteText(String text) {
+    final normalized = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final urls = detectAllUrls(normalized);
+    if (urls.isEmpty) {
+      _repairAndSync(commands.paste(_currentSelection, normalized));
+      return;
+    }
+
+    // The non-URL portion of `text` still inherits whatever sticky
+    // formatting (bold, an active color, ...) ordinary typing would —
+    // this method is meant to behave like typing `text` in one go, not
+    // like a rich external paste bringing its own formatting (that's
+    // [pasteRichText]/[pasteHtml]/[pasteMarkdown]'s job).
+    // AttributeType.link is deliberately excluded from that inherited
+    // set: a stale sticky link value (see EditingEngine.applyAttribute's
+    // doc comment on why that no longer persists past a range apply,
+    // but collapsed-caret sticky link state is still legitimate) must
+    // never compete with the URLs actually detected in `text` below.
+    final sticky = engine.stickyAttributes;
+    final relativeAttributes = <TextAttribute>[
+      for (final entry in sticky.entries)
+        if (entry.key != AttributeType.link)
+          TextAttribute(start: 0, end: normalized.length, type: entry.key, value: entry.value),
+      for (final u in urls)
+        TextAttribute(start: u.start, end: u.end, type: AttributeType.link, value: u.href),
+    ];
+    _repairAndSync(commands.pasteRich(_currentSelection, normalized, relativeAttributes));
+  }
 
   void pasteRichText(String text, List<TextAttribute> relativeAttributes) =>
-      _repairAndSync(commands.pasteRich(_currentSelection, text, relativeAttributes));
+      _repairAndSync(
+        commands.pasteRich(_currentSelection, text, relativeAttributes),
+      );
 
   /// Parses `markdown` (a deliberately scoped subset — see
   /// [MarkdownImporter]) and pastes the result at the current selection.
   void pasteMarkdown(String markdown) {
     final parsed = const MarkdownImporter().parse(markdown);
-    _repairAndSync(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
+    _repairAndSync(
+      commands.pasteRich(_currentSelection, parsed.text, parsed.attributes),
+    );
   }
 
   /// Parses `html` (see [HtmlImporter] for what's recognized) and pastes
@@ -581,7 +765,9 @@ class RichEditorController extends TextEditingController {
   /// plugin, a platform channel, drag-and-drop, a web `paste` event).
   void pasteHtml(String html) {
     final parsed = const HtmlImporter().parse(html);
-    _repairAndSync(commands.pasteRich(_currentSelection, parsed.text, parsed.attributes));
+    _repairAndSync(
+      commands.pasteRich(_currentSelection, parsed.text, parsed.attributes),
+    );
   }
 
   /// Copies the current selection to the system clipboard (and to
@@ -590,7 +776,8 @@ class RichEditorController extends TextEditingController {
   Future<void> copy() => clipboard.copy(_currentSelection);
 
   /// Copies then deletes the current selection. See [ClipboardManager.cut].
-  Future<void> cut() async => _syncSelection(await clipboard.cut(_currentSelection));
+  Future<void> cut() async =>
+      _syncSelection(await clipboard.cut(_currentSelection));
 
   /// Pastes at the current selection — rich content if [clipboard] has a
   /// matching delegate entry, otherwise plain text from the system
@@ -619,11 +806,13 @@ class RichEditorController extends TextEditingController {
     _syncSelection(resultSelection);
     final edit = engine.repairListNumbering(resultSelection);
     if (edit == null) return;
-    _syncSelection(commands.pasteRich(
-      EditorSelection(baseOffset: edit.start, extentOffset: edit.end),
-      edit.text,
-      edit.relativeAttributes,
-    ));
+    _syncSelection(
+      commands.pasteRich(
+        EditorSelection(baseOffset: edit.start, extentOffset: edit.end),
+        edit.text,
+        edit.relativeAttributes,
+      ),
+    );
   }
 
   void toggleBold() => commands.toggleBold(_currentSelection);
@@ -636,19 +825,25 @@ class RichEditorController extends TextEditingController {
   /// migration), and `exportAttributes` is what synthesizes that back
   /// into the flat span list `HtmlExporter` itself is unchanged and
   /// still expects.
-  String toHtml() => const HtmlExporter().export(document.text, document.exportAttributes());
+  String toHtml() =>
+      const HtmlExporter().export(document.text, document.exportAttributes());
 
   /// Exports the current document as a Markdown string. See [toHtml]'s
   /// doc comment — same reasoning applies here.
-  String toMarkdown() => const MarkdownExporter().export(document.text, document.exportAttributes());
+  String toMarkdown() => const MarkdownExporter().export(
+    document.text,
+    document.exportAttributes(),
+  );
   void toggleItalic() => commands.toggleItalic(_currentSelection);
   void toggleUnderline() => commands.toggleUnderline(_currentSelection);
   void toggleStrikethrough() => commands.toggleStrikethrough(_currentSelection);
   void toggleHighlight() => commands.toggleHighlight(_currentSelection);
   void toggleCode() => commands.toggleCode(_currentSelection);
 
-  void toggleBulletList() => _syncSelection(commands.toggleBulletList(_currentSelection));
-  void toggleNumberedList() => _syncSelection(commands.toggleNumberedList(_currentSelection));
+  void toggleBulletList() =>
+      _syncSelection(commands.toggleBulletList(_currentSelection));
+  void toggleNumberedList() =>
+      _syncSelection(commands.toggleNumberedList(_currentSelection));
   void indentList() => _syncSelection(commands.indentList(_currentSelection));
   void outdentList() => _syncSelection(commands.outdentList(_currentSelection));
 
@@ -663,10 +858,14 @@ class RichEditorController extends TextEditingController {
     if (record == null) return false;
     final prefixLen = listPrefixLength(document.text, record.start);
     if (prefixLen == 0) return false;
-    return listTypeOfPrefix(document.text.substring(record.start, record.start + prefixLen)) == type;
+    return listTypeOfPrefix(
+          document.text.substring(record.start, record.start + prefixLen),
+        ) ==
+        type;
   }
 
-  void toggleTaskItem() => _syncSelection(commands.toggleTaskItem(_currentSelection));
+  void toggleTaskItem() =>
+      _syncSelection(commands.toggleTaskItem(_currentSelection));
 
   /// Whether the paragraph containing the current selection is a
   /// task-list item, and if so, whether it's checked — `null` if it
@@ -680,25 +879,32 @@ class RichEditorController extends TextEditingController {
     if (record == null) return null;
     final prefixLen = listPrefixLength(document.text, record.start);
     if (prefixLen == 0) return null;
-    return checkboxStateOfPrefix(document.text.substring(record.start, record.start + prefixLen));
+    return checkboxStateOfPrefix(
+      document.text.substring(record.start, record.start + prefixLen),
+    );
   }
 
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
   void setSize(num? size) => commands.setSize(_currentSelection, size);
 
   void increaseFontSize() {
-    final current = activeAttributeValue(AttributeType.size) as num? ?? renderer.theme.baseFontSize;
+    final current =
+        activeAttributeValue(AttributeType.size) as num? ??
+        renderer.theme.baseFontSize;
     setSize((current.toDouble() + 2.0).clamp(8.0, 72.0));
   }
 
   void decreaseFontSize() {
-    final current = activeAttributeValue(AttributeType.size) as num? ?? renderer.theme.baseFontSize;
+    final current =
+        activeAttributeValue(AttributeType.size) as num? ??
+        renderer.theme.baseFontSize;
     setSize((current.toDouble() - 2.0).clamp(8.0, 72.0));
   }
 
   void setLink(String? url) => commands.setLink(_currentSelection, url);
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
-  void setAlignment(ParagraphAlignment? alignment) => commands.setAlignment(_currentSelection, alignment);
+  void setAlignment(ParagraphAlignment? alignment) =>
+      commands.setAlignment(_currentSelection, alignment);
   void setTextDirection(ParagraphTextDirection? textDirection) =>
       commands.setTextDirection(_currentSelection, textDirection);
 
@@ -729,7 +935,9 @@ class RichEditorController extends TextEditingController {
   /// would silently go stale the moment a heading is set via
   /// `CommandDispatcher.setHeader`.
   bool isAttributeActive(AttributeType type) {
-    if (type == AttributeType.header || type == AttributeType.align || type == AttributeType.textDirection) {
+    if (type == AttributeType.header ||
+        type == AttributeType.align ||
+        type == AttributeType.textDirection) {
       return activeAttributeValue(type) != null;
     }
     final sel = _currentSelection;
@@ -758,7 +966,10 @@ class RichEditorController extends TextEditingController {
       final startRecord = document.paragraphs.paragraphAt(sel.start);
       if (startRecord == null) return null;
       if (sel.isCollapsed) return startRecord.headerLevel;
-      final overlapping = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+      final overlapping = document.paragraphs.recordsOverlapping(
+        sel.start,
+        sel.end,
+      );
       if (overlapping.isEmpty) return null;
       final level = overlapping.first.headerLevel;
       final allAgree = overlapping.every((r) => r.headerLevel == level);
@@ -769,7 +980,10 @@ class RichEditorController extends TextEditingController {
       final startRecord = document.paragraphs.paragraphAt(sel.start);
       if (startRecord == null) return null;
       if (sel.isCollapsed) return startRecord.alignment;
-      final overlapping = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+      final overlapping = document.paragraphs.recordsOverlapping(
+        sel.start,
+        sel.end,
+      );
       if (overlapping.isEmpty) return null;
       final alignment = overlapping.first.alignment;
       final allAgree = overlapping.every((r) => r.alignment == alignment);
@@ -780,15 +994,22 @@ class RichEditorController extends TextEditingController {
       final startRecord = document.paragraphs.paragraphAt(sel.start);
       if (startRecord == null) return null;
       if (sel.isCollapsed) return startRecord.textDirection;
-      final overlapping = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+      final overlapping = document.paragraphs.recordsOverlapping(
+        sel.start,
+        sel.end,
+      );
       if (overlapping.isEmpty) return null;
       final textDirection = overlapping.first.textDirection;
-      final allAgree = overlapping.every((r) => r.textDirection == textDirection);
+      final allAgree = overlapping.every(
+        (r) => r.textDirection == textDirection,
+      );
       return allAgree ? textDirection : null;
     }
     final sel = _currentSelection;
     if (sel.isCollapsed) {
-      if (engine.stickyAttributes.containsKey(type)) return engine.stickyAttributes[type];
+      if (engine.stickyAttributes.containsKey(type)) {
+        return engine.stickyAttributes[type];
+      }
       final at = document.attributeStore.findAt(sel.start, type: type);
       return at.isEmpty ? null : at.first.value;
     }
@@ -817,10 +1038,16 @@ class RichEditorController extends TextEditingController {
   /// than something that needs pixel-perfect resolution here.
   String? linkUrlAt(int offset) {
     if (offset < 0) return null;
-    final atOffset = document.attributeStore.findAt(offset, type: AttributeType.link);
+    final atOffset = document.attributeStore.findAt(
+      offset,
+      type: AttributeType.link,
+    );
     if (atOffset.isNotEmpty) return atOffset.first.value as String?;
     if (offset > 0) {
-      final beforeOffset = document.attributeStore.findAt(offset - 1, type: AttributeType.link);
+      final beforeOffset = document.attributeStore.findAt(
+        offset - 1,
+        type: AttributeType.link,
+      );
       if (beforeOffset.isNotEmpty) return beforeOffset.first.value as String?;
     }
     return null;
@@ -830,11 +1057,24 @@ class RichEditorController extends TextEditingController {
   /// isn't inside a link attribute.
   TextRange? linkRangeAt(int offset) {
     if (offset < 0) return null;
-    final atOffset = document.attributeStore.findAt(offset, type: AttributeType.link);
-    if (atOffset.isNotEmpty) return TextRange(start: atOffset.first.start, end: atOffset.first.end);
+    final atOffset = document.attributeStore.findAt(
+      offset,
+      type: AttributeType.link,
+    );
+    if (atOffset.isNotEmpty) {
+      return TextRange(start: atOffset.first.start, end: atOffset.first.end);
+    }
     if (offset > 0) {
-      final beforeOffset = document.attributeStore.findAt(offset - 1, type: AttributeType.link);
-      if (beforeOffset.isNotEmpty) return TextRange(start: beforeOffset.first.start, end: beforeOffset.first.end);
+      final beforeOffset = document.attributeStore.findAt(
+        offset - 1,
+        type: AttributeType.link,
+      );
+      if (beforeOffset.isNotEmpty) {
+        return TextRange(
+          start: beforeOffset.first.start,
+          end: beforeOffset.first.end,
+        );
+      }
     }
     return null;
   }
@@ -851,10 +1091,12 @@ class RichEditorController extends TextEditingController {
     document.reset(text, attributes);
     engine.restoreStickyAttributes(const {});
     history.clear();
-    _applyValue(TextEditingValue(
-      text: document.text,
-      selection: const TextSelection.collapsed(offset: 0),
-    ));
+    _applyValue(
+      TextEditingValue(
+        text: document.text,
+        selection: const TextSelection.collapsed(offset: 0),
+      ),
+    );
   }
 
   Map<String, dynamic> toJson() => document.toJson();
@@ -865,7 +1107,11 @@ class RichEditorController extends TextEditingController {
 
   /// Runs a new search and, if there's a match, selects it in the
   /// editor. See [SearchIndex.search].
-  void find(String query, {bool caseSensitive = false, bool wholeWord = false}) {
+  void find(
+    String query, {
+    bool caseSensitive = false,
+    bool wholeWord = false,
+  }) {
     search.search(query, caseSensitive: caseSensitive, wholeWord: wholeWord);
     _selectCurrentMatch();
   }
@@ -921,14 +1167,44 @@ class RichEditorController extends TextEditingController {
       notifyListeners();
       return;
     }
-    _applyValue(value.copyWith(
-      selection: TextSelection(baseOffset: match.start, extentOffset: match.end),
-    ));
+    _applyValue(
+      value.copyWith(
+        selection: TextSelection(
+          baseOffset: match.start,
+          extentOffset: match.end,
+        ),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------
+
+  // Converted from `search.matches` (a `List<SearchMatch>`, Flutter-free
+  // by design — see `SearchIndex`'s own doc comment) to the `TextRange`s
+  // `TextSpanRenderer.renderSpan` actually wants. Memoized by reference
+  // to the *source* list rather than recomputed every `buildTextSpan`
+  // call: `SearchIndex.matches` already returns a stable reference that
+  // only changes when the match set itself does, and `renderSpan`'s own
+  // cache compares `allMatchesRanges` by `identical()` — recomputing a
+  // fresh list here on every call (even with identical matches) would
+  // silently defeat that cache on every keystroke while a search is
+  // active.
+  List<SearchMatch>? _allMatchesRangesSource;
+  List<TextRange>? _allMatchesRanges;
+
+  List<TextRange>? get _currentAllMatchesRanges {
+    final source = search.matches;
+    if (source.isEmpty) return null;
+    if (!identical(_allMatchesRangesSource, source)) {
+      _allMatchesRangesSource = source;
+      _allMatchesRanges = source
+          .map((m) => TextRange(start: m.start, end: m.end))
+          .toList(growable: false);
+    }
+    return _allMatchesRanges;
+  }
 
   @override
   TextSpan buildTextSpan({
@@ -941,21 +1217,24 @@ class RichEditorController extends TextEditingController {
       document,
       style: style,
       composingRange: withComposing ? value.composing : null,
-      matchHighlightRange: match != null ? TextRange(start: match.start, end: match.end) : null,
+      matchHighlightRange: match != null
+          ? TextRange(start: match.start, end: match.end)
+          : null,
       selectionHighlightRange: _selectionHighlight,
+      allMatchesRanges: _currentAllMatchesRanges,
     );
     assert(() {
       final renderedLength = span.toPlainText().length;
       if (renderedLength != document.text.length) {
         throw FlutterError(
           'TextSpanRenderer produced a span of $renderedLength characters '
-              'but the document text is ${document.text.length} characters. '
-              'RenderEditable maps every tap, drag, and selection-handle '
-              'position against whatever buildTextSpan returns — a length '
-              'mismatch here is exactly the kind of bug that makes selection '
-              'and the caret behave incorrectly without any other visible '
-              'symptom. Check AttributeStore spans for offsets outside the '
-              'current text length.',
+          'but the document text is ${document.text.length} characters. '
+          'RenderEditable maps every tap, drag, and selection-handle '
+          'position against whatever buildTextSpan returns — a length '
+          'mismatch here is exactly the kind of bug that makes selection '
+          'and the caret behave incorrectly without any other visible '
+          'symptom. Check AttributeStore spans for offsets outside the '
+          'current text length.',
         );
       }
       return true;

@@ -35,6 +35,13 @@ class RichTextRenderTheme {
   /// attribute applied.
   final Color matchHighlightColor;
 
+  /// Background color for every *other* search match — see
+  /// `TextSpanRenderer.renderSpan`'s `allMatchesRanges`. A paler variant
+  /// of [matchHighlightColor] by default (same hue, so "these are all
+  /// search matches" still reads as one family), so the *current* match
+  /// stays the one that visually pops.
+  final Color otherMatchesHighlightColor;
+
   /// Color applied to a literal list prefix (`'- '`, `'3. '`, etc.) at
   /// the start of a paragraph — see `TextSpanRenderer._listPrefixStyle`.
   /// Purely presentational: the prefix is ordinary document text styled
@@ -52,6 +59,7 @@ class RichTextRenderTheme {
     this.linkColor = const Color(0xFF1A73E8),
     this.codeFontFamily = 'monospace',
     this.matchHighlightColor = const Color(0xFFFFA726),
+    this.otherMatchesHighlightColor = const Color(0x66FFA726),
     this.listMarkerColor = const Color(0xFF757575),
   });
 
@@ -67,6 +75,7 @@ class RichTextRenderTheme {
     Color? linkColor,
     String? codeFontFamily,
     Color? matchHighlightColor,
+    Color? otherMatchesHighlightColor,
     Color? listMarkerColor,
   }) {
     return RichTextRenderTheme(
@@ -79,6 +88,7 @@ class RichTextRenderTheme {
       linkColor: linkColor ?? this.linkColor,
       codeFontFamily: codeFontFamily ?? this.codeFontFamily,
       matchHighlightColor: matchHighlightColor ?? this.matchHighlightColor,
+      otherMatchesHighlightColor: otherMatchesHighlightColor ?? this.otherMatchesHighlightColor,
       listMarkerColor: listMarkerColor ?? this.listMarkerColor,
     );
   }
@@ -96,6 +106,7 @@ class RichTextRenderTheme {
         other.linkColor == linkColor &&
         other.codeFontFamily == codeFontFamily &&
         other.matchHighlightColor == matchHighlightColor &&
+        other.otherMatchesHighlightColor == otherMatchesHighlightColor &&
         other.listMarkerColor == listMarkerColor;
   }
 
@@ -110,6 +121,7 @@ class RichTextRenderTheme {
     linkColor,
     codeFontFamily,
     matchHighlightColor,
+    otherMatchesHighlightColor,
     listMarkerColor,
   );
 }
