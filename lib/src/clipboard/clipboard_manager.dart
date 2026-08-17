@@ -90,18 +90,29 @@ class ClipboardManager {
       return null;
     }
 
-    // Normalized purely for comparison, never for what actually gets
-    // pasted: `rich.text` comes from our own in-memory delegate,
-    // untouched by the OS — it's `plainText` (round-tripped through the
-    // real system clipboard) that some platforms may have normalized
-    // '\n' to '\r\n' on the way. Comparing raw could spuriously miss an
-    // exact, same-session copy that should have taken the rich path,
-    // falling through to a plain-text paste — losing formatting despite
-    // the correct data still being right there in `rich`. Never
-    // normalizing what's actually inserted matters: stripping '\r'
-    // characters from text whose attributes were computed against its
-    // original length would shift every offset after the strip point.
-    final normalizedPlainText = plainText?.replaceAll('\r\n', '\n');
+    // `plainText` (round-tripped through the real system clipboard) may
+    // have '\n' normalized to '\r\n' on the way — Windows clipboard text
+    // conventionally does exactly this, confirmed live: a multi-line
+    // paste with URLs each followed by ',\r\n' failed to autolink *any*
+    // of them, a real, reported bug. `isAutolinkBoundary` only
+    // recognizes space/'\n'/tab, not '\r' — so a trailing '\r' before
+    // the real newline was treated as part of the URL token, which then
+    // also defeated `_trailingPunctuation`'s trim (anchored at the
+    // string end, which was now '\r', not the comma before it) and left
+    // a literal control character embedded in what got handed to
+    // `Uri.tryParse`, failing to parse for every affected line.
+    //
+    // Normalizing here and using `text` (not `plainText`) for every
+    // plain-text-path decision below (Markdown heuristic, autolink
+    // detection, and what's actually pasted) is safe precisely because
+    // it's the *only* transform ever applied to this string on this
+    // path: text and any attributes computed from it (in
+    // [_withAutolinks]) are always offsets into this same, single,
+    // already-normalized string — never a mix of two different lengths
+    // the way pasting `rich.text` (from `delegate`, never touched by the
+    // OS, never containing '\r' to begin with) unmodified alongside
+    // separately-normalized comparison text is.
+    final normalizedPlainText = plainText?.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 
     final rich = delegate?.read();
     if (rich != null && rich.text == normalizedPlainText) {
@@ -114,35 +125,54 @@ class ClipboardManager {
       // Only use the rich import if it actually found formatting or
       // meaningful structure.
       if (parsed.attributes.isNotEmpty || (normalizedPlainText != null && parsed.text != normalizedPlainText)) {
-        return commands.pasteRich(selection, parsed.text, parsed.attributes);
+        // A bare URL pasted from, say, a browser's address bar often
+        // arrives as HTML with no anchor tag at all (plain unstyled
+        // text) — `parsed.attributes` alone would be empty here, and
+        // without this, that URL would never get linkified: this
+        // branch never falls through to the plain-text autolink
+        // fallback below once it's chosen the HTML path.
+        return commands.pasteRich(selection, parsed.text, _withAutolinks(parsed.text, parsed.attributes));
       }
     }
 
     // 2. Fallback to heuristic Markdown detection on the plain text version
-    if (plainText != null && plainText.isNotEmpty) {
-      if (_looksLikeMarkdown(plainText)) {
-        final parsed = const MarkdownImporter().parse(plainText);
+    if (normalizedPlainText != null && normalizedPlainText.isNotEmpty) {
+      final text = normalizedPlainText;
+      if (_looksLikeMarkdown(text)) {
+        final parsed = const MarkdownImporter().parse(text);
         if (parsed.attributes.isNotEmpty) {
-          return commands.pasteRich(selection, parsed.text, parsed.attributes);
+          return commands.pasteRich(selection, parsed.text, _withAutolinks(parsed.text, parsed.attributes));
         }
       }
 
       // 3. Final fallback: plain text with autolink detection
-      final urls = detectAllUrls(plainText);
-      if (urls.isNotEmpty) {
-        final attributes = urls.map((u) => TextAttribute(
-          start: u.start,
-          end: u.end,
-          type: AttributeType.link,
-          value: u.href,
-        )).toList();
-        return commands.pasteRich(selection, plainText, attributes);
+      final withAutolinks = _withAutolinks(text, const []);
+      if (withAutolinks.isNotEmpty) {
+        return commands.pasteRich(selection, text, withAutolinks);
       }
 
-      return commands.paste(selection, plainText);
+      return commands.paste(selection, text);
     }
 
     return null;
+  }
+
+  /// `attributes` (as already produced by whichever import path ran —
+  /// rich delegate excluded; see the call sites) plus a synthesized
+  /// [AttributeType.link] for every [detectAllUrls] match in `text` that
+  /// isn't already covered by one of `attributes`' own link spans.
+  /// Shared by every paste path below so a bare URL can't silently slip
+  /// through un-linkified just because it happened to arrive via HTML or
+  /// Markdown rather than plain text.
+  List<TextAttribute> _withAutolinks(String text, List<TextAttribute> attributes) {
+    final urls = detectAllUrls(text);
+    if (urls.isEmpty) return attributes;
+
+    final autolinks = urls
+        .where((u) => !attributes.any((a) => a.type == AttributeType.link && a.intersects(u.start, u.end)))
+        .map((u) => TextAttribute(start: u.start, end: u.end, type: AttributeType.link, value: u.href));
+
+    return autolinks.isEmpty ? attributes : [...attributes, ...autolinks];
   }
 
   bool _looksLikeMarkdown(String text) {

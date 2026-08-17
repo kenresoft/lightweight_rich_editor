@@ -112,14 +112,35 @@ class HtmlImporter {
       StringBuffer buffer,
       List<TextAttribute> attributes,
       List<_StyleFrame> stack,
-      _ListContext? currentList,
-      ) {
+      _ListContext? currentList, {
+        int? suppressBreakAt,
+      }) {
     if (node is dom.Text) {
       var content = node.text.replaceAll(RegExp(r'\s+'), ' ');
       if (content.isEmpty) return;
 
-      // Avoid double spaces at boundaries if one already exists
-      if (content == ' ' && buffer.toString().endsWith(' ')) return;
+      // A text node that collapses to nothing but a single space is
+      // insignificant *inter-tag* whitespace (indentation/newlines in
+      // pretty-printed source HTML between sibling elements) whenever it
+      // sits at a boundary that doesn't need it: the very start of the
+      // output, right after a block element's own trailing newline, or
+      // right after another already-collapsed space. Real browsers
+      // collapse this same whitespace away when laying out block-level
+      // content — without doing the same here, a `<ul>`/`<ol>` (or any
+      // pretty-printed block markup) with newlines between its `<li>`
+      // tags in the source would paste each one of those newlines in as
+      // a literal lone-space "blank" line between list items, and
+      // likewise between paragraphs — a real, reported bug ("web content
+      // pasted adds extra lines... even lists"). Only a boundary
+      // triggers the skip; whitespace between genuine inline content
+      // (`'Hello <b>world</b>'`) still needs its space and is untouched,
+      // since the buffer there ends in real text, not a boundary.
+      if (content == ' ' &&
+          (buffer.isEmpty ||
+              buffer.toString().endsWith(' ') ||
+              buffer.toString().endsWith('\n'))) {
+        return;
+      }
 
       final start = buffer.length;
       buffer.write(content);
@@ -152,7 +173,10 @@ class HtmlImporter {
     if (tag == 'script' || tag == 'style') return;
 
     final isBlock = _blockTags.contains(tag);
-    if (isBlock && buffer.isNotEmpty && !buffer.toString().endsWith('\n')) {
+    if (isBlock &&
+        buffer.isNotEmpty &&
+        !buffer.toString().endsWith('\n') &&
+        buffer.length != suppressBreakAt) {
       buffer.write('\n');
     }
 
@@ -165,6 +189,11 @@ class HtmlImporter {
     // null) just falls through to plain block text, unchanged from
     // before.
     var childListContext = currentList;
+    // The buffer length to hand to this element's own children as their
+    // `suppressBreakAt` — normally just whatever was passed to this call
+    // (propagated unchanged through plain containers), except right
+    // after writing a list-item marker below, which sets a fresh one.
+    var childSuppressBreakAt = suppressBreakAt;
     if (tag == 'ul') {
       childListContext = _ListContext(false, (currentList?.depth ?? 0) + 1);
     } else if (tag == 'ol') {
@@ -182,6 +211,22 @@ class HtmlImporter {
       if (!alreadyHasPrefix) {
         final indent = currentList.indent;
         buffer.write(currentList.ordered ? '$indent${currentList.next()}. ' : '$indent- ');
+        // The marker was just written specifically to have this list
+        // item's own content glued directly after it — but that content
+        // is very commonly wrapped in its own block tag by real-world
+        // sources (Google Docs/Notion/Word HTML exports routinely emit
+        // `<li><p>text</p></li>`), and that wrapper's own leading-break
+        // check above would otherwise see "buffer doesn't end with \n"
+        // (it ends with the marker's trailing space) and push the
+        // content onto its own line — leaving the marker orphaned alone
+        // on the line above it, a real, reported bug ("bullet on one
+        // line, text under it on the next"). Recording the buffer length
+        // right after the marker, and comparing against it above, lets
+        // exactly one block wrapper (however deeply nested, as long as
+        // nothing else has written to the buffer yet) skip that break; the
+        // instant any real content is written, `buffer.length` moves past
+        // this point and later siblings/blocks break normally again.
+        childSuppressBreakAt = buffer.length;
       } else if (currentList.ordered) {
         currentList.next();
       }
@@ -212,7 +257,8 @@ class HtmlImporter {
     }
 
     for (final child in node.nodes) {
-      _walk(child, buffer, attributes, currentStack, childListContext);
+      _walk(child, buffer, attributes, currentStack, childListContext,
+          suppressBreakAt: childSuppressBreakAt);
     }
 
     if (isBlock && buffer.isNotEmpty && !buffer.toString().endsWith('\n')) {

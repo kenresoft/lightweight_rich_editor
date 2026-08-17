@@ -205,4 +205,70 @@ void main() {
       expect(h.search.matchCount, 0);
     });
   });
+
+  group('SearchIndex.matches — referential stability', () {
+    test('returns the identical list instance across reads with no change in between', () {
+      final h = _harness('the cat sat on the mat');
+      h.search.search('at');
+
+      final first = h.search.matches;
+      final second = h.search.matches;
+
+      expect(identical(first, second), isTrue);
+    });
+
+    test('returns a new list instance after a new search', () {
+      final h = _harness('the cat sat on the mat');
+      h.search.search('at');
+      final first = h.search.matches;
+
+      h.search.search('the');
+
+      expect(identical(first, h.search.matches), isFalse);
+    });
+
+    test('returns a new list instance after clear', () {
+      final h = _harness('cat cat');
+      h.search.search('cat');
+      final first = h.search.matches;
+
+      h.search.clear();
+
+      expect(identical(first, h.search.matches), isFalse);
+      expect(h.search.matches, isEmpty);
+    });
+
+    test('returns a new list instance after refresh actually changes matches', () {
+      final h = _harness('cat');
+      h.search.search('cat');
+      final first = h.search.matches;
+
+      h.document.reset('cat cat');
+      h.search.refresh();
+
+      expect(identical(first, h.search.matches), isFalse);
+    });
+  });
+
+  group('SearchIndex.matchSelections', () {
+    test('converts every match to an EditorSelection with the same bounds', () {
+      final h = _harness('the cat sat on the mat');
+      h.search.search('at');
+
+      final selections = h.search.matchSelections;
+
+      expect(selections.length, h.search.matchCount);
+      for (var i = 0; i < selections.length; i++) {
+        expect(selections[i].start, h.search.matches[i].start);
+        expect(selections[i].end, h.search.matches[i].end);
+      }
+    });
+
+    test('is empty when there are no matches', () {
+      final h = _harness('hello world');
+      h.search.search('xyz');
+
+      expect(h.search.matchSelections, isEmpty);
+    });
+  });
 }

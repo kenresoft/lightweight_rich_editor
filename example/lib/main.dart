@@ -30,33 +30,24 @@ class EditorHomeScreen extends StatefulWidget {
 }
 
 class _EditorHomeScreenState extends State<EditorHomeScreen> {
-  late RichEditorController _controller;
-  final ScrollController _scrollController = ScrollController();
+  // Supplied explicitly (rather than left to `LightweightRichEditor` to
+  // create internally) because this screen needs to reach it for two
+  // things: Save/Load, and swapping themes on dark-mode toggle. A screen
+  // that needed neither could just use `LightweightRichEditor(
+  // initialText: ...)` with no controller at all.
+  late final RichEditorController _controller = RichEditorController(
+    text:
+        'This is a clean, lightweight rich-text editor.\n\n'
+        'Try toggling Dark Mode in the top right to see the configuration system in action!',
+    initialAttributes: [
+      const TextAttribute(start: 35, end: 41, type: AttributeType.bold),
+    ],
+    theme: RichTextRenderTheme.standard,
+  );
 
-  bool _showMarginLine = true;
-  RuledLineStyle _lineStyle = RuledLineStyle.solid;
   bool _isDarkMode = false;
-  bool _showFindBar = false;
 
-  EditorDocument? _internalStorage;
-
-  @override
-  void initState() {
-    super.initState();
-    _initController();
-  }
-
-  void _initController() {
-    final renderTheme = _isDarkMode ? _darkRenderTheme : RichTextRenderTheme.standard;
-    _controller = RichEditorController(
-      text: 'This is a clean, lightweight rich-text editor.\n\n'
-          'Try toggling Dark Mode in the top right to see the configuration system in action!',
-      initialAttributes: [
-        TextAttribute(start: 35, end: 41, type: AttributeType.bold),
-      ],
-      theme: renderTheme,
-    );
-  }
+  ({String text, List<TextAttribute> attributes})? _internalStorage;
 
   static const _darkRenderTheme = RichTextRenderTheme(
     highlightColor: Color(0xFF4A148C),
@@ -70,7 +61,10 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
 
   void _handleSave() {
     setState(() {
-      _internalStorage = _controller.document;
+      _internalStorage = (
+        text: _controller.document.text,
+        attributes: List<TextAttribute>.from(_controller.document.attributes),
+      );
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Note saved to internal memory')),
@@ -83,55 +77,48 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
         _internalStorage!.text,
         _internalStorage!.attributes,
       );
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Note restored perfectly')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Note restored perfectly')));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No saved note found')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No saved note found')));
     }
   }
 
-  void _toggleMargin() {
-    setState(() {
-      _showMarginLine = !_showMarginLine;
-    });
-  }
-
-  void _cycleLineStyle() {
-    setState(() {
-      if (_lineStyle == RuledLineStyle.solid) {
-        _lineStyle = RuledLineStyle.dashed;
-      } else if (_lineStyle == RuledLineStyle.dashed) {
-        _lineStyle = RuledLineStyle.none;
-      } else {
-        _lineStyle = RuledLineStyle.solid;
-      }
-    });
-  }
-
   void _toggleDarkMode() {
-    final docText = _controller.document.text;
-    final docAttrs = _controller.document.attributes;
     setState(() {
       _isDarkMode = !_isDarkMode;
-      _controller.dispose();
-      _initController();
-      _controller.loadDocument(docText, docAttrs);
+      // `TextSpanRenderer.theme` is deliberately mutable for exactly
+      // this: reassigning it in place, then letting this `setState`
+      // rebuild `LightweightRichEditor` with the matching `editorStyle`,
+      // is enough to fully re-theme the editor. No dispose/recreate/
+      // reload round-trip of the controller needed -- text, selection,
+      // and undo history all stay exactly as they were.
+      _controller.renderer.theme = _isDarkMode
+          ? _darkRenderTheme
+          : RichTextRenderTheme.standard;
     });
+    // This button lives in this app's own AppBar, outside the library's
+    // FormatToolbar -- so it doesn't get the toolbar's built-in focus
+    // fix for free. See `RichEditorController.reclaimFocus`'s doc
+    // comment: without this, the next character typed after toggling
+    // dark mode is silently dropped.
+    _controller.reclaimFocus();
   }
 
   @override
   void dispose() {
     _controller.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final backgroundColor = _isDarkMode ? const Color(0xFF263238) : const Color(0xFFFDFBF7);
+    final backgroundColor = _isDarkMode
+        ? const Color(0xFF263238)
+        : const Color(0xFFFDFBF7);
     final textColor = _isDarkMode ? Colors.white70 : Colors.black87;
 
     return Scaffold(
@@ -142,49 +129,32 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
         elevation: 1,
         actions: [
           IconButton(
-            icon: Icon(_isDarkMode ? Icons.light_mode : Icons.dark_mode, color: textColor),
+            icon: Icon(
+              _isDarkMode ? Icons.light_mode : Icons.dark_mode,
+              color: textColor,
+            ),
             onPressed: _toggleDarkMode,
           ),
         ],
       ),
-      body: Column(
-        children: [
-          FormatToolbar(
-            controller: _controller,
-            showMargin: _showMarginLine,
-            onToggleMargin: _toggleMargin,
-            lineStyle: _lineStyle,
-            onToggleLineStyle: _cycleLineStyle,
-            onSave: _handleSave,
-            onLoad: _handleLoad,
-            onToggleFind: () => setState(() => _showFindBar = !_showFindBar),
-            findVisible: _showFindBar,
+      body: Theme(
+        data: Theme.of(context).copyWith(
+          textSelectionTheme: TextSelectionThemeData(
+            selectionColor: _isDarkMode
+                ? Colors.cyan.withValues(alpha: 0.3)
+                : Colors.deepPurple.withValues(alpha: 0.2),
+            selectionHandleColor: _isDarkMode ? Colors.cyan : Colors.deepPurple,
+            cursorColor: _isDarkMode ? Colors.cyan : Colors.deepPurple,
           ),
-          if (_showFindBar)
-            FindReplaceBar(
-              controller: _controller,
-              onClose: () => setState(() => _showFindBar = false),
-            ),
-          Expanded(
-            child: Theme(
-              data: Theme.of(context).copyWith(
-                textSelectionTheme: TextSelectionThemeData(
-                  selectionColor: _isDarkMode ? Colors.cyan.withValues(alpha: 0.3) : Colors.deepPurple.withValues(alpha: 0.2),
-                  selectionHandleColor: _isDarkMode ? Colors.cyan : Colors.deepPurple,
-                  cursorColor: _isDarkMode ? Colors.cyan : Colors.deepPurple,
-                ),
-              ),
-              child: RichTextEditor(
-                controller: _controller,
-                scrollController: _scrollController,
-                showMargin: _showMarginLine,
-                lineStyle: _lineStyle,
-                editorStyle: _isDarkMode ? _darkEditorStyle : RichEditorStyle.standard,
-                onToggleFind: () => setState(() => _showFindBar = !_showFindBar),
-              ),
-            ),
-          ),
-        ],
+        ),
+        child: LightweightRichEditor(
+          controller: _controller,
+          editorStyle: _isDarkMode
+              ? _darkEditorStyle
+              : RichEditorStyle.standard,
+          onSave: _handleSave,
+          onLoad: _handleLoad,
+        ),
       ),
     );
   }

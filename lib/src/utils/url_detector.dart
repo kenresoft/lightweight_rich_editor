@@ -41,6 +41,18 @@ const _commonTlds = {
   'me', 'info', 'biz', 'us', 'uk', 'ca', 'de', 'fr', 'jp', 'cn', 'in',
 };
 
+/// Trailing characters trimmed off a token before treating it as a URL
+/// — shared by [detectUrlBeforeBoundary] and [detectAllUrls] so a
+/// sentence-ending `.`/`,`/etc. right after a URL never becomes part of
+/// the link either way a URL gets detected, live-typed or pasted.
+/// Deliberately not treated as an [isAutolinkBoundary] character itself
+/// (see that function's doc comment on why boundary detection stays
+/// narrow) — trimming happens *after* the token is already found, so a
+/// URL is still only ever considered "finished" once a real boundary
+/// char follows it, just without dragging trailing punctuation along
+/// for the ride once it has.
+final RegExp _trailingPunctuation = RegExp(r'[.,!?;:]+$');
+
 /// Looks for a URL-shaped token immediately before [boundaryIndex] in
 /// [text] — `text[boundaryIndex]` is the boundary char itself (e.g.
 /// the space just typed) and is excluded from the token. Returns
@@ -59,13 +71,21 @@ DetectedUrl? detectUrlBeforeBoundary(String text, int boundaryIndex) {
   while (start > 0 && !isAutolinkBoundary(text[start - 1])) {
     start--;
   }
-  final token = text.substring(start, boundaryIndex);
+  var end = boundaryIndex;
+  var token = text.substring(start, end);
   if (token.isEmpty) return null;
+
+  final trimMatch = _trailingPunctuation.firstMatch(token);
+  if (trimMatch != null) {
+    end -= trimMatch.group(0)!.length;
+    token = text.substring(start, end);
+    if (token.isEmpty) return null;
+  }
 
   final href = normalizeUrlToken(token);
   if (href == null) return null;
 
-  return DetectedUrl(start: start, end: boundaryIndex, href: href);
+  return DetectedUrl(start: start, end: end, href: href);
 }
 
 /// Finds all URL-shaped tokens in [text] and returns them as [DetectedUrl]s.
@@ -86,12 +106,14 @@ List<DetectedUrl> detectAllUrls(String text) {
     }
 
     var token = text.substring(start, end);
-    
-    // Trim trailing punctuation that isn't part of a URL
+
+    // Trim trailing punctuation that isn't part of a URL -- same rule
+    // (and same shared pattern) detectUrlBeforeBoundary applies.
     var trimmedEnd = end;
-    while (token.isNotEmpty && RegExp(r'[.,!?;:]$').hasMatch(token)) {
-      token = token.substring(0, token.length - 1);
-      trimmedEnd--;
+    final trimMatch = _trailingPunctuation.firstMatch(token);
+    if (trimMatch != null) {
+      trimmedEnd -= trimMatch.group(0)!.length;
+      token = text.substring(start, trimmedEnd);
     }
 
     final href = normalizeUrlToken(token);

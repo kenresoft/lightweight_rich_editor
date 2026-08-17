@@ -105,4 +105,66 @@ void main() {
       expect(result.attributes.where((a) => a.type == AttributeType.textDirection), isEmpty);
     });
   });
+
+  group('HtmlImporter — lists', () {
+    test('a tightly-written bullet list has no blank lines between items', () {
+      final result = importer.parse('<ul><li>Item one</li><li>Item two</li></ul>');
+      expect(result.text, '  - Item one\n  - Item two');
+    });
+
+    // Regression test for a real, reported bug: real-world HTML sources
+    // (a browser's "Copy" on a rendered page, Google Docs, Notion, Word)
+    // pretty-print their markup with a newline + indentation between
+    // sibling tags. Before this fix, each of those insignificant
+    // whitespace-only text nodes between <li> siblings got written into
+    // the output as a literal lone space, and — because that space
+    // didn't count as "the buffer already ends with a newline" — the
+    // next <li>'s own block-boundary check inserted an *additional* '\n'
+    // on top of it, producing a blank-looking line between every item.
+    test('a pretty-printed bullet list (newlines/indentation between <li> tags) has no blank lines between items', () {
+      const html = '<ul>\n  <li>Item one</li>\n  <li>Item two</li>\n</ul>';
+      final result = importer.parse(html);
+      expect(result.text, '  - Item one\n  - Item two');
+    });
+
+    test('a pretty-printed ordered list has no blank lines and numbers correctly', () {
+      const html = '<ol>\n  <li>First</li>\n  <li>Second</li>\n  <li>Third</li>\n</ol>';
+      final result = importer.parse(html);
+      expect(result.text, '  1. First\n  2. Second\n  3. Third');
+    });
+
+    // Regression test for the other half of the same reported bug: a
+    // <li> whose own content is wrapped in a nested block element (very
+    // common in real-world exports — Google Docs/Notion/Word HTML all
+    // routinely emit `<li><p>text</p></li>` rather than a bare text
+    // node) used to have its marker pushed onto its own line, orphaned,
+    // with the item's actual text starting on the *next* line instead of
+    // right after the marker — "bullet on one line, text under it in
+    // the next line".
+    test('a <li> wrapping its content in a <p> keeps the marker and text on the same line', () {
+      final result = importer.parse('<ul><li><p>Item one</p></li></ul>');
+      expect(result.text, '  - Item one');
+    });
+
+    test('a <li> with a doubly-nested block wrapper (<div><p>) still keeps marker and text together', () {
+      final result = importer.parse('<ul><li><div><p>Item one</p></div></li></ul>');
+      expect(result.text, '  - Item one');
+    });
+
+    test('only the first block child of a <li> is glued to the marker — a second one still breaks', () {
+      final result = importer.parse('<ul><li><p>First</p><p>Second</p></li></ul>');
+      expect(result.text, '  - First\nSecond');
+    });
+
+    test('pretty-printed paragraphs have no blank line inserted between them', () {
+      const html = '<div>\n  <p>First paragraph</p>\n  <p>Second paragraph</p>\n</div>';
+      final result = importer.parse(html);
+      expect(result.text, 'First paragraph\nSecond paragraph');
+    });
+
+    test('whitespace between genuine inline content is still preserved', () {
+      final result = importer.parse('<p>Hello <b>world</b></p>');
+      expect(result.text, 'Hello world');
+    });
+  });
 }

@@ -49,9 +49,28 @@ class SearchIndex {
   List<SearchMatch> _matches = const [];
   int _currentIndex = -1;
 
+  // Wrapping in `List.unmodifiable` fresh on every [matches] read would
+  // mean two calls immediately back-to-back are never `identical`, even
+  // with nothing changed in between — exactly the kind of referential
+  // instability that defeats a caller trying to cache off of it (e.g.
+  // `RichEditorController.buildTextSpan`, which needs to know whether
+  // the match set actually changed before it's safe to skip rebuilding
+  // the highlight ranges it hands to `TextSpanRenderer`). Cached here
+  // instead: the same wrapper is returned until `_matches` itself is
+  // reassigned.
+  List<SearchMatch>? _matchesView;
+
   String get query => _query;
 
-  List<SearchMatch> get matches => List.unmodifiable(_matches);
+  List<SearchMatch> get matches => _matchesView ??= List.unmodifiable(_matches);
+
+  /// [matches] converted to [EditorSelection]s — the framework-agnostic
+  /// shape a host doing its own programmatic highlighting/navigation
+  /// (rather than going through [FindReplaceBar]) most likely wants,
+  /// since it's what the rest of this library's public selection-facing
+  /// API already speaks in.
+  List<EditorSelection> get matchSelections =>
+      matches.map((m) => EditorSelection(baseOffset: m.start, extentOffset: m.end)).toList(growable: false);
 
   int get matchCount => _matches.length;
 
@@ -68,8 +87,13 @@ class SearchIndex {
     _query = query;
     _caseSensitive = caseSensitive;
     _wholeWord = wholeWord;
-    _matches = query.isEmpty ? const [] : _findAll(query, caseSensitive: caseSensitive, wholeWord: wholeWord);
+    _setMatches(query.isEmpty ? const [] : _findAll(query, caseSensitive: caseSensitive, wholeWord: wholeWord));
     _currentIndex = _matches.isEmpty ? -1 : 0;
+  }
+
+  void _setMatches(List<SearchMatch> value) {
+    _matches = value;
+    _matchesView = null;
   }
 
   /// Re-runs the last search against the document's current text.
@@ -83,7 +107,7 @@ class SearchIndex {
 
   void clear() {
     _query = '';
-    _matches = const [];
+    _setMatches(const []);
     _currentIndex = -1;
   }
 

@@ -383,6 +383,29 @@ void main() {
       expect(matchSegment.style!.backgroundColor, controller.renderer.theme.matchHighlightColor);
     });
 
+    testWidgets('buildTextSpan highlights every other match with otherMatchesHighlightColor', (tester) async {
+      final controller = RichEditorController(text: 'cat cat cat');
+      late BuildContext capturedContext;
+      await tester.pumpWidget(
+        Builder(
+          builder: (context) {
+            capturedContext = context;
+            return const SizedBox();
+          },
+        ),
+      );
+
+      controller.find('cat');
+      final span = controller.buildTextSpan(context: capturedContext, withComposing: false);
+      final matches = span.children!.cast<TextSpan>().where((c) => c.text == 'cat').toList();
+
+      expect(matches.length, 3);
+      expect(matches.first.style!.backgroundColor, controller.renderer.theme.matchHighlightColor);
+      for (final other in matches.skip(1)) {
+        expect(other.style!.backgroundColor, controller.renderer.theme.otherMatchesHighlightColor);
+      }
+    });
+
     test('a query with no results still notifies (clears any stale highlight)', () {
       // Regression test: searching for something with zero matches used
       // to skip notifyListeners entirely, which meant a *previous*
@@ -423,6 +446,124 @@ void main() {
       expect(controller.document.text, 'a different note');
       expect(controller.canUndo, isFalse);
       expect(controller.selection, const TextSelection.collapsed(offset: 0));
+    });
+  });
+
+  group('RichEditorController — sticky attributes do not leak past a range apply', () {
+    // Regression test for a real, reported bug: applying an attribute
+    // with a *value* (link) to a real selection used to also stash that
+    // value in EditingEngine's sticky-attributes map, on the theory that
+    // it mirrored "keep bolding as you keep typing right after a bolded
+    // selection". Nothing ever cleared it for a *non-collapsed* future
+    // selection change (syncStickyAttributesAt only runs when the new
+    // selection is collapsed) — so "select all" followed by any insertion
+    // (a plain-text paste, most visibly) picked the stale sticky link
+    // back up and applied the *previous* note's URL to text that has
+    // nothing to do with it.
+    test('linkifying a URL, then select-all + paste plain text, does not linkify the pasted text', () {
+      const url = 'https://example.com';
+      final controller = RichEditorController(text: url);
+      controller.value = controller.value.copyWith(
+        selection: TextSelection(baseOffset: 0, extentOffset: url.length),
+      );
+
+      controller.setLink(url);
+      expect(controller.document.attributes.any((a) => a.type == AttributeType.link), isTrue);
+
+      // Select all, then paste plain text over it — the pasted text
+      // shares nothing with the link that used to be there.
+      controller.value = controller.value.copyWith(
+        selection: TextSelection(baseOffset: 0, extentOffset: url.length),
+      );
+      controller.pasteText('just some plain text');
+
+      expect(controller.document.text, 'just some plain text');
+      expect(controller.document.attributes.any((a) => a.type == AttributeType.link), isFalse);
+    });
+
+    test('bolding a selection, then select-all + paste plain text, does not bold the pasted text', () {
+      final controller = RichEditorController(text: 'hello world');
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection(baseOffset: 0, extentOffset: 11),
+      );
+
+      controller.toggleBold();
+      expect(controller.document.attributes.any((a) => a.type == AttributeType.bold), isTrue);
+
+      controller.value = controller.value.copyWith(
+        selection: const TextSelection(baseOffset: 0, extentOffset: 11),
+      );
+      controller.pasteText('fresh text');
+
+      expect(controller.document.text, 'fresh text');
+      expect(controller.document.attributes.any((a) => a.type == AttributeType.bold), isFalse);
+    });
+  });
+
+  group('RichEditorController.pasteText — autolinking', () {
+    // Regression test for a real, reported bug: only `paste()` (the
+    // async, system-clipboard path via ClipboardManager) ran autolink
+    // detection over pasted text. `pasteText` — the direct, synchronous
+    // "insert this plain text" API a host might use for drag-and-drop, a
+    // share-sheet handoff, or its own "insert" action — never did,
+    // leaving a pasted bare URL sitting unlinked until the user
+    // separately typed a boundary character right after it.
+    test('a bare URL pasted via pasteText is linkified immediately, with no trailing keystroke needed', () {
+      final controller = RichEditorController();
+      controller.pasteText('visit https://example.com today');
+
+      final link = controller.document.attributes.singleWhere((a) => a.type == AttributeType.link);
+      expect(controller.document.text.substring(link.start, link.end), 'https://example.com');
+      expect(link.value, 'https://example.com');
+    });
+
+    test('pasted text with no URL is unaffected', () {
+      final controller = RichEditorController();
+      controller.pasteText('just some plain text');
+
+      expect(controller.document.text, 'just some plain text');
+      expect(controller.document.attributes, isEmpty);
+    });
+
+    test('the non-URL portion of the pasted text still inherits active sticky formatting', () {
+      final controller = RichEditorController(text: 'x');
+      controller.value = controller.value.copyWith(selection: const TextSelection.collapsed(offset: 1));
+      controller.toggleBold();
+
+      controller.pasteText('visit https://example.com today');
+
+      final bold = controller.document.attributes.singleWhere((a) => a.type == AttributeType.bold);
+      expect(controller.document.text.substring(bold.start, bold.end), 'visit https://example.com today');
+      final link = controller.document.attributes.singleWhere((a) => a.type == AttributeType.link);
+      expect(controller.document.text.substring(link.start, link.end), 'https://example.com');
+    });
+
+    // Regression test for a real, reported bug: pasting multi-line text
+    // with '\r\n' line endings (e.g. from Windows drag-and-drop or a
+    // share-sheet handoff -- exactly the sources this method's own doc
+    // comment names) failed to linkify affected URLs, and left stray
+    // '\r' characters embedded in the document text besides. See
+    // ClipboardManager.paste's matching fix for the full root-cause
+    // explanation (an un-normalized '\r' isn't a recognized autolink
+    // boundary, so it gets folded into the URL token and defeats the
+    // trailing-punctuation trim too).
+    test('URLs in \\r\\n-delimited pasted text are linkified, and no \\r survives in the document', () {
+      final controller = RichEditorController();
+      controller.pasteText(
+        'Production Apps:\r\n'
+        'https://play.google.com/store/apps/details?id=com.phunplan.phunplan, \r\n'
+        'https://apps.apple.com/app/6763565579,\r\n'
+        'https://play.google.com/store/apps/details?id=com.telomii.telomii,\r\n'
+        'https://play.google.com/store/apps/details?id=com.lfb.desktopbrowser',
+      );
+
+      final links = controller.document.attributes.where((a) => a.type == AttributeType.link).toList();
+      expect(links, hasLength(4));
+      expect(links[0].value, 'https://play.google.com/store/apps/details?id=com.phunplan.phunplan');
+      expect(links[1].value, 'https://apps.apple.com/app/6763565579');
+      expect(links[2].value, 'https://play.google.com/store/apps/details?id=com.telomii.telomii');
+      expect(links[3].value, 'https://play.google.com/store/apps/details?id=com.lfb.desktopbrowser');
+      expect(controller.document.text.contains('\r'), isFalse);
     });
   });
 }

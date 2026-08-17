@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:lightweight_rich_editor/src/controller/rich_editor_controller.dart';
@@ -138,5 +139,37 @@ void main() {
     await tester.pumpWidget(const SizedBox()); // unmounts FindReplaceBar
 
     expect(controller.search.matchCount, 0);
+  });
+
+  testWidgets('Escape closes the bar and clears the search', (tester) async {
+    final controller = RichEditorController(text: 'cat cat');
+    var closed = false;
+    await _pumpBar(tester, controller, onClose: () => closed = true);
+
+    await tester.enterText(find.byType(TextField).first, 'cat');
+    await tester.pump();
+    expect(controller.search.matchCount, 2);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+
+    expect(closed, isTrue);
+    expect(controller.search.matchCount, 0);
+  });
+
+  testWidgets('Shift+Enter in the query field navigates to the previous match', (tester) async {
+    final controller = RichEditorController(text: 'cat cat cat');
+    await _pumpBar(tester, controller);
+
+    await tester.enterText(find.byType(TextField).first, 'cat');
+    await tester.pump();
+    expect(find.text('1 of 3'), findsOneWidget);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+
+    expect(find.text('3 of 3'), findsOneWidget);
   });
 }

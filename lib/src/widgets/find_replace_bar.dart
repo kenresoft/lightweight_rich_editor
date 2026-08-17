@@ -1,6 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../controller/rich_editor_controller.dart';
+
+class _CloseFindIntent extends Intent {
+  const _CloseFindIntent();
+}
+
+class _PreviousMatchIntent extends Intent {
+  const _PreviousMatchIntent();
+}
 
 /// A find/replace bar wired to [RichEditorController.search].
 ///
@@ -67,7 +76,11 @@ class _FindReplaceBarState extends State<FindReplaceBar> {
   }
 
   void _runSearch(String query) {
-    widget.controller.find(query, caseSensitive: _caseSensitive, wholeWord: _wholeWord);
+    widget.controller.find(
+      query,
+      caseSensitive: _caseSensitive,
+      wholeWord: _wholeWord,
+    );
     setState(() {});
   }
 
@@ -108,117 +121,148 @@ class _FindReplaceBarState extends State<FindReplaceBar> {
         ? 'No results'
         : '${search.currentIndex + 1} of ${search.matchCount}';
 
-    return Material(
-      elevation: 2,
-      color: Theme.of(context).colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.escape): _CloseFindIntent(),
+        SingleActivator(LogicalKeyboardKey.enter, shift: true):
+            _PreviousMatchIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _CloseFindIntent: CallbackAction<_CloseFindIntent>(
+            onInvoke: (intent) {
+              _close();
+              return null;
+            },
+          ),
+          _PreviousMatchIntent: CallbackAction<_PreviousMatchIntent>(
+            onInvoke: (intent) {
+              if (search.matchCount > 0) _previous();
+              return null;
+            },
+          ),
+        },
+        child: Material(
+          elevation: 2,
+          color: Theme.of(context).colorScheme.surface,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                IconButton(
-                  icon: Icon(_showReplace ? Icons.expand_less : Icons.expand_more),
-                  tooltip: _showReplace ? 'Hide replace' : 'Show replace',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () => setState(() => _showReplace = !_showReplace),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _queryController,
-                    focusNode: _queryFocusNode,
-                    decoration: const InputDecoration(
-                      hintText: 'Find',
-                      isDense: true,
-                      border: InputBorder.none,
+                Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        _showReplace ? Icons.expand_less : Icons.expand_more,
+                      ),
+                      tooltip: _showReplace ? 'Hide replace' : 'Show replace',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () =>
+                          setState(() => _showReplace = !_showReplace),
                     ),
-                    onChanged: _runSearch,
-                    onSubmitted: (_) => _next(),
-                  ),
-                ),
-                if (hasQuery)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Text(
-                      matchLabel,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: noResults ? Theme.of(context).colorScheme.error : Colors.grey[600],
+                    Expanded(
+                      child: TextField(
+                        controller: _queryController,
+                        focusNode: _queryFocusNode,
+                        decoration: const InputDecoration(
+                          hintText: 'Find',
+                          isDense: true,
+                          border: InputBorder.none,
+                        ),
+                        onChanged: _runSearch,
+                        onSubmitted: (_) => _next(),
                       ),
                     ),
+                    if (hasQuery)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Text(
+                          matchLabel,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: noResults
+                                    ? Theme.of(context).colorScheme.error
+                                    : Colors.grey[600],
+                              ),
+                        ),
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_up),
+                      tooltip: 'Previous match',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: search.matchCount > 0 ? _previous : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_down),
+                      tooltip: 'Next match',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: search.matchCount > 0 ? _next : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Close',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _close,
+                    ),
+                  ],
+                ),
+                if (_showReplace)
+                  Row(
+                    children: [
+                      const SizedBox(width: 40),
+                      Expanded(
+                        child: TextField(
+                          controller: _replacementController,
+                          decoration: const InputDecoration(
+                            hintText: 'Replace',
+                            isDense: true,
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: search.matchCount > 0
+                            ? _replaceCurrent
+                            : null,
+                        child: const Text('Replace'),
+                      ),
+                      TextButton(
+                        onPressed: search.matchCount > 0 ? _replaceAll : null,
+                        child: const Text('Replace All'),
+                      ),
+                    ],
                   ),
-                IconButton(
-                  icon: const Icon(Icons.keyboard_arrow_up),
-                  tooltip: 'Previous match',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: search.matchCount > 0 ? _previous : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.keyboard_arrow_down),
-                  tooltip: 'Next match',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: search.matchCount > 0 ? _next : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  tooltip: 'Close',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _close,
+                Padding(
+                  padding: const EdgeInsets.only(left: 40, top: 2),
+                  child: Row(
+                    children: [
+                      _ToggleChip(
+                        label: 'Aa',
+                        tooltip: 'Case sensitive',
+                        selected: _caseSensitive,
+                        onChanged: (value) {
+                          setState(() => _caseSensitive = value);
+                          _runSearch(_queryController.text);
+                        },
+                      ),
+                      const SizedBox(width: 6),
+                      _ToggleChip(
+                        label: 'Word',
+                        tooltip: 'Whole word',
+                        selected: _wholeWord,
+                        onChanged: (value) {
+                          setState(() => _wholeWord = value);
+                          _runSearch(_queryController.text);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-            if (_showReplace)
-              Row(
-                children: [
-                  const SizedBox(width: 40),
-                  Expanded(
-                    child: TextField(
-                      controller: _replacementController,
-                      decoration: const InputDecoration(
-                        hintText: 'Replace',
-                        isDense: true,
-                        border: InputBorder.none,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: search.matchCount > 0 ? _replaceCurrent : null,
-                    child: const Text('Replace'),
-                  ),
-                  TextButton(
-                    onPressed: search.matchCount > 0 ? _replaceAll : null,
-                    child: const Text('Replace All'),
-                  ),
-                ],
-              ),
-            Padding(
-              padding: const EdgeInsets.only(left: 40, top: 2),
-              child: Row(
-                children: [
-                  _ToggleChip(
-                    label: 'Aa',
-                    tooltip: 'Case sensitive',
-                    selected: _caseSensitive,
-                    onChanged: (value) {
-                      setState(() => _caseSensitive = value);
-                      _runSearch(_queryController.text);
-                    },
-                  ),
-                  const SizedBox(width: 6),
-                  _ToggleChip(
-                    label: 'Word',
-                    tooltip: 'Whole word',
-                    selected: _wholeWord,
-                    onChanged: (value) {
-                      setState(() => _wholeWord = value);
-                      _runSearch(_queryController.text);
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
