@@ -29,3 +29,7 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 /build/
 /coverage/
+notes.txt
+architecture_dossier.md
+technical_investigation_report.md
+lib/ARCHITECTURE.md
