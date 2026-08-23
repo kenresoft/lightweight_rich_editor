@@ -24,18 +24,9 @@ class SearchMatch {
 
 /// Find and replace over an [EditorDocument].
 ///
-/// Named `SearchIndex` to match the original architecture's naming, but
-/// it's deliberately a plain linear scan, not an actual index data
-/// structure (trie, suffix array, etc.) — notes are small enough that
-/// `String.indexOf` in a loop is more than fast enough, and building a
-/// real index would be exactly the kind of premature optimization the
-/// product brief warns against. If this library is ever used on
-/// documents large enough for that to matter, this class is the seam
-/// where a real index would slot in without changing its API.
-///
-/// Search results are a *snapshot*, not a live view — they don't
-/// automatically track edits made after [search] runs. Call [refresh]
-/// after an edit if you want up-to-date matches; [replaceCurrent] and
+/// Results are a snapshot, not a live view — they don't automatically
+/// track edits made after [search] runs. Call [refresh] after an edit
+/// if you need [matches] to stay accurate; [replaceCurrent] and
 /// [replaceAll] already do this for you.
 class SearchIndex {
   final EditorDocument document;
@@ -49,26 +40,16 @@ class SearchIndex {
   List<SearchMatch> _matches = const [];
   int _currentIndex = -1;
 
-  // Wrapping in `List.unmodifiable` fresh on every [matches] read would
-  // mean two calls immediately back-to-back are never `identical`, even
-  // with nothing changed in between — exactly the kind of referential
-  // instability that defeats a caller trying to cache off of it (e.g.
-  // `RichEditorController.buildTextSpan`, which needs to know whether
-  // the match set actually changed before it's safe to skip rebuilding
-  // the highlight ranges it hands to `TextSpanRenderer`). Cached here
-  // instead: the same wrapper is returned until `_matches` itself is
-  // reassigned.
+  // Cached so repeated reads return the same `identical` instance until
+  // `_matches` is reassigned, letting callers cheaply detect changes.
   List<SearchMatch>? _matchesView;
 
   String get query => _query;
 
   List<SearchMatch> get matches => _matchesView ??= List.unmodifiable(_matches);
 
-  /// [matches] converted to [EditorSelection]s — the framework-agnostic
-  /// shape a host doing its own programmatic highlighting/navigation
-  /// (rather than going through [FindReplaceBar]) most likely wants,
-  /// since it's what the rest of this library's public selection-facing
-  /// API already speaks in.
+  /// [matches] converted to [EditorSelection]s, for hosts doing their
+  /// own highlighting/navigation instead of using [FindReplaceBar].
   List<EditorSelection> get matchSelections =>
       matches.map((m) => EditorSelection(baseOffset: m.start, extentOffset: m.end)).toList(growable: false);
 
@@ -97,9 +78,7 @@ class SearchIndex {
   }
 
   /// Re-runs the last search against the document's current text.
-  /// Matches don't update automatically as the document changes — call
-  /// this after an edit if you need [matches] to stay accurate. No-op if
-  /// nothing has been searched yet.
+  /// No-op if nothing has been searched yet.
   void refresh() {
     if (_query.isEmpty) return;
     search(_query, caseSensitive: _caseSensitive, wholeWord: _wholeWord);
@@ -129,15 +108,9 @@ class SearchIndex {
   }
 
   /// Replaces [currentMatch] with `replacement`, as one undoable edit,
-  /// then [refresh]es (offsets after the replaced match may have shifted
-  /// if `replacement.length != currentMatch.length`, and re-searching is
-  /// simpler and more robust than patching every remaining match's
-  /// offset by hand). This resets [currentIndex] to the first match, if
-  /// any remain — it does not try to preserve "the next match after this
-  /// one" across the reshuffle.
-  ///
-  /// Returns the resulting caret selection, or `null` if there's no
-  /// current match to replace.
+  /// then [refresh]es (resetting [currentIndex] to the first remaining
+  /// match). Returns the resulting caret selection, or `null` if there's
+  /// no current match.
   EditorSelection? replaceCurrent(String replacement) {
     final match = currentMatch;
     if (match == null) return null;
@@ -153,17 +126,13 @@ class SearchIndex {
   }
 
   /// Replaces every current match with `replacement`, as a single
-  /// undoable edit (one `CompositeCommand`, so one `undo()` reverts the
-  /// whole batch, not one match at a time). Matches are replaced back to
-  /// front internally so each one's captured offset stays valid as later
-  /// ones are edited — callers don't need to think about ordering.
-  ///
-  /// Clears the search afterward (the old match list no longer applies
-  /// to the edited text). Returns how many replacements were made.
+  /// undoable edit, and clears the search afterward. Returns the number
+  /// of replacements made.
   int replaceAll(String replacement) {
     if (_matches.isEmpty) return 0;
     final count = _matches.length;
 
+    // Back to front, so each match's offset stays valid as later ones are edited.
     final subCommands = _matches.reversed
         .map((match) => ReplaceRangeCommand(
       start: match.start,

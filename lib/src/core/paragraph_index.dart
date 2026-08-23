@@ -4,51 +4,29 @@ import 'paragraph_record.dart';
 
 /// Maintains one [ParagraphRecord] per paragraph in a document — the
 /// paragraph-level counterpart to `AttributeStore`'s character-range
-/// spans. See the block-architecture design notes for why these are two
-/// different mechanisms: `AttributeStore` fits properties that vary
-/// *within* a paragraph (bold covers these 8 characters); this fits
-/// properties that are constant *across* a whole paragraph (this
-/// paragraph is a heading).
-///
-/// Deliberately minimal for this phase: [ParagraphRecord.headerLevel]
-/// is the only populated field. Header is this structure's sole *live*
-/// representation — `AttributeType.header` still exists in the enum,
-/// but purely as the interchange format at the boundary with
-/// HTML/Markdown/clipboard (`HtmlExporter`/`MarkdownExporter`/
-/// `MarkdownImporter`/`HtmlImporter`/`EditingEngine.pasteRich`); nothing
-/// in the live editing/rendering/undo/toolbar path writes an
-/// `AttributeType.header` span anymore. See the block-architecture
-/// design notes for the full migration history.
+/// spans, for properties constant across a whole paragraph (e.g.
+/// heading level) rather than varying within it (e.g. bold).
 ///
 /// Records partition `[0, text.length]` with **no gaps** — every offset
-/// belongs to exactly one record. That's the one place this
-/// deliberately diverges from `AttributeStore`'s conventions:
-/// containment here is inclusive on *both* ends
-/// (`offset >= start && offset <= end`), not exclusive on the start side
-/// like `AttributeStore.shiftForInsertion`. `AttributeStore` can afford
-/// ambiguity at a span boundary because unformatted gaps between spans
-/// are allowed; a paragraph boundary can't be left unowned, so this
-/// can't use the same convention. The invariant
-/// `records[i].end + 1 == records[i+1].start` (the `'\n'` itself
-/// occupies the one index between them) guarantees no offset ever
-/// satisfies both a record's `<= end` and the next record's `>= start`
-/// — every offset maps to exactly one record, always.
+/// belongs to exactly one record. Containment is inclusive on *both*
+/// ends (`offset >= start && offset <= end`), unlike `AttributeStore`'s
+/// span containment, because a paragraph boundary can't be left unowned.
+/// The invariant `records[i].end + 1 == records[i+1].start` (the `'\n'`
+/// occupies the one index between them) guarantees every offset maps to
+/// exactly one record.
 class ParagraphIndex {
   final List<ParagraphRecord> _records = [];
 
-  /// Bumped on every mutation — mirrors `AttributeStore.revision`
-  /// exactly, same purpose: a cheap cache-invalidation key for
-  /// `TextSpanRenderer` instead of diffing records on every rebuild.
+  /// Bumped on every mutation. A cheap cache-invalidation key for the
+  /// renderer instead of diffing records on every rebuild.
   int _revision = 0;
   int get revision => _revision;
 
   ParagraphIndex._();
 
   /// Builds a fresh index by scanning `text` for `'\n'` characters.
-  /// O(text.length) — a one-time cost, same as `AttributeStore.clampTo`
-  /// accepts for load/reset. Never call this per-keystroke;
-  /// [applyInsertion]/[applyDeletion] exist specifically so this isn't
-  /// necessary during normal editing.
+  /// O(text.length) — never call this per-keystroke; use
+  /// [applyInsertion]/[applyDeletion] for normal editing instead.
   factory ParagraphIndex.rebuild(String text) {
     final index = ParagraphIndex._();
     index._rebuildFrom(text);
@@ -82,11 +60,7 @@ class ParagraphIndex {
   bool get hasAnyHeader => _records.any((r) => r.headerLevel != null);
 
   /// The record containing `offset`, or `null` if `offset` is out of
-  /// bounds. Linear scan for now — matches `AttributeStore`'s own
-  /// unoptimized-by-design posture (`TextBuffer`'s own doc comment: "we
-  /// do not optimize this prematurely"); a sorted-offset binary search
-  /// is a drop-in upgrade later if profiling ever calls for it, without
-  /// changing this method's contract.
+  /// bounds. Linear scan.
   ParagraphRecord? paragraphAt(int offset) {
     for (final r in _records) {
       if (offset >= r.start && offset <= r.end) return r;
@@ -103,15 +77,9 @@ class ParagraphIndex {
   /// Updates paragraph boundaries for `insertedText` inserted at
   /// `index`. If `insertedText` contains one or more `'\n'`, the record
   /// that absorbed the insertion is split at each newline; only the
-  /// *first* resulting fragment keeps the original record's
-  /// `headerLevel` — every fragment after a split newline starts with
-  /// `headerLevel: null`. This mirrors the existing, already-shipped
-  /// rule that header formatting confines to the paragraph it started in
-  /// and never continues past a newline the user just typed
-  /// (`EditingEngine._confineParagraphScopedAttributes`), generalized
-  /// from one newline to N — a multi-paragraph paste only keeps the
-  /// header on whichever fragment contains what preceded the insertion
-  /// point.
+  /// *first* resulting fragment keeps the original record's block
+  /// metadata (header/alignment/direction never continue past a newline
+  /// the user just typed).
   void applyInsertion(int index, String insertedText) {
     if (insertedText.isEmpty) return;
     final length = insertedText.length;
@@ -156,9 +124,9 @@ class ParagraphIndex {
         textDirection: textDirection,
       ));
       fragmentStart = newlineAbsolute + 1;
-      headerLevel = null; // only the first fragment keeps it
-      alignment = null; // same rule as headerLevel
-      textDirection = null; // same rule as headerLevel
+      headerLevel = null; // only the first fragment keeps block metadata
+      alignment = null;
+      textDirection = null;
       searchOffset = relative + 1;
     }
     fragments.add(ParagraphRecord(
@@ -175,20 +143,11 @@ class ParagraphIndex {
     _revision++;
   }
 
-  /// Updates paragraph boundaries for a deletion of `[start, end)` —
-  /// mirrors `AttributeStore.shiftForDeletion`, but *merges* rather than
-  /// drops: unlike an attribute span (which can simply vanish if the
-  /// text it covered is deleted), a paragraph record can never disappear
-  /// without transferring its position in the document to a surviving
-  /// neighbor, because paragraphs partition the whole document with no
-  /// gaps.
-  ///
-  /// Every record whose separating `'\n'` falls inside the deleted range
-  /// merges into one. The surviving record keeps the *leftmost* (first)
-  /// of the merged records' `headerLevel` — mirrors the existing rule
-  /// that header formatting doesn't survive past a paragraph break,
-  /// generalized to "and therefore doesn't survive that break being
-  /// deleted either."
+  /// Updates paragraph boundaries for a deletion of `[start, end)`.
+  /// Unlike an attribute span, a paragraph record can never simply
+  /// vanish — paragraphs partition the whole document with no gaps — so
+  /// every record whose separating `'\n'` falls inside the deleted range
+  /// merges into one, keeping the *leftmost* record's block metadata.
   void applyDeletion(int start, int end) {
     if (end <= start) return;
     final deletedLength = end - start;
@@ -224,32 +183,10 @@ class ParagraphIndex {
   // Block-level setters
   // ---------------------------------------------------------------------
 
-  /// The overlap condition shared by [setHeaderLevel] and
-  /// [recordsOverlapping] — defined once so a caller snapshotting
-  /// records for undo (see `SetHeaderLevelCommand`) is guaranteed to
-  /// select exactly the same records a `setHeaderLevel` call is about to
-  /// mutate, rather than risking the two conditions drifting apart if
-  /// one were ever edited without the other.
-  ///
-  /// A zero-width query (`start == end`) is a special case, not just a
-  /// degenerate one: the general half-open check below (`r.start < end`)
-  /// can never be satisfied by a record whose own `[start, end]` is
-  /// *also* zero-width — i.e. a genuinely empty paragraph — because two
-  /// equal bounds can never satisfy a strict `<`. Concretely, this broke
-  /// `setHeaderLevel`/`setAlignment` on an empty paragraph (e.g.
-  /// converting a bare `'# '` to a heading, which strips the marker and
-  /// leaves the paragraph empty *before* the header level is set):
-  /// `paragraphBoundsFor` correctly resolves the collapsed selection to
-  /// that paragraph's own `[0, 0]`, but the old check silently matched
-  /// no record at all, so the header level never actually got set. A
-  /// zero-width query is really asking "which record contains this
-  /// single point", so it falls back to [ParagraphRecord.contains]
-  /// instead — safe for every existing caller: [recordsOverlapping]'s
-  /// other callers ([ReplaceRangeCommand]/[ClearFormattingCommand]) only
-  /// ever pass a zero-width range for a pure insert, where the resulting
-  /// snapshot is already documented as redundant-but-harmless (see
-  /// `ReplaceRangeCommand`'s own doc comment), so matching one extra
-  /// (correct, self-consistent) record there changes nothing observable.
+  // Shared overlap condition for setHeaderLevel/recordsOverlapping. A
+  // zero-width query (start == end) falls back to ParagraphRecord.contains
+  // since the general half-open check can never match a zero-width record
+  // (e.g. an empty paragraph) otherwise.
   bool _overlaps(ParagraphRecord r, int start, int end) {
     if (start == end) return r.contains(start);
     return r.start < end && r.end >= start;
@@ -260,15 +197,8 @@ class ParagraphIndex {
     return _records.where((r) => _overlaps(r, start, end)).toList(growable: false);
   }
 
-  /// Sets `headerLevel` on every record overlapping `[start, end)`.
-  ///
-  /// A selection spanning multiple paragraphs sets all of them — this is
-  /// header's sole live representation now (`AttributeType.header` is no
-  /// longer written to; see `EditingEngine.setHeaderLevel` and the
-  /// block-architecture design notes), matching the behavior the old
-  /// `AttributeStore`-based path had: applying header to a
-  /// multi-paragraph selection always affected every paragraph in that
-  /// selection uniformly, never just one.
+  /// Sets `headerLevel` on every record overlapping `[start, end)`. A
+  /// selection spanning multiple paragraphs sets all of them.
   void setHeaderLevel(int start, int end, String? headerLevel) {
     for (var i = 0; i < _records.length; i++) {
       final r = _records[i];
@@ -279,10 +209,8 @@ class ParagraphIndex {
     _revision++;
   }
 
-  /// Sets `alignment` on every record overlapping `[start, end)` — same
-  /// shape and reasoning as [setHeaderLevel]; see [ParagraphAlignment]'s
-  /// doc comment for the important caveat that this has no live
-  /// rendering effect yet.
+  /// Sets `alignment` on every record overlapping `[start, end)`. Not
+  /// yet reflected with a live rendering effect.
   void setAlignment(int start, int end, ParagraphAlignment? alignment) {
     for (var i = 0; i < _records.length; i++) {
       final r = _records[i];
@@ -293,10 +221,8 @@ class ParagraphIndex {
     _revision++;
   }
 
-  /// Sets `textDirection` on every record overlapping `[start, end)` —
-  /// same shape and reasoning as [setAlignment]; see
-  /// [ParagraphTextDirection]'s doc comment for the same no-live-rendering
-  /// caveat.
+  /// Sets `textDirection` on every record overlapping `[start, end)`.
+  /// Not yet reflected with a live rendering effect.
   void setTextDirection(int start, int end, ParagraphTextDirection? textDirection) {
     for (var i = 0; i < _records.length; i++) {
       final r = _records[i];
@@ -307,23 +233,11 @@ class ParagraphIndex {
     _revision++;
   }
 
-  /// Restores `headerLevel`/`alignment` on whichever current records
-  /// overlap each `snapshot`'s original `[start, end)` — the shared undo
-  /// primitive behind `ReplaceRangeCommand`/`ClearFormattingCommand`,
-  /// which both need to put stored block metadata back exactly the way
-  /// [setHeaderLevel]/[setAlignment] found it before they ran. Takes full
-  /// `ParagraphRecord` snapshots (as returned by [recordsOverlapping])
-  /// rather than a bespoke per-field tuple, specifically so a future
-  /// stored field doesn't need a third near-identical snapshot/restore
-  /// implementation in each of those command files — one new field here
-  /// covers all of them.
-  ///
-  /// Only overlap, not exact `start`/`end` equality, is required to find
-  /// the record to restore onto: by the time undo runs, the text (and
-  /// therefore paragraph boundaries) has already been restored to
-  /// exactly its pre-edit shape by the caller, so `snapshot.start`/
-  /// `snapshot.end` — captured in those original, pre-edit coordinates —
-  /// line up with a real current record again.
+  /// Restores block metadata on whichever current records overlap each
+  /// `snapshot`'s original `[start, end)` — the shared undo primitive
+  /// behind `ReplaceRangeCommand`/`ClearFormattingCommand`. Relies on the
+  /// caller having already restored text to its pre-edit shape, so
+  /// `snapshot.start`/`end` line up with a real current record again.
   void restoreBlockMetadata(List<ParagraphRecord> snapshots) {
     for (final snapshot in snapshots) {
       for (var i = 0; i < _records.length; i++) {
@@ -348,11 +262,8 @@ class ParagraphIndex {
   // ---------------------------------------------------------------------
 
   /// Asserts records are contiguous, gap-free, and span exactly
-  /// `[0, textLength]` — same role as the length assertion already in
-  /// `RichEditorController.buildTextSpan`, applied to this structure
-  /// instead. Call from inside an `assert(() { ...; return true; }())`
-  /// (or `assert(debugValidate(...))`, since this already returns
-  /// `true`) so it's compiled out entirely in release builds.
+  /// `[0, textLength]`. Call via `assert(debugValidate(...))` so it's
+  /// compiled out in release builds.
   bool debugValidate(int textLength) {
     if (_records.isEmpty) {
       throw StateError('ParagraphIndex: no records at all');

@@ -7,35 +7,18 @@ import 'paragraph_record.dart';
 /// derivable from it and the document's text, resolved once into one
 /// clean, read-only object.
 ///
-/// This does *not* introduce a new source of truth: [listType]/[checked]/
-/// [indentLevel] are computed fresh from `text` every time
-/// [ParagraphBlock.derive] runs (same rule [listPrefixLength]/
-/// [listTypeOfPrefix] already follow — see their own doc comments), never
-/// cached on [ParagraphRecord] itself. `ParagraphIndex` deliberately has
-/// no access to document text (see its `_containsListPrefix`-adjacent
-/// reasoning in `TextSpanRenderer`), so nothing here could go stale the
-/// way a stored-but-derivable field could.
-///
-/// What this *does* replace is callers hand-rolling their own
-/// `listPrefixLength`/regex calls to answer "what kind of block is this
-/// paragraph" — `EditingEngine`, `TextSpanRenderer`, `CommandDispatcher`,
-/// and the exporters each used to do this independently, which is exactly
-/// how a single indentation-parsing bug (`EditingEngine`'s former private
-/// `indentOf`) shipped without the other call sites noticing anything was
-/// wrong. One derivation, one place, reused everywhere a caller needs the
-/// full picture rather than just one property.
+/// [listType], [checked], and [indentLevel] are computed fresh from
+/// `text` every time [ParagraphBlock.derive] runs rather than cached on
+/// [ParagraphRecord], so nothing here can go stale.
 class ParagraphBlock {
   final ParagraphRecord record;
   final ParagraphListType? listType;
 
-  /// `null` if this paragraph isn't a task-list item at all (including
-  /// every numbered item — see [checkboxStateOfPrefix]); `true`/`false`
-  /// for a checked/unchecked one.
+  /// `null` if this paragraph isn't a task-list item (including every
+  /// numbered item); `true`/`false` for checked/unchecked.
   final bool? checked;
 
-  /// Nesting depth in indent levels (2 leading spaces per level) —
-  /// derived from [listIndentWhitespace], independent of whether this
-  /// paragraph has a list prefix at all.
+  /// Nesting depth in indent levels (2 leading spaces per level).
   final int indentLevel;
 
   const ParagraphBlock({

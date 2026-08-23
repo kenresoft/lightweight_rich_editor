@@ -68,11 +68,6 @@ class RichEditorStyle {
         other.paddingLeftMarginOff == paddingLeftMarginOff &&
         other.marginLineX == marginLineX &&
         other.ruledLineColor == ruledLineColor &&
-        // Compare the field directly, not via the `marginColor` getter —
-        // they're equal in value either way (the getter is a plain
-        // alias), but comparing `other.field == field` consistently with
-        // every other line here is what makes this correct-by-inspection
-        // instead of correct-by-coincidence.
         other.marginLineColor == marginLineColor;
   }
 

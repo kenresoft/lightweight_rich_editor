@@ -5,15 +5,11 @@ import '../models/text_attribute.dart';
 import 'editor_command.dart';
 
 /// Sets `type` to `value` over `selection` (or the enclosing paragraph,
-/// for [AttributeType.isParagraphScoped] types like
-/// [AttributeType.header]) via [EditingEngine.applyAttribute].
-/// `value: null` removes the attribute instead — [EditingEngine] already
-/// treats those as the same operation, so this command does too rather
-/// than needing a separate `RemoveAttributeCommand`.
+/// for [AttributeType.isParagraphScoped] types) via
+/// [EditingEngine.applyAttribute]. `value: null` removes the attribute.
 ///
-/// Like [ToggleAttributeCommand], undo restores an exact pre-edit
-/// snapshot of the affected range rather than attempting to invert the
-/// operation logically.
+/// Undo restores an exact pre-edit snapshot of the affected range rather
+/// than inverting the operation logically.
 class ApplyAttributeCommand extends EditorCommand {
   final AttributeType type;
   final EditorSelection selection;

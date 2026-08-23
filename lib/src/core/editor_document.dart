@@ -12,21 +12,15 @@ import '../models/text_attribute.dart';
 ///
 /// [EditorDocument] holds data and knows how to load, export, and
 /// (de)serialize itself — nothing else. It does not know about cursors,
-/// selections, undo history, or how to render a `TextSpan`; those belong
-/// to the `EditingEngine`, `HistoryManager`, and `Renderer` respectively.
-/// Keeping this class data-only is what makes it trivial to unit test
-/// and safe to snapshot for undo/redo without dragging in Flutter's
-/// widget layer.
+/// selections, undo history, or rendering; those belong to the
+/// `EditingEngine`, `HistoryManager`, and `Renderer` respectively.
 class EditorDocument {
   TextBuffer _buffer;
   AttributeStore _attributes;
 
-  // Assigned in the constructor body, once `_buffer` definitely exists —
-  // building this from `buffer ?? StringTextBuffer()` directly in the
-  // initializer list would evaluate that expression a second time,
-  // independently of the one assigned to `_buffer`, constructing a
-  // different (if harmlessly empty) buffer instance for a null `buffer`
-  // argument.
+  // Assigned in the constructor body: building this from
+  // `buffer ?? StringTextBuffer()` directly in the initializer list would
+  // construct a second, separate empty buffer for a null `buffer` arg.
   late ParagraphIndex _paragraphs;
 
   EditorDocument({TextBuffer? buffer, AttributeStore? attributes})
@@ -57,34 +51,24 @@ class EditorDocument {
 
   bool get isEmpty => _buffer.isEmpty;
 
-  /// The underlying storage. Exposed for the `EditingEngine`, which is
-  /// the only other component permitted to call its mutating methods
-  /// directly — everything else should treat text as read-only via
-  /// [text].
+  /// The underlying storage. Only [EditingEngine] should call its
+  /// mutating methods directly — everything else should treat text as
+  /// read-only via [text].
   TextBuffer get buffer => _buffer;
 
-  /// The span store. Exposed for the `EditingEngine` and `Renderer` for
-  /// the same reason.
+  /// The span store, exposed for `EditingEngine` and `Renderer`.
   AttributeStore get attributeStore => _attributes;
 
-  /// The paragraph-level counterpart to [attributeStore] — see
-  /// `ParagraphIndex`'s own doc comment for what it's for and why it's a
-  /// separate mechanism from character-range attributes. Header
-  /// formatting is read from here everywhere it's live: `TextSpanRenderer`,
-  /// undo, and toolbar state (`RichEditorController.isAttributeActive`/
-  /// `activeAttributeValue`) all read/write [paragraphs], never
-  /// [attributeStore], for header. `AttributeType.header` stays in the
-  /// enum, but purely as the interchange format at the boundary with
-  /// HTML/Markdown/clipboard — see its own doc comment for why that's a
-  /// deliberate, permanent split rather than something to eliminate.
+  /// The paragraph-level counterpart to [attributeStore]. Header,
+  /// alignment, and text-direction formatting are read/written here, not
+  /// [attributeStore] — `AttributeType.header`/`align`/`textDirection`
+  /// remain only as the interchange format at HTML/Markdown/clipboard
+  /// boundaries.
   ParagraphIndex get paragraphs => _paragraphs;
 
   /// The fully-resolved [ParagraphBlock] (list type, checked state,
   /// indent level, header level) for the paragraph containing `offset`,
-  /// or `null` if `offset` is out of bounds. The one canonical place to
-  /// ask "what kind of block is this" — see [ParagraphBlock]'s own doc
-  /// comment for why this replaces callers hand-deriving the same
-  /// properties themselves.
+  /// or `null` if out of bounds.
   ParagraphBlock? blockAt(int offset) {
     final record = _paragraphs.paragraphAt(offset);
     if (record == null) return null;
@@ -94,23 +78,12 @@ class EditorDocument {
   /// A read-only snapshot of every span currently in the document.
   List<TextAttribute> get attributes => _attributes.spans;
 
-  /// Every attribute needed to represent this document as a flat,
-  /// ranged list — the shape `HtmlExporter`/`MarkdownExporter` and
-  /// `ClipboardManager` expect, and have expected all along; nothing
-  /// about their own code needs to change for this. Inline attributes
-  /// (bold, italic, links, ...) come straight from [attributeStore].
-  /// Header and alignment spans are synthesized fresh from [paragraphs]
-  /// instead — [paragraphs] is their only live representation (see
-  /// [paragraphs]'s doc comment); [attributeStore] can still contain a
-  /// stale header/align span (from paste, or from
-  /// [_seedParagraphBlockMetadata]) that nothing keeps in sync with
-  /// further edits, so reading either directly from there would risk
-  /// exporting something no longer true.
-  ///
-  /// Empty paragraphs never contribute a span here — same
-  /// zero-width-span-is-dropped rule `AttributeStore.insert` already
-  /// follows, kept consistent rather than exported as something
-  /// `attributeStore`-based export could never have produced.
+  /// Every attribute needed to represent this document as a flat, ranged
+  /// list — the shape exporters and the clipboard manager expect. Inline
+  /// attributes come straight from [attributeStore]; header, alignment,
+  /// and text-direction spans are synthesized fresh from [paragraphs],
+  /// since [attributeStore] may hold stale entries nothing keeps in sync.
+  /// Empty paragraphs never contribute a span.
   List<TextAttribute> exportAttributes() {
     final inline = _attributes.spans.where(
       (a) => a.type != AttributeType.header && a.type != AttributeType.align && a.type != AttributeType.textDirection,
@@ -141,28 +114,12 @@ class EditorDocument {
 
   void clear() => reset('');
 
-  /// Seeds `_paragraphs`' `headerLevel`/`alignment` fields from whatever
-  /// `AttributeType.header`/`AttributeType.align` spans are already in
-  /// `_attributes` — needed because [ParagraphIndex.rebuild] only knows
-  /// about `'\n'` positions, not formatting.
-  ///
-  /// This isn't specifically about *old* saved notes — there's no
-  /// legacy on-disk data this library needs to worry about right now.
-  /// It's the general contract for [EditorDocument.fromText]/[fromJson]:
-  /// whatever the caller passes as initial `attributes` may contain a
-  /// header or align entry (that's still a completely ordinary shape —
-  /// see `AttributeType.header`'s own doc comment on why they remain the
-  /// interchange format), and without this, that metadata would silently
-  /// go nowhere — sitting inertly in [attributeStore], which nothing
-  /// reads either from anymore, instead of being reflected in
-  /// [paragraphs], which is what actually drives rendering/export/
-  /// toolbar state. Cheap and self-contained enough that there's no real
-  /// cost to keeping this correct even though nothing in this app's
-  /// current usage happens to exercise it today.
-  ///
-  /// Empty paragraphs are skipped, matching `AttributeStore.insert`'s
-  /// own zero-width-span-is-dropped rule — an empty paragraph can never
-  /// have had a real header/align span to seed from in the first place.
+  // Seeds `_paragraphs`' headerLevel/alignment/textDirection fields from
+  // whatever matching spans are already in `_attributes` — needed because
+  // ParagraphIndex.rebuild only knows about '\n' positions, not
+  // formatting. Without this, header/align/direction passed into
+  // fromText/fromJson would sit inertly in attributeStore, which nothing
+  // reads for those types once loaded.
   void _seedParagraphBlockMetadata() {
     for (final record in _paragraphs.records) {
       if (record.start >= record.end) continue;
@@ -188,14 +145,8 @@ class EditorDocument {
   }
 
   /// Serializes this document. `'attributes'` comes from
-  /// [exportAttributes], not `_attributes.serialize()` directly — this
-  /// is what makes a newly-set header actually persist: nothing writes
-  /// a new `AttributeType.header` `TextAttribute` into [attributeStore]
-  /// when a heading is set via `EditingEngine.setHeaderLevel` (see
-  /// [paragraphs]'s doc comment), so serializing [attributeStore] alone
-  /// would silently drop any heading set since this note was loaded. The
-  /// on-disk *shape* is unchanged — still a flat list of `TextAttribute`
-  /// JSON objects, header included.
+  /// [exportAttributes], not the raw attribute store, so header/alignment/
+  /// text-direction changes made since load are included.
   Map<String, dynamic> toJson() => {
     'text': text,
     'attributes': exportAttributes().map((a) => a.toJson()).toList(growable: false),

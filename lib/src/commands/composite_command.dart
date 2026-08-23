@@ -5,12 +5,8 @@ import 'editor_command.dart';
 /// Several [EditorCommand]s treated as one undo step.
 ///
 /// [HistoryManager] builds these to coalesce sequential typing or
-/// backspacing into a single history entry — rather than merging the
-/// commands' internal snapshots into one combined command (fragile: it
-/// means re-deriving offsets and concatenating removed-span lists by
-/// hand), it keeps each keystroke's command exactly as-is and just
-/// undoes/redoes the whole group together, in one [TransactionManager]
-/// batch so listeners still only see one notification.
+/// backspacing into a single history entry, undoing/redoing the whole
+/// group together in one [TransactionManager] batch.
 class CompositeCommand extends EditorCommand {
   final List<EditorCommand> commands;
 

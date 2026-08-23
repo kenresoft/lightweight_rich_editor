@@ -1,5 +1,13 @@
-## Unreleased
+## 0.2.0
 
+* **Whole-document `textAlign`/`textDirection`**: `RichTextEditor` and
+  `LightweightRichEditor` now accept `textAlign` (default
+  `TextAlign.start`) and `textDirection` (default: inherits the ambient
+  `Directionality`), wired straight through to the underlying `TextField`
+  and to the ruled-lines/scroll-to-match layout probes. This is a single,
+  document-wide setting, not per-paragraph — `ParagraphAlignment`/
+  `ParagraphTextDirection` are still stored per paragraph but not
+  independently rendered; see their doc comments.
 * **`LightweightRichEditor`**: a new all-in-one widget bundling the
   toolbar, editor, and find/replace bar with sensible defaults — an app
   can now drop in a working note editor without first owning a

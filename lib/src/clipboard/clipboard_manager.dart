@@ -29,17 +29,7 @@ class ClipboardManager {
 
   /// Copies `selection` to the system clipboard (plain text) and, if a
   /// [delegate] is set, to it as well (with formatting). No-op on a
-  /// collapsed selection — there's nothing to copy.
-  ///
-  /// Reads from [EditorDocument.exportAttributes] rather than
-  /// `document.attributeStore.findIntersecting(...)` directly — header
-  /// formatting is read from `document.paragraphs` now (Phase 3 of the
-  /// block-architecture migration), and `exportAttributes` is what
-  /// synthesizes that back into the flat span list this method already
-  /// clips and translates to selection-relative offsets. Without this,
-  /// copying a heading would silently lose its header formatting the
-  /// moment `AttributeStore`'s own header spans stopped being the read
-  /// source elsewhere.
+  /// collapsed selection.
   Future<void> copy(EditorSelection selection) async {
     if (selection.isCollapsed) return;
 
@@ -59,7 +49,6 @@ class ClipboardManager {
 
     delegate?.store(text, attributes);
 
-    // Generate HTML to preserve formatting in the system clipboard.
     final html = const HtmlExporter().export(text, attributes);
     await RichClipboardPlatform.setData(text: text, html: html);
   }
@@ -73,15 +62,12 @@ class ClipboardManager {
 
   /// Pastes at `selection`, preferring rich content from [delegate] when
   /// its stored plain text matches what's currently on the system
-  /// clipboard (i.e. it's still the same copy, not something copied
-  /// elsewhere since) — otherwise falls back to the HTML flavor if
-  /// available via native plugin, or heuristic Markdown detection.
+  /// clipboard (i.e. it's still the same copy) — otherwise falls back to
+  /// the HTML flavor if available, or heuristic Markdown detection.
   ///
-  /// Returns the resulting selection, or `null` if the clipboard had no
-  /// content to paste.
+  /// Returns the resulting selection, or `null` if there was nothing to
+  /// paste.
   Future<EditorSelection?> paste(EditorSelection selection) async {
-    // RichClipboardPlatform.getData() provides both plain text and HTML
-    // from the system clipboard using native code.
     final data = await RichClipboardPlatform.getData();
     final plainText = data.text;
     final htmlText = data.html;
@@ -90,28 +76,10 @@ class ClipboardManager {
       return null;
     }
 
-    // `plainText` (round-tripped through the real system clipboard) may
-    // have '\n' normalized to '\r\n' on the way — Windows clipboard text
-    // conventionally does exactly this, confirmed live: a multi-line
-    // paste with URLs each followed by ',\r\n' failed to autolink *any*
-    // of them, a real, reported bug. `isAutolinkBoundary` only
-    // recognizes space/'\n'/tab, not '\r' — so a trailing '\r' before
-    // the real newline was treated as part of the URL token, which then
-    // also defeated `_trailingPunctuation`'s trim (anchored at the
-    // string end, which was now '\r', not the comma before it) and left
-    // a literal control character embedded in what got handed to
-    // `Uri.tryParse`, failing to parse for every affected line.
-    //
-    // Normalizing here and using `text` (not `plainText`) for every
-    // plain-text-path decision below (Markdown heuristic, autolink
-    // detection, and what's actually pasted) is safe precisely because
-    // it's the *only* transform ever applied to this string on this
-    // path: text and any attributes computed from it (in
-    // [_withAutolinks]) are always offsets into this same, single,
-    // already-normalized string — never a mix of two different lengths
-    // the way pasting `rich.text` (from `delegate`, never touched by the
-    // OS, never containing '\r' to begin with) unmodified alongside
-    // separately-normalized comparison text is.
+    // The system clipboard (Windows especially) may normalize '\n' to
+    // '\r\n'; isAutolinkBoundary doesn't recognize '\r', which broke
+    // autolinking on multi-line pastes. Normalize once here and use
+    // `normalizedPlainText` (not `plainText`) for every decision below.
     final normalizedPlainText = plainText?.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 
     final rich = delegate?.read();
@@ -119,23 +87,18 @@ class ClipboardManager {
       return commands.pasteRich(selection, rich.text, rich.attributes);
     }
 
-    // 1. Try HTML if the clipboard provided it (e.g. copied from a browser)
+    // 1. HTML flavor, if the clipboard provided one.
     if (htmlText != null && htmlText.isNotEmpty) {
       final parsed = const HtmlImporter().parse(htmlText);
-      // Only use the rich import if it actually found formatting or
-      // meaningful structure.
       if (parsed.attributes.isNotEmpty || (normalizedPlainText != null && parsed.text != normalizedPlainText)) {
-        // A bare URL pasted from, say, a browser's address bar often
-        // arrives as HTML with no anchor tag at all (plain unstyled
-        // text) — `parsed.attributes` alone would be empty here, and
-        // without this, that URL would never get linkified: this
-        // branch never falls through to the plain-text autolink
-        // fallback below once it's chosen the HTML path.
+        // _withAutolinks still runs here: a bare URL from e.g. a
+        // browser address bar can arrive as unstyled HTML with no
+        // anchor tag, so parsed.attributes alone wouldn't catch it.
         return commands.pasteRich(selection, parsed.text, _withAutolinks(parsed.text, parsed.attributes));
       }
     }
 
-    // 2. Fallback to heuristic Markdown detection on the plain text version
+    // 2. Heuristic Markdown detection on the plain text.
     if (normalizedPlainText != null && normalizedPlainText.isNotEmpty) {
       final text = normalizedPlainText;
       if (_looksLikeMarkdown(text)) {
@@ -145,7 +108,7 @@ class ClipboardManager {
         }
       }
 
-      // 3. Final fallback: plain text with autolink detection
+      // 3. Plain text with autolink detection.
       final withAutolinks = _withAutolinks(text, const []);
       if (withAutolinks.isNotEmpty) {
         return commands.pasteRich(selection, text, withAutolinks);
@@ -157,13 +120,9 @@ class ClipboardManager {
     return null;
   }
 
-  /// `attributes` (as already produced by whichever import path ran —
-  /// rich delegate excluded; see the call sites) plus a synthesized
-  /// [AttributeType.link] for every [detectAllUrls] match in `text` that
-  /// isn't already covered by one of `attributes`' own link spans.
-  /// Shared by every paste path below so a bare URL can't silently slip
-  /// through un-linkified just because it happened to arrive via HTML or
-  /// Markdown rather than plain text.
+  // Adds a synthesized link attribute for every detected URL not already
+  // covered by `attributes`, so bare URLs get linkified on every paste
+  // path regardless of source (HTML, Markdown, or plain text).
   List<TextAttribute> _withAutolinks(String text, List<TextAttribute> attributes) {
     final urls = detectAllUrls(text);
     if (urls.isEmpty) return attributes;
@@ -176,24 +135,19 @@ class ClipboardManager {
   }
 
   bool _looksLikeMarkdown(String text) {
-    // Detects common Markdown markers.
-    // 1. Headers: # at start of line
     if (RegExp(r'^#+ ', multiLine: true).hasMatch(text)) {
       return true;
     }
 
-    // 2. Inline markers: bold, strikethrough, code
     if (text.contains('**') || text.contains('__') ||
         text.contains('~~') || text.contains('`')) {
       return true;
     }
 
-    // 3. Italic markers: single * or _ with content
     if (RegExp(r'([*_]).+\1').hasMatch(text)) {
       return true;
     }
 
-    // 4. Links: [text](url)
     if (RegExp(r'\[.*\]\(.*\)').hasMatch(text)) {
       return true;
     }

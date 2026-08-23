@@ -7,15 +7,18 @@ A performance-focused, lightweight rich-text editor for Flutter with notebook-st
 
 ## Features
 
-- **Standard Rich Text Styling**: Bold, Italic, Underline, Strikethrough.
-- **Rich Content Interop**: Intelligent paste support for HTML (from browsers) and Markdown, preserving formatting natively.
-- **Advanced Styling**: Custom text colors, highlights, font sizes, and inline code.
-- **Structural Elements**: Heading support (H1, H2).
-- **Hyperlinks**: Easy link insertion and management.
-- **Notebook Experience**: Customizable horizontal ruled lines and vertical margin lines.
-- **Performance First**: Built on top of standard `EditableText` for smooth scrolling and low memory overhead.
-- **Highly Configurable**: Control everything from colors and fonts to history length and behavior via `RichTextRenderTheme` and `RichEditorStyle`.
+- **Standard Rich Text Styling**: Bold, Italic, Underline, Strikethrough, inline code.
+- **Advanced Styling**: Custom text colors, highlights, font sizes.
+- **Structural Elements**: Headings (H1, H2), horizontal rules, bullet/numbered/task lists (with tappable checkboxes).
+- **Hyperlinks**: Easy link insertion, editing, and a tap-triggered preview bar.
+- **Rich Content Interop**: Intelligent paste support for HTML (from browsers) and Markdown, including native rich-clipboard support on Android, iOS, macOS, Windows, and Linux.
+- **Find & Replace**: Built-in find bar with next/previous navigation and replace/replace-all.
+- **Notebook Experience**: Customizable horizontal ruled lines and vertical margin lines that stay aligned even when a line wraps or a header is taller than body text.
+- **Whole-document alignment/direction**: `textAlign`/`textDirection` for the whole editor, including RTL.
+- **Performance First**: Built on top of standard `TextField`/`EditableText` for smooth scrolling and low memory overhead — validated against multi-thousand-paragraph documents.
+- **Highly Configurable**: Control colors, fonts, and layout via `RichTextRenderTheme` and `RichEditorStyle`.
 - **Serialization**: Save and load documents with high fidelity using `EditorDocument` (JSON-ready).
+- **Undo/Redo**: Full history support, including for rich pastes and multi-step edits.
 
 ## Getting started
 
@@ -23,90 +26,102 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  lightweight_rich_editor: ^0.1.1
+  lightweight_rich_editor: ^0.2.0
 ```
 
 ## Usage
 
-### 1. Basic Usage
+### 1. Quick start
 
-Use the `RichTextEditor` widget along with a `RichEditorController`.
+`LightweightRichEditor` bundles the toolbar, editor, and find/replace bar with sensible defaults — the fastest way to drop in a working note editor:
 
 ```dart
 import 'package:flutter/material.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 
-class MyEditor extends StatefulWidget {
-  @override
-  _MyEditorState createState() => _MyEditorState();
-}
-
-class _MyEditorState extends State<MyEditor> {
-  late final RichEditorController _controller;
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = RichEditorController(text: "Hello World!");
-  }
+class MyEditor extends StatelessWidget {
+  const MyEditor({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RichTextEditor(
-        controller: _controller,
-        scrollController: _scrollController,
-      ),
+      appBar: AppBar(title: const Text('Notes')),
+      body: const LightweightRichEditor(initialText: 'Hello, world!'),
     );
   }
 }
 ```
 
-### 2. Custom Configuration
+Reach the underlying controller — for save/load, programmatic formatting, or listening for changes — via a `GlobalKey<LightweightRichEditorState>`, or by supplying your own `RichEditorController`:
 
-Customize the editor's appearance using `RichTextRenderTheme` and `RichEditorStyle`.
+```dart
+final key = GlobalKey<LightweightRichEditorState>();
+
+LightweightRichEditor(
+  key: key,
+  onSave: () => saveToDisk(key.currentState!.controller.document),
+);
+```
+
+### 2. Composing the pieces yourself
+
+`FormatToolbar`, `RichTextEditor`, and `FindReplaceBar` are also exported individually, for apps that want to place them separately in a layout:
+
+```dart
+class MyEditor extends StatefulWidget {
+  @override
+  State<MyEditor> createState() => _MyEditorState();
+}
+
+class _MyEditorState extends State<MyEditor> {
+  late final _controller = RichEditorController(text: 'Hello World!');
+  final _scrollController = ScrollController();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        FormatToolbar(controller: _controller),
+        Expanded(
+          child: RichTextEditor(
+            controller: _controller,
+            scrollController: _scrollController,
+          ),
+        ),
+      ],
+    );
+  }
+}
+```
+
+### 3. Custom configuration
+
+Customize the editor's text styling and layout via `RichTextRenderTheme` and `RichEditorStyle`:
 
 ```dart
 final myTheme = RichTextRenderTheme(
   baseFontSize: 18.0,
-  highlightColor: Colors.yellow.withOpacity(0.5),
+  highlightColor: Colors.yellow.withValues(alpha: 0.5),
 );
 
 final myStyle = RichEditorStyle(
-  ruledLineColor: Colors.grey.withOpacity(0.2),
+  ruledLineColor: Colors.grey.withValues(alpha: 0.2),
 );
 
-_controller = RichEditorController(
-  text: "Custom Editor",
-  theme: myTheme,
-);
+final controller = RichEditorController(text: 'Custom Editor', theme: myTheme);
 ```
 
-### 3. Using the Toolbar
-
-The package provides a `FormatToolbar` that you can easily integrate into your layout.
+Swap themes at runtime (e.g. a dark-mode toggle) by assigning `controller.renderer.theme` directly — no need to recreate the controller:
 
 ```dart
-Column(
-  children: [
-    FormatToolbar(
-      controller: _controller,
-      // ... configuration callbacks
-    ),
-    Expanded(
-      child: RichTextEditor(
-        controller: _controller,
-        scrollController: _scrollController,
-      ),
-    ),
-  ],
-)
+setState(() {
+  controller.renderer.theme = isDarkMode ? darkTheme : RichTextRenderTheme.standard;
+});
 ```
 
 ## Additional information
 
-For more advanced examples, check the `example/` folder in the repository.
+For a fuller example — dark mode, save/load — check the `example/` folder in the repository.
 
 ### Contributions
 

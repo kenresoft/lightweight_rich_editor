@@ -11,16 +11,12 @@ class TextDiff {
 }
 
 /// Diffs `oldText` against `newText` using common-prefix/common-suffix
-/// matching — the same technique `TextEditingController` subclasses have
-/// always needed, because Flutter's `TextField` reports only the
-/// resulting whole string, not "the user typed X at position Y".
+/// matching, since Flutter's `TextField` reports only the resulting
+/// whole string, not "the user typed X at position Y".
 ///
-/// A prefix/suffix match is often ambiguous: typing "aa" into "a" could
-/// be "inserted 'a' before" or "inserted 'a' after" — both produce "aa"
-/// and both have prefixMax + suffixMax > the shorter string's length.
-/// `cursorHint` (typically the selection start *before* the edit) breaks
-/// the tie in favor of wherever the caret actually was, which is right
-/// far more often than always preferring one side.
+/// The match can be ambiguous (e.g. typing "aa" into "a" could be
+/// inserting before or after); `cursorHint` (selection start before the
+/// edit) breaks the tie in favor of where the caret actually was.
 TextDiff diffText(String oldText, String newText, {int? cursorHint}) {
   final oldLen = oldText.length;
   final newLen = newText.length;
@@ -33,10 +29,8 @@ TextDiff diffText(String oldText, String newText, {int? cursorHint}) {
   int suffixLength;
 
   if (prefixMax + suffixMax > minLength) {
-    // Ambiguous: the prefix/suffix matches overlap, meaning more than one
-    // (start, end) pair produces the same result. Resolve using
-    // cursorHint if it falls in the overlap; otherwise prefer the
-    // longest prefix match.
+    // Overlapping matches: ambiguous. Use cursorHint if it falls in the
+    // overlap, otherwise prefer the longest prefix match.
     final ambiguityLow = minLength - suffixMax;
     final ambiguityHigh = prefixMax;
     prefixLength = (cursorHint != null && cursorHint >= ambiguityLow && cursorHint <= ambiguityHigh)
@@ -44,8 +38,6 @@ TextDiff diffText(String oldText, String newText, {int? cursorHint}) {
         : ambiguityHigh;
     suffixLength = minLength - prefixLength;
   } else {
-    // Unambiguous: prefix and suffix matches don't overlap, so they're
-    // both exactly as long as they can be.
     prefixLength = prefixMax;
     suffixLength = suffixMax;
   }

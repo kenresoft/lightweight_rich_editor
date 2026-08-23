@@ -2,32 +2,20 @@ import '../models/attribute_type.dart';
 import '../models/text_attribute.dart';
 import '../utils/url_detector.dart';
 
-/// Parses a deliberately scoped *subset* of Markdown (and WhatsApp flavor)
-/// into plain text plus [TextAttribute]s — not a CommonMark-compliant parser.
+/// Parses a scoped subset of Markdown (and WhatsApp flavor) into plain
+/// text plus [TextAttribute]s — not a CommonMark-compliant parser.
 ///
-/// Supported: `**bold**`, `*italic*` / `_italic_`, `~~strikethrough~~`,
-/// `` `code` ``, `[text](url)` links, and `# ` / `## ` headers at the
-/// start of a line.
+/// Supported: `**bold**`, `*italic*`/`_italic_`, `~~strikethrough~~`,
+/// `` `code` ``, `[text](url)` links, `# `/`## ` headers, and WhatsApp's
+/// `*bold*`, `_italic_`, `~strikethrough~`, ` ```monospace``` `.
 ///
-/// WhatsApp flavor: `*bold*`, `_italic_`, `~strikethrough~`, ` ```monospace``` `.
-///
-/// List markers (`- `, `* `, `+ `, `1. `) are intentionally left alone —
-/// list formatting was removed from [AttributeType] (see its doc comment
-/// for why), so a line starting with one of these is imported as literal
-/// text, prefix included, rather than silently stripping the prefix and
-/// losing the visual list shape the source note had. This includes
-/// checkbox syntax (`- [ ] `/`- [x] `): it's just another list prefix as
-/// far as this importer is concerned, so it already round-trips as
-/// literal text with no special-casing needed.
-///
-/// No alignment syntax is recognized on import, matching
-/// `MarkdownExporter` never emitting any — see that class's doc comment.
+/// List markers (`- `, `* `, `+ `, `1. `, including `- [ ] `/`- [x] `
+/// checkboxes) are left alone as literal text rather than stripped,
+/// preserving the source note's visual list shape.
 class MarkdownImporter {
   const MarkdownImporter();
 
-  /// Parses `markdown`, returning plain text and attributes relative to
-  /// it — ready to hand to `CommandDispatcher.pasteRich`/
-  /// `RichEditorController.pasteMarkdown`.
+  /// Parses `markdown`, returning plain text and attributes relative to it.
   ({String text, List<TextAttribute> attributes}) parse(String markdown) {
     final isWhatsApp = _detectWhatsAppFlavor(markdown);
     final lines = markdown.split('\n');
@@ -65,9 +53,8 @@ class MarkdownImporter {
         RegExp(r'(^|\s)~[^~]+~($|\s)').hasMatch(markdown);
     final hasMDExclusive = markdown.contains('**') || markdown.contains('~~');
 
-    // If it has WA markers and NO MD markers, it's highly likely WhatsApp.
-    // If it has both, we default to Markdown to be safe.
-    // If it has only ambiguous markers like `*text*`, we fallback to Markdown.
+    // WhatsApp only if it has a WA-exclusive marker and no MD-exclusive
+    // one; ambiguous or mixed markers default to Markdown.
     return hasWAExclusive && !hasMDExclusive;
   }
 
@@ -77,9 +64,6 @@ class MarkdownImporter {
     final headerMatch = RegExp(r'^(#{3,6}) ').firstMatch(line);
     if (headerMatch != null) return (headerLevel: 'h2', rest: line.substring(headerMatch.end));
 
-    // List-prefixed lines ('- ', '* ', '+ ', '1. ') are intentionally
-    // left untouched here and fall through to the plain-text case below
-    // — see the class doc comment.
     return (headerLevel: null, rest: line);
   }
 

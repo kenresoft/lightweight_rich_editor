@@ -2,15 +2,13 @@ import '../utils/clamp_int.dart';
 
 /// A framework-agnostic text selection: a `base`/`extent` offset pair.
 ///
-/// This mirrors the shape of Flutter's `TextSelection` (base/extent
-/// rather than a pre-normalized start/end) so the future `RichEditorController`
-/// can convert between the two with a straight field copy — but it lives
-/// here, not in `dart:ui`, so [EditingEngine] and everything below it
-/// stays testable with plain `dart test`, no widget bindings required.
+/// Mirrors the shape of Flutter's `TextSelection` (base/extent rather
+/// than a pre-normalized start/end) but lives outside `dart:ui`, so
+/// [EditingEngine] and everything below it stays testable without
+/// widget bindings.
 class EditorSelection {
-  /// Where the selection gesture started. For a selection made by
-  /// dragging right, `baseOffset < extentOffset`; dragging left, the
-  /// reverse. Equal for a collapsed (caret) selection.
+  /// Where the selection gesture started; equal to [extentOffset] for a
+  /// collapsed (caret) selection.
   final int baseOffset;
 
   /// Where the selection gesture ended — i.e. where the caret is.

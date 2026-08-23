@@ -7,18 +7,8 @@ import 'editor_command.dart';
 
 /// Removes every attribute from `selection`, or — at a collapsed caret —
 /// clears pending sticky formatting instead. Snapshots whichever of
-/// those it's about to clear so [undo] can restore it exactly.
-///
-/// Also snapshots the text `EditingEngine.clearFormattingListEdit` is
-/// about to rewrite (stripping literal list markers), if any — this is
-/// a real text mutation, unlike the attribute/header clearing, so it
-/// needs its own undo path: `_listEditStart`/`_listEditNewLength`
-/// record where and how much text `clearFormatting` will have replaced
-/// that range with, and `_previousListText` is what to put back.
-/// Snapshotting happens in [execute] (before `engine.clearFormatting`
-/// actually runs), same principle as [ReplaceRangeCommand]'s own
-/// `_removedText`/`_removedSpans` — capture what's about to be
-/// overwritten before it is, not try to reconstruct it after the fact.
+/// those it's about to clear so [undo] can restore it exactly, including
+/// any literal list-marker text `clearFormatting` rewrites.
 class ClearFormattingCommand extends EditorCommand {
   final EditorSelection selection;
 
@@ -62,10 +52,7 @@ class ClearFormattingCommand extends EditorCommand {
       return selection;
     }
     return engine.transactions.run(() {
-      // Text first: _previousBlockMetadata/_previousSpans are in
-      // *original* (pre-clear) coordinates, which only line up with the
-      // document again once the list-marker strip (if any) has been
-      // reversed and paragraph structure is back to what it was.
+      // Restore text first so later offsets line up with the pre-clear document.
       if (_listEditStart != null) {
         engine.replaceRange(
           _listEditStart!,

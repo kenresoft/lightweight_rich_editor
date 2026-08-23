@@ -27,26 +27,19 @@ class RichTextRenderTheme {
   final Color linkColor;
   final String codeFontFamily;
 
-  /// Background color for the current find-and-replace match — see
-  /// `TextSpanRenderer.renderSpan`'s `matchHighlightRange`. Deliberately
-  /// distinct from [highlightColor] (a different hue, not just a
-  /// different opacity of the same one) so the current search match is
-  /// visually unmistakable even on text that already has the `highlight`
-  /// attribute applied.
+  /// Background color for the current find-and-replace match.
+  /// Deliberately a different hue from [highlightColor], not just a
+  /// different opacity, so it stays unmistakable on already-highlighted
+  /// text.
   final Color matchHighlightColor;
 
-  /// Background color for every *other* search match — see
-  /// `TextSpanRenderer.renderSpan`'s `allMatchesRanges`. A paler variant
-  /// of [matchHighlightColor] by default (same hue, so "these are all
-  /// search matches" still reads as one family), so the *current* match
-  /// stays the one that visually pops.
+  /// Background color for every *other* search match — a paler variant
+  /// of [matchHighlightColor] by default, so the current match still
+  /// stands out.
   final Color otherMatchesHighlightColor;
 
   /// Color applied to a literal list prefix (`'- '`, `'3. '`, etc.) at
-  /// the start of a paragraph — see `TextSpanRenderer._listPrefixStyle`.
-  /// Purely presentational: the prefix is ordinary document text styled
-  /// differently, not a generated marker, so this only ever affects
-  /// color/weight, never what text exists or how long it is.
+  /// the start of a paragraph.
   final Color listMarkerColor;
 
   const RichTextRenderTheme({

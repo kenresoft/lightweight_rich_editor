@@ -5,15 +5,10 @@ import '../utils/list_prefix.dart';
 /// Converts plain text and [TextAttribute]s into an HTML string for
 /// copying to the system clipboard or exporting to other apps.
 ///
-/// List paragraphs get real `<ul>/<ol>/<li>` structure, detected purely
-/// from literal text via [listPrefixLength]/[listTypeOfPrefix] — the
-/// same derived-from-text approach used everywhere else list-ness is
-/// checked in this codebase, not a stored `ParagraphIndex` field. This
-/// exporter has to work on arbitrary substrings (e.g.
-/// `ClipboardManager.copy()` passes a clipped selection, not the whole
-/// document), which a `ParagraphIndex`-based approach couldn't do
-/// anyway — `ParagraphIndex` offsets are relative to the whole
-/// document, not to whatever range got copied.
+/// List paragraphs get real `<ul>/<ol>/<li>` structure, detected from
+/// literal text via [listPrefixLength]/[listTypeOfPrefix] so this also
+/// works on arbitrary substrings (e.g. a clipped selection), not just
+/// the whole document.
 class HtmlExporter {
   const HtmlExporter();
 
@@ -57,10 +52,6 @@ class HtmlExporter {
         buffer.write('</li>');
       } else {
         closeOpenList();
-        // '<br>' between paragraphs, matching the original character-
-        // by-character sweep's '\n' -> '<br>' behavior — just emitted
-        // per-paragraph now instead of per-character. Never before the
-        // very first paragraph.
         if (!isFirstParagraph) buffer.write('<br>');
         buffer.write(_renderInline(text, contentStart, paragraphEnd, sorted));
       }
@@ -74,22 +65,9 @@ class HtmlExporter {
     return buffer.toString();
   }
 
-  /// Renders the inline (character-level) content of `[start, end)`,
-  /// applying whatever `sorted` attributes overlap that range —
-  /// extracted from the original single-pass sweep so it can be called
-  /// once per paragraph instead of once for the whole document.
-  ///
-  /// Handles three cases a plain per-character sweep over the *whole*
-  /// text didn't need to: an attribute already active when this window
-  /// starts (opened before the loop, since the sweep only opens tags
-  /// exactly at their own `.start`, which may be earlier), an attribute
-  /// still active when the window ends (force-closed at `end`
-  /// regardless of its true `.end`), and escaping. The force-close
-  /// matters specifically for list content: `<li>` elements are
-  /// siblings, not nested, so a `<b>` span that used to run across two
-  /// list items in the flat document has to become two separate
-  /// `<b>...</b>` regions in the exported HTML — `<b>` spanning across
-  /// `</li><li>` isn't valid structure.
+  // Renders the inline content of [start, end), force-closing any
+  // still-open attribute at the window end: needed because <li>
+  // elements are siblings, not nested, so a span can't cross them.
   String _renderInline(String text, int start, int end, List<TextAttribute> sorted) {
     if (start >= end) return '';
     final buffer = StringBuffer();
@@ -148,21 +126,11 @@ class HtmlExporter {
         final tag = value == 'h1' ? 'h1' : 'h2';
         return isOpen ? '<$tag>' : '</$tag>';
       case AttributeType.align:
-        // Reuses the exact same paragraph-spanning-attribute mechanism
-        // header does — the AttributeType.align span synthesized by
-        // `EditorDocument.exportAttributes` always covers a whole
-        // paragraph (including its list prefix, if any), so this opens
-        // right at the start of `_renderInline`'s window and force-closes
-        // at its end, composing correctly whether or not the paragraph
-        // is also a `<li>`/`<h1>`. `value` is the CSS keyword itself
-        // (`ParagraphAlignment.name`: 'left'/'center'/'right').
+        // value is ParagraphAlignment.name ('left'/'center'/'right').
         return isOpen ? '<div style="text-align:$value">' : '</div>';
       case AttributeType.textDirection:
-        // Same paragraph-spanning mechanism as align, one line up — see
-        // that case's doc comment. `dir` is a plain HTML attribute
-        // (not a CSS style) because that's the idiomatic way to express
-        // direction, and it's what `HtmlImporter` looks for on the way
-        // back in. `value` is `ParagraphTextDirection.name` ('ltr'/'rtl').
+        // dir is a plain attribute (not CSS) since that's what
+        // HtmlImporter looks for; value is 'ltr'/'rtl'.
         return isOpen ? '<div dir="$value">' : '</div>';
       default:
         return '';

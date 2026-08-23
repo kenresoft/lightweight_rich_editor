@@ -2,14 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Default handler for [RichEditorController]'s `onTapLink` — opens
-/// [url] via the platform's standard external-browser mechanism, with
-/// no confirmation step. Used directly when
-/// `RichTextEditor.confirmBeforeOpeningLinks` is `false`; otherwise
-/// [confirmAndLaunchLink] wraps this.
+/// [url] via the platform's external-browser mechanism. Used directly
+/// when `RichTextEditor.confirmBeforeOpeningLinks` is `false`;
+/// otherwise [confirmAndLaunchLink] wraps this.
 ///
-/// Invalid or unlaunchable URLs (malformed text, no handler
-/// registered, platform declines) are swallowed rather than thrown —
-/// a stray tap on a broken link should never crash the editor.
+/// Invalid or unlaunchable URLs are swallowed rather than thrown — a
+/// stray tap on a broken link should never crash the editor.
 Future<void> launchLinkUrl(String url) async {
   final uri = Uri.tryParse(url);
   if (uri == null) return;
@@ -22,25 +20,12 @@ Future<void> launchLinkUrl(String url) async {
   }
 }
 
-/// Shows a lightweight "Open link?" confirmation before calling
-/// [launchLinkUrl] — guards against a link being opened from an
-/// accidental tap, which is a real risk here specifically because
-/// tapping *inside* editable rich text is also the normal way to move
-/// the caret near a link to edit it.
+/// Shows an "Open link?" confirmation before calling [launchLinkUrl] —
+/// guards against opening a link from an accidental tap, since tapping
+/// inside editable rich text is also how the caret is moved near a link.
 ///
-/// This is the default tap behavior `RichTextEditor` wires up (see
-/// `RichTextEditor.confirmBeforeOpeningLinks`, which defaults to
-/// `true`) for both manually-created and autolinked links alike —
-/// this function has no idea which kind of link it was called for,
-/// since both paths ultimately store the same `AttributeType.link`
-/// attribute and both go through the same `renderer.onTapLink`.
-///
-/// Guards on `context.mounted` before showing the dialog: the
-/// `BuildContext` here was captured by a `RichTextEditor.build()` call
-/// and handed to a `TapGestureRecognizer` that may fire an arbitrary
-/// amount of time later (whenever the user actually taps) — by which
-/// point the widget could plausibly have been unmounted (e.g. the note
-/// screen was popped a moment before the tap lands).
+/// This is the default tap behavior `RichTextEditor` wires up when
+/// `confirmBeforeOpeningLinks` is `true` (the default).
 Future<void> confirmAndLaunchLink(BuildContext context, String url) async {
   if (!context.mounted) return;
 

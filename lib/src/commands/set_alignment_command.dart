@@ -3,11 +3,6 @@ import '../core/editor_selection.dart';
 import '../models/paragraph_alignment.dart';
 import 'editor_command.dart';
 
-/// One paragraph's `alignment` immediately before a
-/// [SetAlignmentCommand] ran — enough to restore that exact paragraph's
-/// prior state on undo. Same shape as `SetHeaderLevelCommand`'s own
-/// `_HeaderSnapshot`, deliberately — see that class for the full
-/// reasoning this mirrors.
 class _AlignmentSnapshot {
   final int start;
   final int end;
@@ -16,16 +11,9 @@ class _AlignmentSnapshot {
 }
 
 /// Sets `alignment` on the paragraph(s) containing `selection`, via
-/// [EditingEngine.setAlignment]. Structural copy of
-/// `SetHeaderLevelCommand` — see that class's doc comment for the full
-/// reasoning (per-paragraph undo snapshots, since a multi-paragraph
-/// selection can have several different previous alignments; snapshot
-/// taken inside [execute], not the constructor, since [execute] also
-/// runs on redo).
-///
-/// See [ParagraphAlignment]'s doc comment for the one thing that isn't
-/// shared with header: this has no live rendering effect in the editor
-/// today, only stored + round-tripped state.
+/// [EditingEngine.setAlignment]. Snapshots each affected paragraph's
+/// prior alignment individually, since a multi-paragraph selection can
+/// span several different previous values.
 class SetAlignmentCommand extends EditorCommand {
   final EditorSelection selection;
   final ParagraphAlignment? alignment;

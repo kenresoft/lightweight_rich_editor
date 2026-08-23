@@ -12,16 +12,8 @@ import 'rich_text_editor.dart';
 /// A ready-to-use rich text editor: toolbar, editor, and find/replace
 /// bar wired together with sensible defaults.
 ///
-/// [FormatToolbar], [RichTextEditor], and [FindReplaceBar] are exported
-/// individually and compose freely for hosts that want to place them
-/// separately (in different parts of a layout, with custom widgets
-/// between them, etc.) — see this class's own `build()` method for
-/// exactly how they fit together, if that's the starting point you need.
-/// This widget exists for the much more common case: an app that just
-/// wants a working note editor without first discovering that "working
-/// note editor" means owning a [RichEditorController], a
-/// [ScrollController], and three widgets' worth of toggle state
-/// (margin visibility, ruled-line style, find-bar visibility) itself.
+/// [FormatToolbar], [RichTextEditor], and [FindReplaceBar] are also
+/// exported individually for hosts that want to place them separately.
 ///
 /// ```dart
 /// Scaffold(
@@ -31,83 +23,67 @@ import 'rich_text_editor.dart';
 /// ```
 ///
 /// Needs a bounded-height ancestor (a [Scaffold]'s `body`, an
-/// [Expanded]/[SizedBox] — anything that would already be required to
-/// host a bare [RichTextEditor], since that's what this ultimately
-/// contains).
+/// [Expanded]/[SizedBox]).
 ///
-/// ## Reaching the controller
-///
-/// Save/load, programmatic formatting, or listening for changes all go
-/// through the underlying [RichEditorController] — reach it either by
-/// supplying your own via [controller] (this widget will use it as-is
-/// and never dispose it — that stays your responsibility) or, if you let
-/// this widget create one for you, by holding a
-/// `GlobalKey<LightweightRichEditorState>` and reading
+/// Reach the underlying [RichEditorController] — for save/load,
+/// programmatic formatting, or listening for changes — either by
+/// supplying your own via [controller] (used as-is, never disposed by
+/// this widget) or, if this widget creates one for you, via a
+/// `GlobalKey<LightweightRichEditorState>` and
 /// `key.currentState!.controller`.
 ///
-/// ## `theme` vs `editorStyle`
-///
-/// [editorStyle] (ruled-line/margin colors and layout) is read fresh on
-/// every rebuild, same as passing it straight to [RichTextEditor] — a
-/// new value takes effect immediately. [theme] (text styling — the
-/// [RichTextRenderTheme] passed to [RichEditorController]) behaves
-/// differently *only* when this widget created its own controller: it
-/// seeds that controller once, at construction, the same way
-/// [initialText] does — later changes to [theme] on rebuild are not
-/// picked up automatically, because the controller (not this widget) is
-/// what actually owns the live theme from that point on. To swap themes
-/// at runtime (e.g. a dark-mode toggle), assign directly:
-/// `controller.renderer.theme = newTheme` from inside a `setState` (or
-/// equivalent) in the host — [TextSpanRenderer]'s theme field is
-/// deliberately mutable for exactly this. If you supply your own
-/// [controller], [theme] is never read by this widget at all — the
-/// controller you built already carries its own renderer/theme.
+/// [editorStyle] is read fresh on every rebuild. [theme] is seed-once:
+/// it only sets an internally-created controller's *starting* theme, the
+/// same way [initialText] does — later changes to [theme] on rebuild
+/// aren't picked up (the controller, not this widget, owns the live
+/// theme from then on). To swap themes at runtime, assign
+/// `controller.renderer.theme = newTheme` directly. If you supply your
+/// own [controller], [theme] is never read by this widget at all.
 class LightweightRichEditor extends StatefulWidget {
   /// Supply your own controller if you need to reach it before this
-  /// widget builds (e.g. to attach a listener immediately), or if
-  /// something else in your app already owns one. Left `null` (the
-  /// common case), this widget creates and disposes one internally.
+  /// widget builds, or if something else in your app already owns one.
+  /// Left `null` (the common case), this widget creates and disposes
+  /// one internally.
   final RichEditorController? controller;
 
   /// Seeds an internally-created [controller]'s starting text. Ignored
-  /// if [controller] is supplied — an externally-owned controller's text
-  /// is that controller's own business.
+  /// if [controller] is supplied.
   final String initialText;
 
   /// Seeds an internally-created [controller]'s starting attributes.
-  /// Ignored if [controller] is supplied, same as [initialText].
+  /// Ignored if [controller] is supplied.
   final List<TextAttribute> initialAttributes;
 
   /// Seeds an internally-created [controller]'s text-rendering theme —
-  /// see the class doc comment's "theme vs editorStyle" section for why
-  /// this is seed-once rather than live-reactive, unlike [editorStyle].
+  /// see the class doc comment for why this is seed-once, not reactive.
   final RichTextRenderTheme theme;
 
   /// Ruled-line/margin layout and colors — read fresh every rebuild.
   final RichEditorStyle editorStyle;
 
-  /// Whether the margin line and its extra left padding start visible.
-  /// Purely a starting point: toggled thereafter via the toolbar's own
-  /// button, tracked as this widget's internal state from then on.
+  /// Whether the margin line starts visible. A starting point only,
+  /// toggled thereafter via the toolbar.
   final bool initialShowMargin;
 
   /// Ruled-line style (solid/dashed/none) to start with — cycled
-  /// thereafter via the toolbar, same "starting point only" contract as
-  /// [initialShowMargin].
+  /// thereafter via the toolbar.
   final RuledLineStyle initialLineStyle;
 
-  /// Save/Load toolbar actions — see [FormatToolbar.onSave]/[onLoad] for
-  /// why leaving these unset simply omits the corresponding button
-  /// rather than requiring a no-op callback.
+  /// Save/Load toolbar actions. Leaving these unset omits the
+  /// corresponding button rather than showing a no-op one.
   final VoidCallback? onSave;
   final VoidCallback? onLoad;
+
+  /// Forwarded to [RichTextEditor.textAlign].
+  final TextAlign textAlign;
+
+  /// Forwarded to [RichTextEditor.textDirection].
+  final TextDirection? textDirection;
 
   /// Forwarded to [RichTextEditor.confirmBeforeOpeningLinks].
   final bool confirmBeforeOpeningLinks;
 
-  /// Forwarded to [RichTextEditor.contextMenuBuilder] — see that field's
-  /// doc comment for what the built-in default provides and when you'd
-  /// want to override it versus just theming it.
+  /// Forwarded to [RichTextEditor.contextMenuBuilder].
   final EditableTextContextMenuBuilder? contextMenuBuilder;
 
   const LightweightRichEditor({
@@ -121,6 +97,8 @@ class LightweightRichEditor extends StatefulWidget {
     this.initialLineStyle = RuledLineStyle.solid,
     this.onSave,
     this.onLoad,
+    this.textAlign = TextAlign.start,
+    this.textDirection,
     this.confirmBeforeOpeningLinks = true,
     this.contextMenuBuilder,
   });
@@ -138,10 +116,8 @@ class LightweightRichEditorState extends State<LightweightRichEditor> {
   late RuledLineStyle _lineStyle = widget.initialLineStyle;
   bool _showFindBar = false;
 
-  /// The controller backing this editor — whether supplied via
-  /// [LightweightRichEditor.controller] or created internally. See the
-  /// class doc comment for how to reach this from outside when this
-  /// widget owns its own controller.
+  /// The controller backing this editor, whether supplied via
+  /// [LightweightRichEditor.controller] or created internally.
   RichEditorController get controller => _controller;
 
   @override
@@ -161,10 +137,8 @@ class LightweightRichEditorState extends State<LightweightRichEditor> {
   @override
   void dispose() {
     _scrollController.dispose();
-    // Only disposed if this widget created it — a controller the host
-    // handed in via `widget.controller` stays the host's responsibility,
-    // the same convention `RichEditorController`'s own `focusNode`
-    // parameter already follows.
+    // Only disposed if this widget created it — a host-supplied
+    // controller stays the host's responsibility.
     if (_ownsController) _controller.dispose();
     super.dispose();
   }
@@ -209,6 +183,8 @@ class LightweightRichEditorState extends State<LightweightRichEditor> {
             lineStyle: _lineStyle,
             editorStyle: widget.editorStyle,
             onToggleFind: _toggleFindBar,
+            textAlign: widget.textAlign,
+            textDirection: widget.textDirection,
             confirmBeforeOpeningLinks: widget.confirmBeforeOpeningLinks,
             contextMenuBuilder: widget.contextMenuBuilder,
           ),

@@ -17,18 +17,11 @@ enum RuledLineStyle {
 ///
 /// Ruled lines are drawn at [lineBottoms] — the real bottom edge of every
 /// actually-rendered line of text (see `TextSpanRenderer.lineBottomOffsets`),
-/// not a blind fixed-interval guess. A uniform-interval painter looks
-/// right for plain, unwrapped, single-size body text and silently drifts
-/// out of alignment the moment a line wraps or a header's larger font
-/// makes that one line taller than the rest — text ends up sitting *on*
-/// a ruled line instead of *between* two of them. Reading real line
-/// metrics instead of assuming a constant gap is what "smart" ruled
-/// lines means here: they track whatever Flutter's own text layout
-/// actually decided, not a guess this painter makes independently of it.
+/// not a fixed-interval guess, so they stay aligned even when a line
+/// wraps or a header's larger font makes one line taller than the rest.
 ///
-/// Once [lineBottoms] runs out (nothing typed there yet), lines continue
-/// at the constant [fallbackLineHeight] — the classic "blank notebook
-/// paper" look below wherever the user is currently writing.
+/// Once [lineBottoms] runs out, lines continue at the constant
+/// [fallbackLineHeight] — the blank "rest of the page" look.
 class RuledLinesPainter extends CustomPainter {
   /// Creates a [RuledLinesPainter].
   RuledLinesPainter({
@@ -56,8 +49,7 @@ class RuledLinesPainter extends CustomPainter {
   /// The bottom Y offset (document/unscrolled space, relative to
   /// [topPadding]) of every actually-rendered line — see
   /// `TextSpanRenderer.lineBottomOffsets`. Sorted ascending by
-  /// construction (cumulative line
-  /// heights), which is what makes the binary search in
+  /// construction, which is what makes the binary search in
   /// [_firstVisibleIndex] valid.
   final List<double> lineBottoms;
 
@@ -100,14 +92,10 @@ class RuledLinesPainter extends CustomPainter {
     }
   }
 
-  /// Index of the first entry in [lineBottoms] whose painted Y
-  /// (`topPadding + bottom - scrollOffset`) could fall at or below the
-  /// top of the viewport — binary search since [lineBottoms] is sorted,
-  /// so painting only ever visits the handful of lines actually on
-  /// screen regardless of total document length. This is what keeps
-  /// scrolling cheap: the O(document length) work is the *layout* behind
-  /// [lineBottoms] (cached elsewhere, recomputed only on real content/
-  /// width changes), not this per-frame paint call.
+  /// Index of the first entry in [lineBottoms] whose painted Y could
+  /// fall at or below the top of the viewport — binary search since
+  /// [lineBottoms] is sorted, so paint only visits lines actually on
+  /// screen regardless of document length.
   int _firstVisibleIndex(double minBottom) {
     var lo = 0;
     var hi = lineBottoms.length;

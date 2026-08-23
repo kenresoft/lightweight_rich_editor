@@ -1,14 +1,12 @@
 /// Coalesces change notifications from a batch of edits into a single
-/// callback, so a compound operation — paste, an AI rewrite, an import,
-/// replace-all, a markdown conversion, bulk formatting — rebuilds the
-/// editor's UI once instead of once per underlying edit.
+/// callback, so a compound operation (paste, replace-all, bulk
+/// formatting) rebuilds the editor's UI once instead of once per
+/// underlying edit.
 ///
-/// [EditingEngine] calls [notify] after every mutation it makes. Outside
-/// a transaction (`depth == 0`), that fires [onCommit] immediately — a
-/// single `engine.insert(...)` call still notifies exactly once, same as
-/// today. Inside [run], every [notify] call just marks the batch dirty;
-/// [onCommit] fires once, when the outermost [run] call returns.
-/// Transactions nest safely: only the outermost one triggers the commit.
+/// [EditingEngine] calls [notify] after every mutation. Outside a
+/// transaction that fires [onCommit] immediately; inside [run], each
+/// [notify] just marks the batch dirty and [onCommit] fires once when
+/// the outermost [run] call returns. Transactions nest safely.
 class TransactionManager {
   final void Function() onCommit;
 
@@ -43,8 +41,7 @@ class TransactionManager {
   }
 
   /// Signals that something changed. Called by [EditingEngine] after
-  /// each mutation — callers building compound operations don't need to
-  /// call this themselves, only [run].
+  /// each mutation.
   void notify() {
     if (_depth > 0) {
       _dirty = true;

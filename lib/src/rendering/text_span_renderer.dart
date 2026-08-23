@@ -11,13 +11,9 @@ import '../utils/list_prefix.dart';
 import 'document_renderer.dart';
 import 'render_theme.dart';
 
-/// What kind of marker a `type == null` event represents — composing
-/// events, match-highlight events, and selection-highlight events all use
-/// `type == null` (none are [AttributeType]s), so they need their own
-/// discriminator to be tracked as separate counters during the sweep.
-///
-/// Not to be confused with list markers (bullet/number prefixes), which
-/// this renderer no longer generates — see the removal note below.
+// What kind of marker a `type == null` event represents — composing,
+// match-highlight, and selection-highlight events all use `type == null`
+// (none are AttributeTypes), so they need their own discriminator.
 enum _MarkerKind {
   composing,
   matchHighlight,
@@ -33,8 +29,7 @@ enum _MarkerKind {
 /// character-by-character style resolution into O(spans log spans).
 class _StyleEvent {
   final int offset;
-  final AttributeType?
-  type; // null means this is a marker event — see markerKind
+  final AttributeType? type;
   final _MarkerKind? markerKind;
   final bool isStart;
   final Object? value;
@@ -49,81 +44,36 @@ class _StyleEvent {
 }
 
 /// Renders an [EditorDocument] to a Flutter [TextSpan] — the only place
-/// in this library that builds Flutter styling. Everything upstream
-/// (`EditorDocument`, `AttributeStore`, `EditingEngine`, `HistoryManager`,
-/// commands) is Flutter-free by construction; this class is where that
-/// data finally becomes pixels.
+/// in this library that builds Flutter styling.
 ///
-/// Three stages, matching the target architecture's "event generation,
-/// style stack, style resolution, TextSpan generation, caching":
-/// 1. [_buildEvents] turns spans (+ the composing range, if any) into a
-///    sorted list of start/end boundaries.
-/// 2. [renderSpan] sweeps those boundaries left to right, maintaining a
-///    per-[AttributeType] stack of currently-active values.
-/// 3. [_resolveStyle] turns "what's active in this segment" into a
-///    concrete [TextStyle], once per segment rather than once per
-///    character.
+/// Three stages: [_buildEvents] turns spans (plus the composing range,
+/// if any) into a sorted list of start/end boundaries; [renderSpan]
+/// sweeps them left to right maintaining a per-[AttributeType] stack of
+/// active values; [_resolveStyle] turns "what's active in this segment"
+/// into a concrete [TextStyle], once per segment rather than per
+/// character.
 ///
-/// This renderer previously injected "virtual" list-marker text (bullet
-/// dots, numbers) into the rendered [TextSpan] that had no corresponding
-/// characters in the document. That's since been removed: this class
-/// feeds a live, editable `TextField` via `TextEditingController
-/// .buildTextSpan`, and Flutter requires the rendered span's plain text
-/// to match the controller's `value.text` exactly, character for
-/// character — `RenderEditable` maps a `TextPosition` in the rendered
-/// paragraph straight onto a document offset with no translation layer.
-/// Text injected here that isn't in the document silently corrupts caret
-/// placement and selection on every line after the injection point. See
-/// the removal notes on [AttributeType] for the full rationale.
-///
-/// List-looking lines aren't lost, though: if a paragraph's own text
-/// literally starts with `'- '`, `'* '`, `'+ '`, or `'N. '` (typed by
-/// the user, or preserved as-is on import — see [listPrefixLength]),
-/// that prefix is styled distinctly here purely presentationally. It's
-/// the same character count in as out, so it can't touch the caret
-/// invariant above; it's just picking a different [TextStyle] for text
-/// that was always going to be rendered anyway.
-///
-/// Horizontal rules follow the exact same discipline, one level up: a
-/// paragraph whose *entire* text is three or more hyphens (see
-/// [isHorizontalRuleLine]) is styled as a muted divider-like line
-/// instead of plain body text. No stored flag, no rewriting of what was
-/// typed — a real full-bleed line (spanning the field's actual pixel
-/// width regardless of how much was typed) would need to track live
-/// text layout, which is a different, much riskier feature than
-/// styling literal text differently.
+/// List markers (`'- '`, `'3. '`) and horizontal rules (`'---'`) are
+/// never injected — they're literal characters the user typed or the
+/// importer preserved, styled distinctly here purely presentationally.
+/// This renderer feeds a live `TextField` via `TextEditingController
+/// .buildTextSpan`, and the rendered span's plain text must match
+/// `value.text` exactly, character for character, or caret/selection
+/// placement corrupts — so nothing here can add or remove characters.
 ///
 /// Heading size/weight is read from `EditorDocument.paragraphs`
-/// (`ParagraphIndex`) rather than from an `AttributeType.header` span in
-/// the event sweep below — the first consumer switched over as part of
-/// the block-architecture migration (see the design notes and
-/// `EditingEngine`'s dual-write call sites). `AttributeType.header`
-/// spans still exist in `AttributeStore` and still drive the render
-/// cache's invalidation key (`AttributeStore.revision`); they're just no
-/// longer what decides the rendered font size here.
-///
-/// Every paragraph start also gets a synthetic sweep event (see
-/// `_MarkerKind.paragraphBoundary`) purely to force the sweep to stop
-/// there — without it, a paragraph boundary that didn't happen to
-/// coincide with any *other* attribute's start/end could be skipped
-/// over entirely as part of a larger segment between two unrelated
-/// events, meaning `currentHeaderLevel` would never be re-queried for
-/// that paragraph even though `ParagraphIndex.headerLevel` was correct
-/// the whole time. This was the actual cause of "header data is right
-/// but the paragraph never visibly changes" — not a caching issue
-/// (`_cachedParagraphRevision` below is still correct and still
-/// necessary, just not sufficient on its own).
+/// (`ParagraphIndex`), not from an `AttributeType.header` span in the
+/// event sweep — though those spans still exist in `AttributeStore` and
+/// still drive the render cache's invalidation key.
 ///
 /// Results are cached against [AttributeStore.revision] plus the other
-/// call inputs, so re-rendering after a selection-only change (no text
-/// or formatting edit) is a cache hit.
+/// call inputs, so re-rendering after a selection-only change is a
+/// cache hit.
 class TextSpanRenderer implements DocumentRenderer<TextSpan> {
-  /// Reassigning this (e.g. a dark-mode theme swap) clears
-  /// [_quantizedLineHeightCache] — that cache is keyed by font
-  /// size/weight/style alone, not by [theme], so a new theme with a
-  /// different [RichTextRenderTheme.lineHeight] needs a clean slate
-  /// rather than silently reusing heights quantized against the old
-  /// line height.
+  /// Reassigning this (e.g. a dark-mode theme swap) clears the
+  /// quantized-line-height cache, which is keyed by font size/weight/
+  /// style alone and would otherwise reuse heights computed against the
+  /// old [RichTextRenderTheme.lineHeight].
   RichTextRenderTheme get theme => _theme;
   set theme(RichTextRenderTheme value) {
     if (_theme == value) return;
@@ -136,17 +86,15 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   /// Called when the user taps a link span, with the link's URL.
   void Function(String url)? onTapLink;
 
-  /// Called when the user taps a task-list checkbox glyph (`'[ ] '`/
-  /// `'[x] '`), with the offset of that paragraph's start — enough for
-  /// the host to look up and toggle that specific item. `null` (the
-  /// default) means checkbox prefixes render but aren't tappable, same
-  /// as [onTapLink] being unset for links.
+  /// Called when the user taps a task-list checkbox glyph, with the
+  /// offset of that paragraph's start. `null` (the default) means
+  /// checkbox prefixes render but aren't tappable.
   void Function(int paragraphStart)? onToggleCheckbox;
 
-  /// Whether links should be interactive (clickable) in the rendered
-  /// span. In an editable field, this should usually be `false` to
-  /// allow cursor placement and selection on links; the host can
-  /// still handle links via long-press (selection toolbar).
+  /// Whether links are interactive (clickable) in the rendered span. In
+  /// an editable field this should usually be `false`, so cursor
+  /// placement and selection still work on links; the host can still
+  /// handle links via long-press (selection toolbar).
   bool interactiveLinks;
 
   TextSpanRenderer({
@@ -169,12 +117,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   RichTextRenderTheme? _cachedTheme;
   bool? _cachedInteractiveLinks;
 
-  /// Tap recognizers attached to the current [_cachedSpan]'s link
-  /// segments. `GestureRecognizer`s must be explicitly disposed —
-  /// they're not garbage-collected safely on their own — so every
-  /// rebuild disposes the previous batch before creating a new one, and
-  /// [dispose] cleans up whatever's left when this renderer itself goes
-  /// away (call it from the owning controller's `dispose()`).
+  // GestureRecognizers must be explicitly disposed — every rebuild
+  // disposes the previous batch before creating a new one, and dispose()
+  // cleans up whatever's left when this renderer itself goes away.
   final List<TapGestureRecognizer> _recognizers = [];
 
   /// Renders with defaults — no base style, no composing region. Enough
@@ -184,27 +129,22 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   TextSpan render(EditorDocument document) => renderSpan(document);
 
   /// Renders `document` to a [TextSpan], applying `style` as the base,
-  /// underlining `composingRange` (Android/iOS IME composition
-  /// feedback), and painting `matchHighlightRange` (e.g. the current
-  /// find-and-replace match) with [RichTextRenderTheme.matchHighlightColor].
+  /// underlining `composingRange` (IME composition feedback), and
+  /// painting `matchHighlightRange` with
+  /// [RichTextRenderTheme.matchHighlightColor].
   ///
-  /// `allMatchesRanges`, if given, paints every other range in it with
-  /// [RichTextRenderTheme.otherMatchesHighlightColor] — a paler variant,
-  /// so the *current* match (`matchHighlightRange`) stays the one that
-  /// visually stands out. For cache-friendliness, pass the *same list
-  /// instance* across calls when the underlying match set hasn't
-  /// changed — this is compared by reference (`identical`), not deep
-  /// equality, the same contract [lineBottomOffsets] already follows for
-  /// its own list output; `SearchIndex.matches` already returns a stable
-  /// reference for exactly this reason.
+  /// `allMatchesRanges`, if given, paints every other range with
+  /// [RichTextRenderTheme.otherMatchesHighlightColor] so the *current*
+  /// match stays the one that stands out. For cache-friendliness, pass
+  /// the same list instance across calls when the match set hasn't
+  /// changed — compared by reference, not deep equality.
   ///
   /// The match highlight is a distinct visual channel from Flutter's
-  /// native [TextSelection] highlight on purpose: `EditableText` hides
-  /// its selection highlight whenever the field loses focus (e.g. when
-  /// a find bar's own text field takes focus), which would make "jump
-  /// to next match" invisible the moment the find UI is interacted with.
-  /// Baking the highlight into the rendered span itself means it stays
-  /// visible regardless of which field has focus.
+  /// native [TextSelection] highlight: `EditableText` hides its
+  /// selection highlight whenever the field loses focus (e.g. the find
+  /// bar's own text field taking focus), which would make "jump to next
+  /// match" invisible. Baking the highlight into the span itself keeps
+  /// it visible regardless of which field has focus.
   TextSpan renderSpan(
     EditorDocument document, {
     TextStyle? style,
@@ -215,12 +155,6 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   }) {
     final text = document.text;
     final revision = document.attributeStore.revision;
-    // Header lives entirely in document.paragraphs now (ParagraphIndex),
-    // not attributeStore — without also keying the cache on its own
-    // revision counter, a header-only change (no text change, no
-    // attributeStore change) would be invisible to this cache check,
-    // and buildTextSpan would keep returning the stale, pre-header span
-    // forever.
     final paragraphRevision = document.paragraphs.revision;
 
     if (_cachedSpan != null &&
@@ -261,10 +195,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   }
 
   /// Invalidates the cache without changing anything else — call if
-  /// `theme` was mutated in place rather than reassigned (mutating a
-  /// `const`-ish theme object isn't possible here since it's
-  /// `@immutable`, but this stays available for subclasses that add
-  /// mutable state).
+  /// `theme` was mutated in place rather than reassigned.
   void invalidateCache() => _cachedSpan = null;
 
   List<double>? _cachedLineBottoms;
@@ -275,33 +206,29 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   int? _cachedLineBottomsParagraphRevision;
   TextStyle? _cachedLineBottomsBaseStyle;
   TextHeightBehavior? _cachedLineBottomsHeightBehavior;
+  TextDirection? _cachedLineBottomsDirection;
 
   /// The bottom Y offset (document/unscrolled space) of every actually
   /// *rendered* line, accounting for wrapping and any per-paragraph
   /// font-size difference (headers) — what `RuledLinesPainter` aligns
-  /// ruled lines against, instead of assuming a fixed gap between every
-  /// line regardless of what's actually there.
+  /// ruled lines against.
   ///
-  /// Built by laying out the exact same [TextSpan] this renderer already
-  /// produces (via [renderSpan]) through a throwaway [TextPainter] with
-  /// the same `maxWidth`/`strutStyle` the real `TextField` uses, then
-  /// reading [TextPainter.computeLineMetrics] — the same layout engine
-  /// the real field goes through, so this necessarily agrees with it,
-  /// without this renderer needing to independently model Flutter's
-  /// strut/line-height interaction itself.
+  /// Built by laying out the same [TextSpan] this renderer produces
+  /// through a throwaway [TextPainter] with the same `maxWidth`/
+  /// `strutStyle` the real `TextField` uses, so it agrees with where
+  /// that field actually renders.
   ///
-  /// Cached the same way [renderSpan] is (by document/paragraph
-  /// revision), plus `maxWidth`/`strutStyle`/`style`, which a line
-  /// layout depends on that a plain, unwrapped [TextSpan] doesn't. A
-  /// cache hit returns the *same list instance* as last time — callers
-  /// (`RuledLinesPainter.shouldRepaint`) can and should compare by
-  /// reference rather than deep-equality for cheap per-frame checks.
+  /// Cached the same way [renderSpan] is, plus `maxWidth`/`strutStyle`/
+  /// `style`. A cache hit returns the *same list instance* as last time
+  /// — callers can and should compare by reference for cheap per-frame
+  /// checks.
   List<double> lineBottomOffsets(
     EditorDocument document, {
     required double maxWidth,
     TextStyle? style,
     required StrutStyle strutStyle,
     TextHeightBehavior? textHeightBehavior,
+    TextDirection textDirection = TextDirection.ltr,
   }) {
     final text = document.text;
     final revision = document.attributeStore.revision;
@@ -314,7 +241,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         _cachedLineBottomsWidth == maxWidth &&
         _cachedLineBottomsStrut == strutStyle &&
         _cachedLineBottomsBaseStyle == style &&
-        _cachedLineBottomsHeightBehavior == textHeightBehavior) {
+        _cachedLineBottomsHeightBehavior == textHeightBehavior &&
+        _cachedLineBottomsDirection == textDirection) {
       return _cachedLineBottoms!;
     }
 
@@ -322,7 +250,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final painter = TextPainter(
       text: span,
       strutStyle: strutStyle,
-      textDirection: TextDirection.ltr,
+      textDirection: textDirection,
       textWidthBasis: TextWidthBasis.parent,
       textHeightBehavior: textHeightBehavior,
     )..layout(maxWidth: maxWidth <= 0 ? double.infinity : maxWidth);
@@ -342,22 +270,18 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedLineBottomsStrut = strutStyle;
     _cachedLineBottomsBaseStyle = style;
     _cachedLineBottomsHeightBehavior = textHeightBehavior;
+    _cachedLineBottomsDirection = textDirection;
     return bottoms;
   }
 
   /// The document-space (unscrolled) Y offset of `charOffset`'s glyph —
   /// what a caller scrolling the editor's viewport to bring a specific
-  /// character position into view (e.g. `RichTextEditor`'s scroll-to-
-  /// current-search-match behavior) needs. Same parallel-[TextPainter]
-  /// technique [lineBottomOffsets] uses, so it necessarily agrees with
-  /// where that character actually renders in the real `TextField` —
-  /// pass the exact same `maxWidth`/`style`/`strutStyle`/
-  /// `textHeightBehavior` that field uses.
+  /// character into view needs. Same parallel-[TextPainter] technique
+  /// [lineBottomOffsets] uses — pass the same `maxWidth`/`style`/
+  /// `strutStyle`/`textHeightBehavior` that field uses.
   ///
-  /// Not cached: called only when something like the current search
-  /// match actually changes (a rare event relative to keystrokes/
-  /// scrolling), not on every frame, so the cost of one extra layout
-  /// pass here isn't worth the bookkeeping a cache would add.
+  /// Not cached: called only when the current search match actually
+  /// changes, not on every frame.
   double offsetYFor(
     EditorDocument document,
     int charOffset, {
@@ -365,12 +289,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     TextStyle? style,
     required StrutStyle strutStyle,
     TextHeightBehavior? textHeightBehavior,
+    TextDirection textDirection = TextDirection.ltr,
   }) {
     final span = renderSpan(document, style: style);
     final painter = TextPainter(
       text: span,
       strutStyle: strutStyle,
-      textDirection: TextDirection.ltr,
+      textDirection: textDirection,
       textWidthBasis: TextWidthBasis.parent,
       textHeightBehavior: textHeightBehavior,
     )..layout(maxWidth: maxWidth <= 0 ? double.infinity : maxWidth);
@@ -380,9 +305,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   }
 
   /// Disposes any tap recognizers still attached to the last rendered
-  /// span. Call this when the renderer itself is being discarded (e.g.
-  /// from `RichEditorController.dispose()`) — not between normal
-  /// rebuilds, which already dispose the previous batch themselves.
+  /// span. Call when the renderer itself is being discarded (e.g. from
+  /// `RichEditorController.dispose()`) — normal rebuilds already dispose
+  /// the previous batch themselves.
   void dispose() => _disposeRecognizers();
 
   void _disposeRecognizers() {
@@ -417,10 +342,6 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     TextRange? selectionHighlightRange,
     List<TextRange>? allMatchesRanges,
   ) {
-    // A cache miss means we're about to build a brand new span tree —
-    // dispose whatever recognizers the previous one was holding before
-    // creating their replacements, so tapping a link never fires a
-    // recognizer whose span isn't on screen anymore.
     _disposeRecognizers();
 
     final text = document.text;
@@ -474,22 +395,10 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     );
   }
 
-  /// Whether any paragraph starts with a literal list prefix — used
-  /// only to decide whether [_render] can take its plain-`TextSpan`
-  /// fast path or needs the full event sweep to style that prefix.
-  ///
-  /// Iterates `document.paragraphs.records` — already computed, already
-  /// O(paragraphs) to walk — checking each record's own start with the
-  /// bounded [listPrefixLength]. O(paragraphs) total, strictly cheaper
-  /// than the O(document length) `text`-rescanning this used to do
-  /// (paragraphs ≤ characters, always). Deliberately not a *stored*
-  /// `hasAnyList` field on `ParagraphIndex`: unlike `hasAnyHeader`
-  /// (which just reads the already-reliable `headerLevel` field on each
-  /// record), list-ness has no stored field to read — computing it
-  /// would need `ParagraphIndex` to have text access it deliberately
-  /// doesn't have, or a cached boolean with no way to stay correct
-  /// after `applyInsertion`/`applyDeletion`, which don't receive text
-  /// either. This gets the same complexity win without either problem.
+  // Whether any paragraph starts with a literal list prefix — decides
+  // whether _render can take its plain-TextSpan fast path. O(paragraphs)
+  // via document.paragraphs.records, not a stored field: list-ness has
+  // no stable cached representation across applyInsertion/applyDeletion.
   bool _containsListPrefix(EditorDocument document) {
     final text = document.text;
     for (final record in document.paragraphs.records) {
@@ -498,9 +407,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     return false;
   }
 
-  /// Whether any paragraph is a horizontal-rule line — same rationale
-  /// and shape as [_containsListPrefix]: only used to decide the
-  /// plain-`TextSpan` fast path, not stored anywhere.
+  // Whether any paragraph is a horizontal-rule line — same rationale as
+  // _containsListPrefix.
   bool _containsHorizontalRule(EditorDocument document) {
     final text = document.text;
     for (final record in document.paragraphs.records) {
@@ -543,28 +451,11 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     }
 
     // Forces the sweep to stop at a paragraph start whenever that
-    // paragraph's *own* presentational state might actually need
-    // re-evaluating there — see the class doc comment for why this has
-    // to happen at every relevant paragraph boundary, not just wherever
-    // some other event happens to land, or `currentHeaderLevel` (etc.)
-    // could go un-refreshed for a whole paragraph.
-    //
-    // "Might need re-evaluating" deliberately isn't "every paragraph,
-    // unconditionally" (the previous version here) — a boundary is only
-    // useful when something the sweep tracks per-paragraph could
-    // plausibly differ from what it already carried over from the
-    // paragraph before: header level or horizontal-rule-ness changing,
-    // or (unconditionally, regardless of the neighbor) this paragraph
-    // having its own list/checkbox prefix, since prefix styling is
-    // always specific to that one paragraph's own leading characters —
-    // never something that can be "inherited" from a neighbor the way
-    // header/hr state can. Skipping the rest is a real, measured
-    // performance fix, not just a tidy-up: a large note is
-    // overwhelmingly plain body paragraphs with none of this — forcing
-    // a separate `TextSpan` child at every single one of them anyway,
-    // even though the resolved style demonstrably wouldn't have
-    // changed, was costing a full extra sweep stop (and object
-    // allocation) per paragraph for no visual difference at all.
+    // paragraph's own presentational state (header level, hr-ness, or
+    // its own list/checkbox prefix) could plausibly differ from the
+    // paragraph before — otherwise a boundary that doesn't coincide with
+    // any other event could be skipped, leaving currentHeaderLevel
+    // un-refreshed for that paragraph.
     final text = document.text;
     String? previousHeaderLevel;
     var previousIsHorizontalRule = false;
@@ -726,9 +617,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           } else if (event.markerKind == _MarkerKind.allMatchesHighlight) {
             activeAllMatchesHighlight += delta;
           } else if (event.markerKind == _MarkerKind.paragraphBoundary) {
-            // No counter needed: the event exists solely to force the
-            // outer while loop to break a segment at this offset, so
-            // currentHeaderLevel re-queries correctly below.
+            // No counter needed: this event exists solely to force the
+            // loop below to break a segment at this offset.
           } else {
             activeComposing += delta;
           }
@@ -748,13 +638,6 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         final isParagraphStart =
             currentPos == 0 || text.codeUnitAt(currentPos - 1) == 0x0A;
         if (isParagraphStart) {
-          // Header now reads from ParagraphIndex, not an
-          // AttributeType.header event in the sweep above —
-          // activeValues[AttributeType.header] is simply unused for
-          // styling. Correctness here depends on the paragraphBoundary
-          // events above guaranteeing isParagraphStart is actually
-          // checked at every paragraph, not just wherever some other
-          // event happens to land.
           final record = document.paragraphs.paragraphAt(currentPos);
           currentHeaderLevel = record?.headerLevel;
           currentIsHorizontalRule =
@@ -781,11 +664,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           activeAllMatchesHighlight > 0,
         );
 
-        // A horizontal-rule line has no "prefix + content" shape at all
-        // — the whole run of hyphens *is* the marker, styled uniformly,
-        // with nothing after it to split out. Handled as its own branch
-        // rather than folded into the prefix logic below, which assumes
-        // a marker followed by unrelated content.
+        // A horizontal-rule line is entirely marker — the whole run of
+        // hyphens, styled uniformly, with nothing after it to split out.
         if (currentIsHorizontalRule) {
           if (nextPos > currentPos) {
             children.add(
@@ -800,12 +680,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         }
 
         // The prefix run is styled but otherwise ordinary text — same
-        // character count as what's in the document, just a different
-        // TextStyle. No link recognizer on it: a link overlapping a
-        // literal '- ' at a paragraph start is a nonsensical combination
-        // not worth complicating this split for. A checkbox prefix does
-        // get a recognizer, though — that's the whole point of it being
-        // tappable.
+        // character count as in the document. No link recognizer on it
+        // (a link overlapping a literal '- ' isn't meaningful); a
+        // checkbox prefix does get one, since that's the point of it.
         if (prefixEnd > currentPos) {
           children.add(
             TextSpan(
@@ -822,9 +699,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           final linkUrl = activeValues[AttributeType.link]!.isEmpty
               ? null
               : activeValues[AttributeType.link]!.last as String?;
-          // A checked item's own content (not the checkbox glyph) gets a
-          // line-through on top of whatever else is active, so a bold or
-          // linked word inside a checked item still reads as struck.
+          // A checked item's own content gets a line-through on top of
+          // whatever else is active, so bold/linked text inside a
+          // checked item still reads as struck.
           final contentStyle = currentChecked == true
               ? resolvedStyle.copyWith(
                   decoration: TextDecoration.combine([
@@ -850,42 +727,19 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     return children;
   }
 
-  /// Keyed by `'$fontSize|${fontWeight.value}|$isItalic'` — the inputs
-  /// [_quantizedLineHeight] actually depends on.
+  // Keyed by '$fontSize|${fontWeight.value}|$isItalic'.
   final Map<String, double> _quantizedLineHeightCache = {};
 
   /// The line-box height to target for text at `fontSize`/`fontWeight`/
   /// `isItalic`, rounded *up* to the nearest whole multiple of
   /// [RichTextRenderTheme.lineHeight] rather than forced to exactly one
-  /// line regardless of font size.
-  ///
-  /// Forcing every line to exactly `theme.lineHeight` (the previous
-  /// behavior here) keeps the ruled-line grid perfectly regular, but a
-  /// header's font is often intrinsically taller than one row —
-  /// squeezing it into a single row's height doesn't shrink the glyphs,
-  /// it just crams them into a box too short for them, so they crowd
-  /// against (or visually cross) the ruled lines immediately above and
-  /// below instead of sitting centered. Rounding up to a whole number of
-  /// rows instead — 2 rows for a header that needs more than 1 but no
-  /// more than 2, etc. — keeps every ruled line still landing exactly on
-  /// a multiple of `theme.lineHeight` from the top (so nothing below a
-  /// header ever drifts), while giving the header's own glyphs a box
-  /// that's actually tall enough for them, centered within it via
-  /// [TextLeadingDistribution.even] (see where this is consumed in
-  /// `RichTextEditor` and [lineBottomOffsets] — both need the *same*
-  /// leading distribution as this height quantization assumes, or the
-  /// two would disagree about where a line's glyphs actually sit within
-  /// its box).
-  ///
-  /// "Rows needed" is measured once per distinct (fontSize, fontWeight,
-  /// isItalic) combination — via a throwaway [TextPainter] with no
-  /// height override, i.e. Flutter's own natural line metrics for that
-  /// style — and cached, rather than guessed at or hand-tuned per header
-  /// level: a host can freely reconfigure `h1FontSize`/`h2FontSize`/
-  /// `lineHeight`, or a plain size change via `AttributeType.size` can
-  /// produce any font size at all, and this stays correct for all of
-  /// them without needing to know in advance which ones "count as a
-  /// header."
+  /// line. A header's font is often intrinsically taller than one row;
+  /// rounding up to a whole number of rows keeps every ruled line still
+  /// landing on a multiple of `theme.lineHeight`, while giving the
+  /// header's glyphs a box tall enough for them (centered within it via
+  /// [TextLeadingDistribution.even] — see where this is consumed in
+  /// `RichTextEditor` and [lineBottomOffsets], which need the same
+  /// leading distribution).
   double _quantizedLineHeight(
     double fontSize,
     FontWeight fontWeight,
@@ -895,16 +749,10 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final cached = _quantizedLineHeightCache[key];
     if (cached != null) return cached;
 
-    // This runs on every styled segment of every render, including the
-    // very first paint — a bad result here (or an uncaught exception)
-    // doesn't just mis-size one header, it can take the whole document
-    // down with it. `theme.lineHeight` (the previous, always-safe
-    // behavior) is the fallback for anything that doesn't come back
-    // looking like a real, finite, positive measurement — a probe glyph
-    // missing from a given font, a `computeLineMetrics()` result this
-    // hasn't been tested against, or any other real-Skia behavior a
-    // widget test running against Flutter's test-only text backend
-    // can't be trusted to have already exercised.
+    // theme.lineHeight is the fallback for anything that doesn't come
+    // back as a real, finite, positive measurement — this runs on every
+    // styled segment of every render, so a bad result here can't be
+    // allowed to take the whole document's layout down with it.
     final result = _measureQuantizedLineHeight(fontSize, fontWeight, isItalic) ?? theme.lineHeight;
     _quantizedLineHeightCache[key] = result;
     return result;
@@ -918,7 +766,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     try {
       final probe = TextPainter(
         text: TextSpan(
-          text: 'Ág', // tall ascender + descender, a representative worst case for natural line height
+          text: 'Ág', // tall ascender + descender, a representative worst case
           style: TextStyle(
             fontSize: fontSize,
             fontWeight: fontWeight,
@@ -995,10 +843,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       color: colorArgb != null
           ? Color(colorArgb)
           : (linkUrl != null ? theme.linkColor : baseStyle?.color),
-      // The current search match and selection highlight take priority;
-      // any *other* search match comes next — still visually distinct
-      // from ordinary formatting even where a match happens to overlap
-      // manually-highlighted or code-styled text.
+      // Current match and selection highlight take priority; any other
+      // search match comes next, still distinct from ordinary formatting.
       backgroundColor: isCurrentMatch
           ? theme.matchHighlightColor
           : (isSelectionHighlight
@@ -1017,11 +863,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     );
   }
 
-  /// Styling for a literal list-prefix run (`'- '`, `'3. '`, etc.) —
-  /// takes the already-resolved style for that position (so inline
-  /// formatting like bold still applies) and layers the theme's marker
-  /// color and weight on top. Purely presentational: `segmentStyle`'s
-  /// text is unchanged, this only picks a different [TextStyle] for it.
+  // Styling for a literal list-prefix run — layers the theme's marker
+  // color/weight on top of the already-resolved style for that position.
   TextStyle _listPrefixStyle(TextStyle segmentStyle) {
     return segmentStyle.copyWith(
       color: theme.listMarkerColor,
@@ -1029,15 +872,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     );
   }
 
-  /// Styling for a horizontal-rule line (`'---'`, or any longer run of
-  /// hyphens — see `isHorizontalRuleLine`). Shares `listMarkerColor`
-  /// deliberately: both are muted, structural (non-content) marks, not
-  /// prose, so the same "quiet gray" treatment reads consistently rather
-  /// than introducing a second marker color for a very similar role. The
-  /// added letter-spacing is purely cosmetic — it fans the literal
-  /// hyphens out a bit so a short run reads more like a broken line than
-  /// a dash, without changing the character count or width in a way
-  /// that depends on layout.
+  // Styling for a horizontal-rule line. Shares listMarkerColor
+  // deliberately — both are muted, structural marks, not prose.
   TextStyle _horizontalRuleStyle(TextStyle segmentStyle) {
     return segmentStyle.copyWith(
       color: theme.listMarkerColor,

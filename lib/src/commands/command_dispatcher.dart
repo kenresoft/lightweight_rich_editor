@@ -16,16 +16,9 @@ import '../models/text_attribute.dart';
 import '../utils/list_prefix.dart';
 
 /// The single entry point every editing action goes through — toolbar
-/// buttons, keyboard shortcuts, paste handling, and (later) AI-driven
-/// edits or automation should all call `dispatcher.someAction(...)`
-/// rather than constructing commands or touching [EditingEngine] /
-/// [HistoryManager] themselves.
-///
-/// This is what makes "clean undo, keyboard shortcuts, AI editing,
-/// automation, future extensibility" (the brief's justification for a
-/// command system) actually true in practice rather than just in
-/// principle: there's exactly one place that knows how to turn "the user
-/// wants to toggle bold" into a recorded, undoable operation.
+/// buttons, keyboard shortcuts, and paste handling all call
+/// `dispatcher.someAction(...)` rather than constructing commands or
+/// touching [EditingEngine] / [HistoryManager] directly.
 class CommandDispatcher {
   final EditingEngine engine;
   final HistoryManager history;
@@ -41,23 +34,16 @@ class CommandDispatcher {
   /// Inserts `text` at `selection` (replacing it, if not collapsed),
   /// formatted with whatever sticky attributes are currently pending.
   ///
-  /// A bare `'\n'` — a single-character insertion — is routed through
-  /// [EditingEngine.enterKeyEditWithRenumber], so a programmatic Enter
-  /// (e.g. from a toolbar/shortcut, as opposed to live typing, which
-  /// `RichEditorController.set value` handles separately) gets the same
-  /// list-continuation and numbered-list-renumbering behavior live
+  /// A bare `'\n'` is routed through
+  /// [EditingEngine.enterKeyEditWithRenumber] so a programmatic Enter
+  /// gets the same list-continuation and renumbering behavior live
   /// typing does.
   EditorSelection insertText(EditorSelection selection, String text) {
     if (text == '\n') {
-      // relativeAttributes, not attributesForInsertion: the edit may
-      // reconstruct pre-existing text (a mid-line split's tail,
-      // renumbered subsequent items), which must keep its own original
-      // formatting rather than inheriting sticky attributes across the
-      // whole thing — see EditingEngine.enterKeyEditWithRenumber's doc
-      // comment for the bug this fixes. Sticky attributes are still
-      // applied, just only to the genuinely new marker portion, which
-      // enterKeyEditWithRenumber already folds into the returned
-      // relativeAttributes itself.
+      // Use relativeAttributes, not attributesForInsertion: the edit may
+      // reconstruct pre-existing text (renumbered subsequent items) that
+      // must keep its own formatting rather than inheriting sticky
+      // attributes across the whole thing.
       final edit = engine.enterKeyEditWithRenumber(selection, Map.of(engine.stickyAttributes));
       dispatch(ReplaceRangeCommand(
         start: edit.start,
@@ -75,23 +61,12 @@ class CommandDispatcher {
     ));
   }
 
-  /// A range deletion previously had zero list-awareness at all —
-  /// every other structural edit in this class goes through some
-  /// EditingEngine compute-method that accounts for list markers, but
-  /// this one was a bare ReplaceRangeCommand. That was a real,
-  /// confirmed bug (reported as "the previously reported blind spot"):
-  /// deleting a selection spanning list items could remove or merge
-  /// markers in ways that silently left subsequent numbered items with
-  /// stale numbers. Now runs EditingEngine.repairListNumbering as a
-  /// follow-up check afterward — see that method's doc comment for why
-  /// it checks the *next* paragraph too, not just the one the cursor
-  /// lands in.
+  /// Deletes `selection`, then runs [EditingEngine.repairListNumbering]
+  /// as a follow-up check so a selection spanning list items doesn't
+  /// leave subsequent numbered items with stale numbers.
   ///
-  /// Deliberately two separate undo steps when a repair is needed, not
-  /// one: undoing once reverts just the repair (leaving the raw
-  /// deletion's numbers as they were immediately after it); undoing
-  /// again removes the deletion itself. An honestly-labeled trade-off,
-  /// not a hidden inconsistency.
+  /// When a repair is needed this is two separate undo steps: undoing
+  /// once reverts the repair, undoing again removes the deletion.
   EditorSelection deleteSelection(EditorSelection selection) {
     if (selection.isCollapsed) return selection;
     final result = dispatch(ReplaceRangeCommand(start: selection.start, end: selection.end, text: ''));
@@ -105,11 +80,8 @@ class CommandDispatcher {
     return resultSelection;
   }
 
-  /// Previously constructed its own hardcoded single-character
-  /// deletion here, entirely bypassing `EditingEngine.deleteBackward`'s
-  /// smart list-marker/renumbering logic — a real bug, not a deliberate
-  /// scope choice. Now routes through `EditingEngine.deleteBackwardEdit`
-  /// like every other computed edit in this class.
+  /// Deletes one character/list-marker backward from a collapsed caret,
+  /// via [EditingEngine.deleteBackwardEdit].
   EditorSelection deleteBackward(EditorSelection selection) {
     if (!selection.isCollapsed) return deleteSelection(selection);
     final edit = engine.deleteBackwardEdit(selection);
@@ -118,11 +90,8 @@ class CommandDispatcher {
     return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
   }
 
-  /// Same consolidation reasoning as [deleteBackward]: routes through
-  /// `EditingEngine.deleteForwardEdit` instead of a hardcoded
-  /// single-character deletion, so this now gets smart list-marker
-  /// removal (deleting right before a marker removes the whole thing)
-  /// and numbered-list renumbering, matching backspace's behavior.
+  /// Deletes one character/list-marker forward from a collapsed caret,
+  /// via [EditingEngine.deleteForwardEdit].
   EditorSelection deleteForward(EditorSelection selection) {
     if (!selection.isCollapsed) return deleteSelection(selection);
     final edit = engine.deleteForwardEdit(selection);
@@ -180,36 +149,19 @@ class CommandDispatcher {
   void setLink(EditorSelection selection, String? url) => apply(AttributeType.link, selection, url);
 
   /// `level` is e.g. `'h1'`/`'h2'`; `null` clears the header. Applies to
-  /// the whole paragraph containing `selection`, not just the selected
-  /// text.
-  ///
-  /// Dispatches [SetHeaderLevelCommand], not [ApplyAttributeCommand] —
-  /// `AttributeType.header` is no longer written to anywhere in the live
-  /// editing path (see the block-architecture design notes); header is
-  /// entirely a `ParagraphIndex` concern now, with its own undo
-  /// semantics `SetHeaderLevelCommand` implements (per-paragraph
-  /// snapshotting, since a multi-paragraph selection can have several
-  /// different previous header levels — `ApplyAttributeCommand`'s single
-  /// shared previous-value undo couldn't represent that correctly).
+  /// the whole paragraph containing `selection`.
   void setHeader(EditorSelection selection, String? level) {
     dispatch(SetHeaderLevelCommand(selection, level));
   }
 
   /// `alignment` is `null` (default/left), `center`, or `right`. Applies
-  /// to the whole paragraph containing `selection`, not just the
-  /// selected text. Same reasoning and undo semantics as [setHeader] —
-  /// see [SetAlignmentCommand]. See [ParagraphAlignment]'s doc comment
-  /// for the important caveat that this has no live rendering effect in
-  /// the editor yet.
+  /// to the whole paragraph containing `selection`.
   void setAlignment(EditorSelection selection, ParagraphAlignment? alignment) {
     dispatch(SetAlignmentCommand(selection, alignment));
   }
 
   /// `textDirection` is `null` (unspecified), `ltr`, or `rtl`. Applies to
-  /// the whole paragraph containing `selection`. Same reasoning and undo
-  /// semantics as [setAlignment] — see [SetTextDirectionCommand]. See
-  /// [ParagraphTextDirection]'s doc comment for the caveat this has no
-  /// live rendering effect yet.
+  /// the whole paragraph containing `selection`.
   void setTextDirection(EditorSelection selection, ParagraphTextDirection? textDirection) {
     dispatch(SetTextDirectionCommand(selection, textDirection));
   }
@@ -222,30 +174,10 @@ class CommandDispatcher {
   /// `selection.start`.
   EditorSelection toggleNumberedList(EditorSelection selection) => _toggleList(selection, ParagraphListType.numbered);
 
-  /// Toggles a literal list prefix on the paragraph containing
-  /// `selection.start`, as one undoable text edit via the exact same
-  /// [ReplaceRangeCommand] every other text edit uses. This is
-  /// deliberately not a separate formatting command like [setHeader] —
-  /// list "formatting" here IS text (see
-  /// [EditingEngine.listToggleEdit]'s doc comment): inserting or
-  /// removing `'- '`/`'1. '` is exactly the same kind of edit as typing
-  /// those characters by hand, so it goes through the same path typing
-  /// does, not a bespoke Command.
-  ///
-  /// Returns the resulting `EditorSelection`, unlike [toggle] (bold,
-  /// italic, ...): those never change text *length*, so
-  /// `RichEditorController._handleCommit`'s clamped-selection guess is
-  /// already correct for them and callers don't need to sync explicitly.
-  /// This does change length — inserting/removing prefix characters —
-  /// so the caller needs to sync selection the same way [insertText]/
-  /// [deleteBackward] do, not the way [toggleBold] does.
-  ///
-  /// A selection spanning multiple paragraphs is fully supported —
-  /// `EditingEngine.listToggleEdit`/`_numberedToggleEdit` compute the
-  /// whole affected run (including numbered-run renumbering) as one
-  /// combined replacement, so this never needed a composite/batched
-  /// command the way a naive several-separate-edits approach would
-  /// have.
+  // List "formatting" is literal text (see EditingEngine.listToggleEdit),
+  // so this dispatches a ReplaceRangeCommand like any other text edit
+  // rather than a bespoke Command. Returns the resulting selection since,
+  // unlike toggleBold etc., it changes text length.
   EditorSelection _toggleList(EditorSelection selection, ParagraphListType type) {
     final edit = engine.listToggleEdit(selection, type);
     if (edit == null) return selection;
@@ -253,10 +185,7 @@ class CommandDispatcher {
   }
 
   /// Toggles task-list checkbox state on the paragraph(s) `selection`
-  /// spans. Literal text, like every other list operation — see
-  /// [EditingEngine.toggleCheckedEdit]'s doc comment — so this dispatches
-  /// through the same [ReplaceRangeCommand] path as [_toggleList], not a
-  /// bespoke Command.
+  /// spans.
   EditorSelection toggleTaskItem(EditorSelection selection) {
     final edit = engine.toggleCheckedEdit(selection);
     if (edit == null) return selection;

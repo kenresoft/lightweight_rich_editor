@@ -10,21 +10,12 @@ import 'transaction_manager.dart';
 
 /// All editing logic for an [EditorDocument]: insert, delete, replace,
 /// toggle/apply/remove formatting, paste and rich paste, clear
-/// formatting — every operation the old `RichTextEditingController` did
-/// by hand-rolling text and span math inline.
+/// formatting. Undo-agnostic — recording undo deltas is the Command
+/// layer's job.
 ///
-/// [EditingEngine] talks to the document only through [EditorDocument]'s
-/// [TextBuffer], [AttributeStore], and `ParagraphIndex` — it never
-/// touches a raw `String`. It's also undo-agnostic on purpose: it
-/// doesn't know a `HistoryManager` exists. Recording undo deltas is a
-/// wrapping concern that belongs to the Command layer, not something
-/// every editing method here should have to remember to do.
-///
-/// Every mutating method calls [TransactionManager.notify] exactly once
-/// for its own edit. Callers composing several calls into one logical
-/// operation (paste, bulk formatting, etc.) should wrap them in
-/// `transactions.run(() { ... })` so the surrounding UI only rebuilds
-/// once — see [TransactionManager].
+/// Every mutating method calls [TransactionManager.notify] once. Callers
+/// composing several calls into one logical operation should wrap them
+/// in `transactions.run(() { ... })` so the UI only rebuilds once.
 class EditingEngine {
   final EditorDocument document;
   final TransactionManager transactions;
@@ -64,12 +55,10 @@ class EditingEngine {
   /// this.
   ///
   /// The inserted text is formatted with `attributesForInsertion` if
-  /// given, otherwise the live [stickyAttributes]. Commands (Phase 3)
-  /// always pass `attributesForInsertion` explicitly — pinning the exact
-  /// attributes at the moment of the edit, rather than reading whatever
-  /// sticky state happens to be live later — so that redo reproduces the
-  /// original edit exactly even if the user has toggled other formatting
-  /// in between.
+  /// given, otherwise the live [stickyAttributes]. Commands always pass
+  /// `attributesForInsertion` explicitly, pinning the exact attributes at
+  /// the moment of the edit so redo reproduces it exactly even if the
+  /// user has toggled other formatting in between.
   EditorSelection replaceRange(
       int start,
       int end,
@@ -116,50 +105,19 @@ class EditingEngine {
     return EditorSelection.collapsed(start + text.length);
   }
 
-  /// Debug-only: asserts `ParagraphIndex` remains internally well-formed
-  /// (contiguous, gap-free, spanning the whole document) after a
-  /// mutation.
-  ///
-  /// This is what's left of the Phase 2 dual-write consistency check,
-  /// now that header no longer lives in `AttributeStore` at all going
-  /// forward — comparing the two would produce *expected*, correct
-  /// disagreement the moment anyone uses `setHeaderLevel`, not a bug to
-  /// catch. The structural invariant itself is still worth checking on
-  /// every edit, same as before; see [ParagraphIndex.debugValidate].
-  ///
-  /// Wrapped in `assert(...)` at every call site so it's compiled out
-  /// entirely in release builds.
+  // Asserts ParagraphIndex remains internally well-formed (contiguous,
+  // gap-free, spanning the whole document) after a mutation. Wrapped in
+  // assert(...) at every call site so it's compiled out in release builds.
   bool _debugValidateParagraphs() {
     document.paragraphs.debugValidate(document.text.length);
     return true;
   }
 
-  /// Trims paragraph-scoped attributes to the paragraph they started in
-  /// after a newline insertion.
-  ///
-  /// [AttributeType.link] and [AttributeType.code] are confined to the
-  /// paragraph they started in (cut off before the newline) — a span
-  /// that used to run through what is now a paragraph break gets
-  /// truncated at the break instead of silently spanning two paragraphs.
-  /// [AttributeType.header] used to be handled here too; it's gone from
-  /// this check because it's gone from `AttributeStore` entirely —
-  /// header confinement is now `ParagraphIndex.applyInsertion`'s split
-  /// logic (only the first fragment keeps `headerLevel`), which this
-  /// method has nothing to do with anymore. See the block-architecture
-  /// design notes.
-  ///
-  /// Bullet/numbered lists used to be handled here too, continuing the
-  /// list attribute onto the next paragraph. That branch is gone — see
-  /// the removal notes on [AttributeType] for why: it dropped list
-  /// formatting on every paragraph beyond the one immediately following
-  /// a break (a single span can cover many list items, but this method
-  /// only ever re-inserted two fragments — the paragraph before the
-  /// break and the one immediately after), and its per-newline call to
-  /// a paragraph-bounds scan — itself an O(document length) scan —
-  /// turned every newline in an inserted/pasted range into another
-  /// full-text scan, i.e. O(newlines × document length) for a single
-  /// paste. A large imported note with many list items would hang on
-  /// that alone.
+  // Confines link/code spans to the paragraph they started in after a
+  // newline insertion — a span that would otherwise run through the new
+  // paragraph break gets truncated at the break instead of silently
+  // spanning two paragraphs. Header confinement is handled separately, by
+  // ParagraphIndex.applyInsertion's split logic.
   void _confineParagraphScopedAttributes(int rangeStart, int rangeEnd) {
     final text = document.text;
     final store = document.attributeStore;
@@ -202,21 +160,9 @@ class EditingEngine {
 
   /// Backspace: deletes `selection`, or the one character before a
   /// collapsed caret. Thin mutating wrapper around [deleteBackwardEdit]
-  /// — see that method for the actual logic (smart list-marker removal,
-  /// numbered-list renumbering). Kept as a real method (not inlined)
-  /// since it's the natural "just do it" entry point for any direct
-  /// caller; [deleteBackwardEdit] exists for callers that need to
-  /// dispatch the edit through a Command instead of applying it
-  /// directly — `CommandDispatcher.deleteBackward` and
-  /// `RichEditorController.set value`'s live-backspace detection both
-  /// use that one, not this one.
-  ///
-  /// Note: this deletes one UTF-16 code unit, same granularity as the
-  /// original controller, for the plain (non-list) case. It does not
-  /// currently combine surrogate pairs or grapheme clusters (emoji,
-  /// combining marks) into a single delete — worth revisiting with the
-  /// `characters` package if that surfaces as a real bug, but it wasn't
-  /// handled before either, so this isn't a regression.
+  /// (smart list-marker removal, numbered-list renumbering); most
+  /// callers dispatch through [deleteBackwardEdit] directly via a Command
+  /// instead.
   EditorSelection deleteBackward(EditorSelection selection) {
     if (!selection.isCollapsed) return deleteRange(selection);
     final edit = deleteBackwardEdit(selection);
@@ -225,34 +171,14 @@ class EditingEngine {
     return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
   }
 
-  /// Computes the edit for a backspace at a collapsed `selection` —
-  /// pure computation, mutates nothing, mirrors [enterKeyEditWithRenumber]'s
-  /// pattern exactly. Returns `null` for a non-collapsed `selection` (use
-  /// [deleteRange] instead) or a caret already at document start (nothing
-  /// to delete).
-  ///
-  /// Extracts inline attributes intersecting `[srcStart, srcEnd)` in the
-  /// current, unmutated document, translated to be relative to
-  /// `destOffset` — as if the copied text started at position 0. For
-  /// structural edits that reconstruct a range's text verbatim (list
-  /// toggle, indent, clear-formatting strip, renumbering) and need to
-  /// carry forward whatever inline formatting (bold, italic, link, ...)
-  /// was already on those characters.
-  ///
-  /// This is what closes a real, reported bug: every one of those
-  /// methods used to return a bare `{start, end, text}`, dispatched as
-  /// `ReplaceRangeCommand(start, end, text)` with no attributes
-  /// specified at all. `replaceRange`'s insertion step falls back to
-  /// `_stickyAttributes` whenever no explicit attributes are given —
-  /// correct for a small, genuinely new insertion (typing a character
-  /// should inherit sticky formatting), actively wrong for a
-  /// paragraph-sized *reconstruction* of existing content: a link on a
-  /// single word could end up smeared across an entire renumbered
-  /// paragraph simply because the caret's leftover sticky state
-  /// happened to include it. Every caller below now passes the result
-  /// of this as `relativeAttributes` on `ReplaceRangeCommand` instead,
-  /// which `EditingEngine.pasteRich` applies at exact, explicit
-  /// positions — never touching `_stickyAttributes` at all.
+  // Extracts inline attributes intersecting [srcStart, srcEnd) in the
+  // current, unmutated document, translated to be relative to destOffset
+  // (as if the copied text started at position 0). Used by structural
+  // edits that reconstruct a range's text verbatim (list toggle, indent,
+  // clear-formatting strip, renumbering) so they carry forward existing
+  // inline formatting instead of falling back to sticky attributes, which
+  // would risk smearing formatting (e.g. a link) across reconstructed text
+  // it never applied to.
   List<TextAttribute> _extractRelativeAttributes(int srcStart, int srcEnd, int destOffset) {
     if (srcEnd <= srcStart) return <TextAttribute>[];
     return document.attributeStore.findIntersecting(srcStart, srcEnd).map((attr) {
@@ -265,33 +191,15 @@ class EditingEngine {
     }).toList();
   }
 
-  /// This is the single, consolidated backspace-computation path,
-  /// replacing what used to be two independently-drifting copies of
-  /// similar logic: [deleteBackward] itself (only reachable if called
-  /// directly — `CommandDispatcher.deleteBackward` turned out to bypass
-  /// it entirely with its own hardcoded single-character deletion) and
-  /// `RichEditorController.set value`'s separate ad hoc check for live
-  /// typing. Both now call this instead of maintaining their own logic.
+  /// Computes the edit for a backspace at a collapsed caret. Two cases:
+  /// 1. Right after a paragraph's list prefix: removes the whole prefix
+  ///    in one step, and if that paragraph was part of a numbered run,
+  ///    renumbers everything after it down by one (see
+  ///    [_removeListMarkerEdit]).
+  /// 2. Otherwise: plain single-character deletion.
   ///
-  /// Three cases at the caret:
-  /// 1. Right after a paragraph's list prefix (right at the start of
-  ///    the item's own text): removes the whole prefix in one step —
-  ///    see [deleteBackward]'s doc comment on why the prefix stays real,
-  ///    individually-deletable text rather than a true protected unit.
-  ///    If that paragraph was part of a numbered run, also renumbers
-  ///    everything after it down by one — see [_removeListMarkerEdit].
-  /// 2. Otherwise: the plain single-character deletion.
-  ///
-  /// Renumbering is one atomic combined replacement computed entirely
-  /// from the current, unmutated document — not a multi-step composite,
-  /// same reasoning as [enterKeyEditWithRenumber]. `ParagraphIndex`
-  /// itself is never touched to compute it or asked to touch the text:
-  /// this reads `document.paragraphs.records` (an O(paragraphs)
-  /// traversal, not a full-text scan) and rewrites digits using
-  /// bounded, per-paragraph [listPrefixLength] checks — the same
-  /// derived-from-text approach used everywhere else list-ness is
-  /// checked in this codebase, not stored metadata that could drift
-  /// from what's actually typed.
+  /// Returns `null` for a non-collapsed selection (use [deleteRange]) or
+  /// a caret already at document start.
   ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})?
   deleteBackwardEdit(EditorSelection selection) {
     if (!selection.isCollapsed) return null;
@@ -307,23 +215,9 @@ class EditingEngine {
       }
     }
 
-    // Pure deletion (text: '') — never reaches replaceRange's insertion
-    // step at all, so there's no attribute-application risk here;
-    // relativeAttributes is empty purely for return-shape consistency.
-    //
-    // A start of `selection.start - 1` deletes exactly one UTF-16 code
-    // unit — wrong if that unit is the low half of a surrogate pair
-    // (any character outside the Basic Multilingual Plane, including
-    // most emoji: U+1F600 and up encode as two UTF-16 units). Deleting
-    // only the low half would leave an orphaned, invalid high surrogate
-    // in the document text. Checking codeUnitAt(selection.start - 1)
-    // for the low-surrogate range (0xDC00–0xDFFF) and, if so, deleting
-    // one code unit further back catches this — a real fix for a
-    // single emoji/astral character, though not a full fix for a
-    // multi-codepoint ZWJ sequence (a family emoji joining several
-    // people-emoji with zero-width joiners): that needs actual grapheme
-    // cluster boundary detection, a materially bigger feature this
-    // narrower fix doesn't attempt.
+    // Deleting selection.start - 1 alone would orphan a high surrogate if
+    // that unit is the low half of a surrogate pair (astral characters,
+    // most emoji), so back up one more code unit in that case.
     var deleteStart = selection.start - 1;
     if (deleteStart > 0) {
       final unit = text.codeUnitAt(deleteStart);
@@ -334,22 +228,11 @@ class EditingEngine {
     return (start: deleteStart, end: selection.start, text: '', cursorOffsetFromStart: 0, relativeAttributes: const []);
   }
 
-  /// The list-marker-removal half of [deleteBackwardEdit] — split out
-  /// for readability. `record` is the paragraph the caret's prefix
-  /// belongs to; `prefixLen` is that prefix's length (already confirmed
-  /// non-zero and matching the caret position by the caller).
-  ///
-  /// A bullet (or a numbered item with nothing numbered after it in the
-  /// same run) just has its prefix removed — the plain case, pure
-  /// deletion, no attribute risk. A numbered item with more numbered
-  /// items following renumbers all of them down by one, computed as a
-  /// single combined replacement spanning from this paragraph's start
-  /// to the end of the affected run — hand-traced against a concrete
-  /// example while designing this, same discipline as
-  /// [enterKeyEditWithRenumber]. That renumbering case *does* insert
-  /// real text (the reconstructed tail plus every renumbered item after
-  /// it), so it carries [_extractRelativeAttributes] for each piece —
-  /// see that method's doc comment for why.
+  // Removes a paragraph's list prefix (record/prefixLen already confirmed
+  // to match the caret). A bullet, or a numbered item with nothing after
+  // it in the run, is a plain prefix deletion. A numbered item with more
+  // items following renumbers all of them down by one as a single
+  // combined replacement.
   ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})
   _removeListMarkerEdit(ParagraphRecord record, int prefixLen) {
     final text = document.text;
@@ -396,11 +279,8 @@ class EditingEngine {
       final r = records[i];
       final len = listPrefixLength(text, r.start);
       final contentStart = r.start + len;
-      // ownContent empty means the marker's own paragraph has nothing
-      // left after prefix removal — it collapses away entirely rather
-      // than surviving as a blank line, so the separator that used to
-      // precede it is only written once there's already something in
-      // the buffer to separate from.
+      // Only write the separator once the buffer already has content, so
+      // an empty ownContent doesn't leave a leading blank line.
       if (buffer.isNotEmpty) buffer.write('\n');
       buffer.write('$indent$number. ');
       final destOffset = buffer.length;
@@ -418,8 +298,7 @@ class EditingEngine {
   }
 
   /// Forward delete: deletes `selection`, or the one character after a
-  /// collapsed caret. Same code-unit-granularity caveat as
-  /// [deleteBackward].
+  /// collapsed caret.
   EditorSelection deleteForward(EditorSelection selection) {
     if (!selection.isCollapsed) return deleteRange(selection);
     final edit = deleteForwardEdit(selection);
@@ -428,28 +307,9 @@ class EditingEngine {
     return EditorSelection.collapsed(edit.start);
   }
 
-  /// Computes the edit for a forward-delete at a collapsed `selection`
-  /// — the [deleteBackwardEdit]/[deleteBackward] counterpart. Pressing
-  /// Delete right *before* a paragraph's list prefix (at
-  /// `record.start`, the mirror image of backspace's "right after the
-  /// prefix") removes the whole marker in one step, reusing
-  /// [_removeListMarkerEdit] directly — deleting a marker is the same
-  /// operation regardless of which key triggered it, prefix stays real
-  /// text, numbered-run renumbering applies the same way.
-  ///
-  /// Unlike [deleteBackwardEdit], there's no `cursorOffsetFromStart` —
-  /// the resulting caret is always just `edit.start` (where the
-  /// deletion began; forward-delete never moves the caret forward past
-  /// where it already was, unlike backspace jumping back to a marker's
-  /// start).
-  ///
-  /// Deliberately not wired into `RichEditorController.set value`'s
-  /// live-typing diff detection: a single-character-removed diff is
-  /// genuinely ambiguous between backspace and forward-delete — both
-  /// produce an identical text diff, and disambiguating needs comparing
-  /// against the pre-edit selection, which is real but separate work
-  /// from this method itself. Only the programmatic
-  /// `CommandDispatcher.deleteForward` path uses this today.
+  /// Computes the edit for a forward-delete at a collapsed `selection`.
+  /// Pressing Delete right before a paragraph's list prefix removes the
+  /// whole marker in one step, reusing [_removeListMarkerEdit].
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? deleteForwardEdit(
       EditorSelection selection,
       ) {
@@ -470,11 +330,8 @@ class EditingEngine {
       }
     }
 
-    // Same surrogate-pair concern as deleteBackwardEdit's plain
-    // fallback, mirrored for the forward direction: a high surrogate
-    // (0xD800–0xDBFF) at selection.start needs its paired low surrogate
-    // included too, or this would delete only half of an astral
-    // character (most emoji included).
+    // Mirror of deleteBackwardEdit's surrogate-pair check: a high
+    // surrogate at selection.start needs its paired low surrogate too.
     var deleteEnd = selection.start + 1;
     if (deleteEnd < document.length) {
       final unit = document.text.codeUnitAt(selection.start);
@@ -490,24 +347,15 @@ class EditingEngine {
   // ---------------------------------------------------------------------
 
   /// The range an [applyAttribute]/[removeAttribute] call for `type`
-  /// will actually affect. Always just `selection` now — no remaining
-  /// `AttributeType` is paragraph-scoped, since header (the only one
-  /// that ever was) has its own dedicated [setHeaderLevel] path instead.
-  /// Kept as a real method, not deleted, because `ApplyAttributeCommand`
-  /// still calls it for color/size/link — the `type` parameter is
-  /// unused now but stays in the signature for that reason.
+  /// will actually affect. Always just `selection` — no remaining
+  /// `AttributeType` is paragraph-scoped.
   EditorSelection effectiveRangeFor(AttributeType type, EditorSelection selection) {
     return selection;
   }
 
-  /// The paragraph(s) `selection` would expand to for header purposes —
-  /// a selection spanning multiple paragraphs affects all of them, same
-  /// as the old `_paragraphBounds`-based behavior. Unlike that method,
-  /// this is a direct [ParagraphIndex.paragraphAt] lookup rather than an
-  /// O(document length) `text.lastIndexOf`/`indexOf` scan — the one
-  /// concrete performance win this migration was motivated by, actually
-  /// landing here. Exposed publicly so [SetHeaderLevelCommand] can
-  /// compute the exact same range to snapshot for undo.
+  /// The paragraph(s) `selection` would expand to for header/alignment/
+  /// text-direction purposes — a selection spanning multiple paragraphs
+  /// affects all of them.
   EditorSelection paragraphBoundsFor(EditorSelection selection) {
     final startRecord = document.paragraphs.paragraphAt(selection.start);
     final endRecord = document.paragraphs.paragraphAt(selection.end);
@@ -516,13 +364,8 @@ class EditingEngine {
     return EditorSelection(baseOffset: rangeStart, extentOffset: rangeEnd);
   }
 
-  /// Sets `headerLevel` on the paragraph(s) containing `selection` —
-  /// header's entire live representation now; `AttributeType.header` is
-  /// no longer written to anywhere in this class. See
-  /// `ParagraphIndex.setHeaderLevel`'s own doc comment and the
-  /// block-architecture design notes for the full history. Driven by
-  /// [SetHeaderLevelCommand], not [applyAttribute] — header no longer
-  /// goes through the generic attribute path at all.
+  /// Sets `headerLevel` on the paragraph(s) containing `selection`,
+  /// driven by [SetHeaderLevelCommand].
   void setHeaderLevel(EditorSelection selection, String? headerLevel) {
     final range = paragraphBoundsFor(selection);
     document.paragraphs.setHeaderLevel(range.start, range.end, headerLevel);
@@ -530,10 +373,8 @@ class EditingEngine {
     transactions.notify();
   }
 
-  /// Sets `alignment` on the paragraph(s) containing `selection` — same
-  /// shape and reasoning as [setHeaderLevel]; driven by
-  /// [SetAlignmentCommand]. See [ParagraphAlignment]'s doc comment for
-  /// why this has no live rendering effect yet.
+  /// Sets `alignment` on the paragraph(s) containing `selection`, driven
+  /// by [SetAlignmentCommand].
   void setAlignment(EditorSelection selection, ParagraphAlignment? alignment) {
     final range = paragraphBoundsFor(selection);
     document.paragraphs.setAlignment(range.start, range.end, alignment);
@@ -541,10 +382,8 @@ class EditingEngine {
     transactions.notify();
   }
 
-  /// Sets `textDirection` on the paragraph(s) containing `selection` —
-  /// same shape and reasoning as [setAlignment]; driven by
-  /// [SetTextDirectionCommand]. See [ParagraphTextDirection]'s doc
-  /// comment for why this has no live rendering effect yet.
+  /// Sets `textDirection` on the paragraph(s) containing `selection`,
+  /// driven by [SetTextDirectionCommand].
   void setTextDirection(EditorSelection selection, ParagraphTextDirection? textDirection) {
     final range = paragraphBoundsFor(selection);
     document.paragraphs.setTextDirection(range.start, range.end, textDirection);
@@ -552,25 +391,11 @@ class EditingEngine {
     transactions.notify();
   }
 
-  /// Pure query, no mutation — mirrors [enterKeyEdit]'s "compute, caller
-  /// dispatches" shape. Answers "if a space were inserted right now at
-  /// `spaceInsertPos`, would this be a markdown-style header shortcut
-  /// (`'# '`/`'## '`/.../`'###### '`)?" — `null` if not.
-  ///
-  /// Only headers need this: list markers (`'- '`, `'1. '`, `'- [ ] '`)
-  /// already render and continue correctly the instant they're typed,
-  /// with no special-casing at all — [listPrefixLength]/[listTypeOfPrefix]
-  /// derive list-ness from literal text on every render, and
-  /// [enterKeyEdit] already continues a matched prefix on Enter. Header
-  /// has no textual representation (see [ParagraphIndex]'s doc comment),
-  /// so nothing turns a literally-typed `'#'` into `headerLevel` on its
-  /// own — this is the one shortcut that actually needs new logic.
-  ///
-  /// `'#{1,6}'` with nothing else before it in the paragraph collapses to
-  /// `'h1'`/`'h2'` exactly like [MarkdownImporter]'s own
-  /// `_stripPrefix` — this editor only models two header levels, so
-  /// three-through-six hashes collapse the same way a pasted `### `
-  /// already does.
+  /// Pure query, no mutation. Answers "if a space were inserted right
+  /// now at `spaceInsertPos`, would this be a markdown-style header
+  /// shortcut (`'# '`/`'## '`/.../`'###### '`)?" — `null` if not.
+  /// `'#{1,6}'` collapses to `'h1'`/`'h2'` since this editor only models
+  /// two header levels.
   String? autoFormatHeaderLevel(int spaceInsertPos) {
     final record = document.paragraphs.paragraphAt(spaceInsertPos);
     if (record == null) return null;
@@ -586,19 +411,10 @@ class EditingEngine {
   /// list-style prefix (`'- '`, `'* '`, `'+ '`, or `'N. '`), pressing
   /// Enter continues the list onto the new line by repeating the prefix
   /// (numbered prefixes increment). Pressing Enter on a list item that's
-  /// empty except for its prefix exits the list instead — the prefix is
-  /// removed rather than repeated indefinitely, matching the usual
-  /// "empty bullet + Enter" convention.
-  ///
-  /// This only ever produces literal text to insert in place of a bare
-  /// `'\n'` — there's no [AttributeType] involved and nothing here
-  /// touches the render layer, so unlike the old marker-based lists it
-  /// can never desync `RenderEditable`'s caret math from the document.
-  /// Callers should dispatch the returned `(start, end, text)` as a
-  /// single replace so it undoes as one step.
+  /// empty except for its prefix exits the list instead.
   ///
   /// Not applied when `selection` isn't collapsed — replacing a real
-  /// selection with Enter just inserts a plain newline, same as before.
+  /// selection with Enter just inserts a plain newline.
   ({int start, int end, String text}) enterKeyEdit(EditorSelection selection) {
     if (!selection.isCollapsed) {
       return (start: selection.start, end: selection.end, text: '\n');
@@ -633,42 +449,21 @@ class EditingEngine {
   /// Extends [enterKeyEdit]: if the computed continuation starts a
   /// fresh *numbered* item, also renumbers every subsequent paragraph in
   /// the same contiguous numbered run so the whole list stays in
-  /// sequence — whether the split happens at the end of the line (the
-  /// new item is empty) or in the middle of it (the new item gets
-  /// whatever text was after the caret, and everything after *that*
-  /// shifts up by one).
-  ///
-  /// Computed as one combined replacement — from the caret to the end
-  /// of the affected run — built entirely from the current, unmutated
-  /// document. Deliberately not a multi-step composite: sequencing
-  /// several separate edits so each one's offsets stay valid against
-  /// the ones before it is exactly the kind of arithmetic that's caused
-  /// real bugs earlier in this codebase's history, and there's a
-  /// simpler alternative here — the final text is fully knowable in
-  /// advance, so it can just be computed once, upfront.
+  /// sequence. Computed as one combined replacement from the current,
+  /// unmutated document rather than a multi-step composite.
   ///
   /// Returns the same shape as [enterKeyEdit] plus `cursorOffsetFromStart`
-  /// and `relativeAttributes` — callers must use
+  /// and `relativeAttributes`. Callers must use
   /// `start + cursorOffsetFromStart` for the resulting caret position,
-  /// not `start + text.length`: `text` may include the rewritten
-  /// trailing items, but the caret always belongs right after the *new*
-  /// item's own prefix, not at the end of everything that got
-  /// renumbered.
+  /// not `start + text.length` — `text` may include rewritten trailing
+  /// items, but the caret belongs right after the *new* item's prefix.
   ///
-  /// `stickyAttributesForInsertion` — the caller's current sticky
-  /// formatting (bold, a link the caret happens to be sitting in, ...) —
-  /// is applied *only* to the genuinely new marker text (`[0,
-  /// base.text.length)` of the result), matching ordinary
-  /// typing-continuation semantics. Everything else this method
-  /// reconstructs (the tail of a mid-line split, every renumbered item
-  /// after it) carries its *own* original attributes via
-  /// [_extractRelativeAttributes] instead of inheriting sticky state —
-  /// this distinction is what a real, reported bug turned out to hinge
-  /// on: applying sticky attributes across the *whole* combined
-  /// replacement (the old behavior, before this parameter existed)
-  /// could smear a link that only covered one word across an entire
-  /// renumbered paragraph, simply because the caret's sticky state
-  /// happened to include it at the moment Enter was pressed.
+  /// `stickyAttributesForInsertion` is applied only to the genuinely new
+  /// marker text; everything else this method reconstructs (a mid-line
+  /// split's tail, renumbered items after it) keeps its own original
+  /// attributes via [_extractRelativeAttributes] instead — otherwise a
+  /// link covering one word could smear across an entire renumbered
+  /// paragraph via leftover sticky state.
   ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})
   enterKeyEditWithRenumber(
       EditorSelection selection,
@@ -714,16 +509,11 @@ class EditingEngine {
           RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)! == indent;
     }
 
-    // Whatever was after the caret on the current line (empty for an
-    // end-of-line Enter, the rest of the line for a mid-line split) —
-    // this becomes the new item's own content, exactly as a plain Enter
-    // would leave it in place, just now folded into the same combined
-    // replacement as the renumbering.
+    // Text after the caret on the current line becomes the new item's
+    // own content, folded into the same combined replacement.
     final tailContent = text.substring(caret, currentRecord.end);
 
     if (!matchesRun(currentIndex + 1) && tailContent.isEmpty) {
-      // Nothing after to renumber, and nothing left on this line either
-      // — the plain single-item continuation is already correct.
       return plain;
     }
 
@@ -734,7 +524,7 @@ class EditingEngine {
 
     var number = int.parse(numberedMatch.group(2)!);
     final buffer = StringBuffer('\n$indent$number. ');
-    final relativeAttrs = stickyAsRelative(buffer.length); // sticky covers just the new marker
+    final relativeAttrs = stickyAsRelative(buffer.length); // sticky applies only to the new marker
     final tailDestOffset = buffer.length;
     relativeAttrs.addAll(_extractRelativeAttributes(caret, currentRecord.end, tailDestOffset));
     buffer.write(tailContent);
@@ -762,27 +552,16 @@ class EditingEngine {
   /// Toggles a paragraph (or, for a real selection, every paragraph the
   /// selection spans) between having a list prefix of `type` and not —
   /// as one atomic text replacement, computed entirely from the current
-  /// document with no intermediate mutation, so this is safe without
-  /// needing a composite/batched command.
+  /// document with no intermediate mutation.
   ///
-  /// Bullets have no sequence to keep consistent, so toggling one only
-  /// ever touches the selected range itself. Numbered lists are
-  /// different: turning a paragraph on or off can join it to, or split
-  /// it out of, a run of numbered items *outside* the selection — see
-  /// [_numberedToggleEdit] for why this can't just treat the selected
-  /// range in isolation the way bullets can.
+  /// Bullets only ever touch the selected range. Numbered lists can join
+  /// a paragraph to, or split it out of, a run of numbered items
+  /// *outside* the selection — see [_numberedToggleEdit].
   ///
   /// Whether this turns the list *on* or *off*: off only if *every*
   /// paragraph in range already has this exact type; on if any of them
   /// doesn't. A mixed selection (some list items, some plain paragraphs)
-  /// becomes a list entirely, rather than being decided by whichever
-  /// paragraph happens to be first — matches standard editor behavior
-  /// for a mixed selection, and is a deliberate difference from
-  /// `EditingEngine.toggleAttribute`'s "first paragraph decides"
-  /// convention for *inline* formatting, which doesn't have this
-  /// "mixed selection" ambiguity in the same way (a partially-bold
-  /// selection becoming fully bold is the same "any gap turns it on"
-  /// rule, just phrased per-character instead of per-paragraph).
+  /// becomes a list entirely.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? listToggleEdit(
       EditorSelection selection,
       ParagraphListType type,
@@ -816,10 +595,8 @@ class EditingEngine {
         final r = records[i];
         final prefixLen = listPrefixLength(text, r.start);
         final contentStart = r.start + prefixLen;
-        // The '  ' default indent on a fresh toggle-on (rather than
-        // flush-left) is deliberate: a bare '- ' reads as "just a
-        // dash", not as a list — real editors give a list item some
-        // breathing room by default.
+        // '  ' default indent, not flush-left: a bare '- ' reads as "just
+        // a dash", not a list.
         if (turningOn) buffer.write('  - ');
         final destOffset = buffer.length;
         relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
@@ -831,22 +608,14 @@ class EditingEngine {
     return _numberedToggleEdit(text, records, startIndex, endIndex, turningOn);
   }
 
-  /// The numbered half of [listToggleEdit] — split out because it has
-  /// to consider paragraphs *outside* [startIndex, endIndex] that
-  /// [listToggleEdit] itself never touches directly.
-  ///
-  /// Turning on: this may be resuming a numbered run that continues
-  /// immediately before or after the selection — the paragraph(s) being
-  /// toggled don't necessarily know their own correct number in
-  /// isolation. The whole contiguous run (selection plus whatever
-  /// matching-indent numbered paragraphs border it) gets renumbered
-  /// together, 1..N.
-  ///
-  /// Turning off: removing list-ness from the middle of a run splits it
-  /// into a "before" and "after" segment — they're two separate lists
-  /// once the de-listed paragraphs are between them, so each is
-  /// renumbered independently starting back at 1, not continuing as if
-  /// nothing changed.
+  // The numbered half of listToggleEdit — has to consider paragraphs
+  // outside [startIndex, endIndex] too.
+  //
+  // Turning on: may resume a numbered run bordering the selection, so the
+  // whole contiguous run gets renumbered together, 1..N.
+  //
+  // Turning off: removing list-ness from the middle of a run splits it
+  // into "before"/"after" segments, each renumbered independently from 1.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes}) _numberedToggleEdit(
       String text,
       List<ParagraphRecord> records,
@@ -872,10 +641,7 @@ class EditingEngine {
 
     if (turningOn) {
       // Prefer an adjacent existing numbered run's indent over this
-      // paragraph's own — it may have no prefix at all yet (or a
-      // bullet's), neither of which should override "resume the list
-      // this item is rejoining". Only fall back to its own indent (or
-      // the default) if neither neighbor is already part of one.
+      // paragraph's own, so it resumes the list it's rejoining.
       String? adjacentIndent;
       if (startIndex > 0) {
         final len = listPrefixLength(text, records[startIndex - 1].start);
@@ -957,7 +723,7 @@ class EditingEngine {
       relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
       buffer.write(text.substring(contentStart, r.end)); // no prefix — turning off
     }
-    number = 0; // the "after" segment is a separate list now — starts over
+    number = 0; // "after" segment is now a separate list, starts over
     for (var i = endIndex + 1; i <= afterEnd; i++) {
       buffer.write('\n');
       number++;
@@ -974,22 +740,13 @@ class EditingEngine {
   }
 
   /// Computes the edit to toggle task-list checkbox state on every
-  /// paragraph `selection` spans, as one atomic combined replacement —
-  /// same shape and safety reasoning as [listToggleEdit]. Per paragraph,
-  /// independently (a checkbox tap always flips just that item, not a
-  /// group decision the way bullet/numbered on/off is):
-  /// - plain paragraph (no list prefix at all) -> promoted to a fresh
-  ///   unchecked task item (`'  - [ ] '`), same default indent
-  ///   [listToggleEdit] uses for a brand-new bullet.
-  /// - bullet with no checkbox yet -> a `'[ ] '` checkbox is inserted
-  ///   right after the marker.
+  /// paragraph `selection` spans, per paragraph independently:
+  /// - plain paragraph -> promoted to a fresh unchecked task item.
+  /// - bullet with no checkbox yet -> a `'[ ] '` checkbox is inserted.
   /// - already a checklist item -> the checked state flips.
-  /// - numbered item -> passed through unchanged; numbered lists aren't
-  ///   task-list-compatible (see [listPrefixPattern]'s doc comment).
+  /// - numbered item -> passed through unchanged (not task-compatible).
   ///
-  /// Returns `null` if every paragraph in range is numbered (nothing to
-  /// change at all) — mirrors [clearFormattingListEdit]'s
-  /// nothing-to-do-here convention, avoiding a needless no-op edit.
+  /// Returns `null` if nothing in range would change.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? toggleCheckedEdit(
       EditorSelection selection,
       ) {
@@ -1044,18 +801,9 @@ class EditingEngine {
   /// Computes the edit to indent (`outdent: false`, adds 2 leading
   /// spaces) or outdent (`outdent: true`, removes up to 2) every
   /// paragraph `selection` spans that has a list prefix. Paragraphs in
-  /// range without one are left untouched (their content still gets
-  /// carried through the combined replacement unchanged).
+  /// range without one are left untouched.
   ///
-  /// Same shape and safety reasoning as [listToggleEdit]: one atomic
-  /// replacement computed entirely from the current document, no
-  /// intermediate mutation, so a multi-paragraph selection needs no
-  /// composite command — collapses to the single-paragraph case
-  /// naturally when `selection` is collapsed.
-  ///
-  /// Returns `null` if nothing in range would actually change — no
-  /// paragraph in the selection has a list prefix, or every one being
-  /// outdented is already at the top level.
+  /// Returns `null` if nothing in range would actually change.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? listIndentEdit(
       EditorSelection selection, {
         required bool outdent,
@@ -1102,30 +850,10 @@ class EditingEngine {
     return (start: startRecord.start, end: endRecord.end, text: buffer.toString(), relativeAttributes: relativeAttrs);
   }
 
-  /// Toggles `type` over `selection`.
-  ///
-  /// - Not collapsed: if a single span already covers the whole
-  ///   selection, the attribute is removed; otherwise it's applied to
-  ///   the whole selection (this matches "make bold" semantics — a
-  ///   partially-bold selection becomes fully bold on first toggle, not
-  ///   fully un-bold).
-  /// - Collapsed: toggles [stickyAttributes] instead of touching any
-  ///   span, so the next typed text picks it up.
-  ///
-  /// Only valid for [AttributeType.isToggle] types — use [applyAttribute]
-  /// for color/size/link, or [setHeaderLevel] for header, which carry a
-  /// value.
-  /// Clips `selection` so it never *starts* inside a paragraph's list
-  /// marker zone — prevents inline formatting (bold, italic, ...) from
-  /// splitting a marker from its own trailing space (a bold `'-'` next
-  /// to non-bold `' Item'` reads as broken, not as "a formatted list
-  /// item"). Purely derived from text (`listPrefixLength`), same as
-  /// everywhere else list-ness is checked — nothing stored, nothing
-  /// that could drift from what's actually typed.
-  ///
-  /// Only adjusts the start: a selection ending mid-marker (selecting
-  /// backward, from inside the item's own text into the marker) is left
-  /// alone — a genuine edge case, not attempted here.
+  // Clips selection so it never *starts* inside a paragraph's list marker
+  // zone — prevents inline formatting from splitting a marker from its
+  // own trailing space. Only adjusts the start; a selection ending
+  // mid-marker is left alone.
   EditorSelection _excludeLeadingListMarker(EditorSelection selection) {
     final record = document.paragraphs.paragraphAt(selection.start);
     if (record == null) return selection;
@@ -1138,6 +866,17 @@ class EditingEngine {
     return selection;
   }
 
+  /// Toggles `type` over `selection`.
+  ///
+  /// - Not collapsed: if a single span already covers the whole
+  ///   selection, the attribute is removed; otherwise it's applied to
+  ///   the whole selection (a partially-bold selection becomes fully
+  ///   bold on first toggle, not fully un-bold).
+  /// - Collapsed: toggles [stickyAttributes] instead, so the next typed
+  ///   text picks it up.
+  ///
+  /// Only valid for [AttributeType.isToggle] types — use [applyAttribute]
+  /// for color/size/link, or [setHeaderLevel] for header.
   void toggleAttribute(AttributeType type, EditorSelection selection) {
     assert(type.isToggle,
     'toggleAttribute is for toggle-style attributes only; use applyAttribute for $type');
@@ -1173,27 +912,14 @@ class EditingEngine {
   /// Sets `type` to `value` over `selection`. Passing `value: null` is
   /// equivalent to calling [removeAttribute].
   ///
-  /// Not for [AttributeType.header] — use [setHeaderLevel] instead;
-  /// header no longer goes through the generic attribute path at all
-  /// (see the block-architecture design notes).
+  /// Not for [AttributeType.header] — use [setHeaderLevel] instead.
   ///
   /// Deliberately does **not** touch [stickyAttributes] for a
-  /// non-collapsed `selection` — this closes a real, reported bug.
-  /// `stickyAttributes` is only meaningful for a collapsed caret (see its
-  /// doc comment); it used to also be set as a side effect of a *range*
-  /// apply, on the theory that it mirrored "keep bolding as you keep
-  /// typing right after a bolded selection". It didn't actually serve
-  /// that case — the moment the caret next collapses anywhere,
-  /// `syncStickyAttributesAt` already recomputes sticky state fresh from
-  /// the real spans at that position, making the range-apply's own write
-  /// redundant for it. What that write *did* do is outlive the edit: it
-  /// stuck around across any later selection change that stays
-  /// non-collapsed (a subsequent drag-select, and critically "select
-  /// all") with nothing to clear it, so a value as specific as a link's
-  /// URL could silently attach to completely unrelated text — e.g.
-  /// select all + paste plain text inheriting the URL of a link applied
-  /// earlier, nowhere near the pasted content. Toggle attributes have the
-  /// same fix in [toggleAttribute], for the same reason.
+  /// non-collapsed `selection`: sticky state left over from a range apply
+  /// would otherwise outlive the edit and silently attach to unrelated
+  /// text on a later non-collapsed selection (e.g. "select all" then
+  /// paste inheriting a stale link URL). [toggleAttribute] has the same
+  /// guard.
   void applyAttribute(AttributeType type, EditorSelection selection, Object? value) {
     assert(type != AttributeType.header, 'use setHeaderLevel for header, not applyAttribute');
 
@@ -1243,26 +969,17 @@ class EditingEngine {
   }
 
   /// Removes every attribute from `selection`. At a collapsed caret,
-  /// clears pending [stickyAttributes] instead (so "clear formatting"
-  /// with nothing selected stops the *next* typed text from inheriting
-  /// formatting — a small, deliberate improvement over the old
-  /// controller, which no-op'd entirely on a collapsed selection).
+  /// clears pending [stickyAttributes] instead, so the next typed text
+  /// stops inheriting formatting.
   ///
-  /// Also clears `headerLevel` on every paragraph `selection` overlaps
-  /// (unexpanded — same bounds used for the `AttributeStore` clear right
-  /// above, not paragraph-bounds-expanded), and strips any literal list
-  /// marker from those paragraphs too — a real text mutation, computed
-  /// by [clearFormattingListEdit] and applied via the ordinary
-  /// [replaceRange] path. Wrapped in `transactions.run` since this is
-  /// now genuinely two kinds of change (attribute/header state, then
-  /// possibly a text edit) composed into one logical operation — without
-  /// it, `replaceRange`'s own internal `notify()` plus this method's
-  /// final one would trigger two rebuilds instead of one.
+  /// Also clears header/alignment/text-direction on every paragraph
+  /// `selection` overlaps, and strips any literal list marker from those
+  /// paragraphs via [clearFormattingListEdit]. Wrapped in
+  /// `transactions.run` so the combined attribute + text change notifies
+  /// once.
   ///
   /// Undo is [ClearFormattingCommand]'s responsibility, not this
-  /// method's — it snapshots `AttributeStore` spans, `ParagraphIndex`
-  /// header levels, *and* (new) whatever text [clearFormattingListEdit]
-  /// is about to rewrite, all before calling this.
+  /// method's.
   void clearFormatting(EditorSelection selection) {
     if (selection.isCollapsed) {
       if (_stickyAttributes.isEmpty) return;
@@ -1280,15 +997,10 @@ class EditingEngine {
 
       final listEdit = clearFormattingListEdit(selection);
       if (listEdit != null) {
-        // pasteRich, not replaceRange: replaceRange has no
-        // relativeAttributes parameter at all — it can only fall back
-        // to sticky attributes (already cleared above, so harmless
-        // here) or apply nothing. listEdit.relativeAttributes carries
-        // whatever inline formatting (bold, a link, ...) the paragraphs
-        // being reconstructed already had, which needs to survive this
-        // strip — the same reasoning as every other structural method
-        // that reconstructs existing text; see
-        // _extractRelativeAttributes's doc comment.
+        // pasteRich, not replaceRange: listEdit.relativeAttributes must
+        // carry forward the reconstructed paragraphs' existing inline
+        // formatting, which replaceRange (falls back to sticky
+        // attributes) can't express.
         pasteRich(
           EditorSelection(baseOffset: listEdit.start, extentOffset: listEdit.end),
           listEdit.text,
@@ -1302,31 +1014,18 @@ class EditingEngine {
   }
 
   /// Rewrites every marker in the entire contiguous numbered list
-  /// touching `selection` to be sequential (1, 2, 3, ...), regardless
-  /// of what the existing numbers currently say. Unlike the renumbering
-  /// built into [enterKeyEditWithRenumber]/[_removeListMarkerEdit]
-  /// (which only ever looks forward from a single, specific edit
-  /// point), this repairs the whole run wherever it is relative to
-  /// `selection` — useful after content arrives from a path that
-  /// doesn't already have its own dedicated renumbering logic: a range
-  /// deletion spanning list items (which can remove or merge markers in
-  /// ways no single-keystroke method accounts for), or content arriving
-  /// from outside the normal edit paths (paste, import).
+  /// touching `selection` to be sequential (1, 2, 3, ...), regardless of
+  /// what the existing numbers currently say. Useful after a range
+  /// deletion spanning list items, or content arriving from paste/import.
   ///
   /// Checks the paragraph at `selection.start` first; if that one isn't
-  /// itself numbered, falls back to checking the *next* paragraph
-  /// before giving up. This fallback is what makes range-deletion
-  /// repair actually work: deleting across paragraph boundaries can
-  /// merge away a paragraph's own marker entirely (its own prefix
-  /// consumed by the deletion, along with whatever came before it),
-  /// landing the cursor on now-unmarked text — while a numbered run
-  /// that used to continue right after the deleted range is still
-  /// sitting there, orphaned, immediately following. Checking only the
-  /// cursor's own paragraph would silently miss exactly that case.
+  /// itself numbered, falls back to checking the *next* paragraph —
+  /// a deletion can consume a paragraph's own marker while leaving an
+  /// orphaned numbered run immediately after it.
   ///
   /// Returns `null` if neither the selection's own paragraph nor the
   /// next one is part of a numbered list, or if the run's numbers are
-  /// already correct (avoids a needless no-op replacement/undo step).
+  /// already correct.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? repairListNumbering(
       EditorSelection selection,
       ) {
@@ -1415,20 +1114,11 @@ class EditingEngine {
   }
 
   /// Computes the edit to strip literal list markers from every
-  /// paragraph `selection` overlaps, if any have one — pure computation,
-  /// same shape and safety reasoning as [listToggleEdit]. Returns `null`
-  /// if `selection` is collapsed or no paragraph in range has a marker
-  /// to strip (avoids a needless no-op replacement).
-  ///
-  /// Directly reuses [_numberedToggleEdit]'s "turning off" branch rather
-  /// than duplicating it: that branch already strips whatever prefix
-  /// each paragraph has (bullet or numbered, regardless of type — see
-  /// its own doc comment), renumbers any numbered run left disconnected
-  /// by the strip, *and* (since the fix for the link-propagation bug)
-  /// preserves each paragraph's original inline attributes via
-  /// `relativeAttributes`. Exactly what clearing formatting across a
-  /// list needs, already hand-traced when it was built for
-  /// [listToggleEdit]'s "turn off" case.
+  /// paragraph `selection` overlaps, if any have one. Returns `null` if
+  /// `selection` is collapsed or no paragraph in range has a marker to
+  /// strip. Reuses [_numberedToggleEdit]'s "turning off" branch, which
+  /// already renumbers any disconnected numbered run and preserves
+  /// inline attributes.
   ({int start, int end, String text, List<TextAttribute> relativeAttributes})? clearFormattingListEdit(
       EditorSelection selection,
       ) {
@@ -1461,12 +1151,9 @@ class EditingEngine {
   /// Re-inserts `text` at `start` together with the exact `attributes`
   /// it previously carried, bypassing [stickyAttributes] entirely.
   ///
-  /// This exists for undo: when a `HistoryManager` command reverses a
-  /// delete or replace, it needs to put back precisely what was removed
-  /// — which might be several different formats across the range — not
-  /// whatever formatting happens to be pending for new typing right now.
-  /// [insert]/[replaceRange] are the wrong tool for that; this is the
-  /// right one.
+  /// Exists for undo: reversing a delete/replace needs to put back
+  /// precisely what was removed, not whatever sticky formatting happens
+  /// to be pending right now.
   EditorSelection restoreRange(int start, String text, List<TextAttribute> attributes) {
     assert(start >= 0 && start <= document.length, 'restoreRange start out of bounds');
     if (text.isEmpty) return EditorSelection.collapsed(start);
@@ -1477,30 +1164,16 @@ class EditingEngine {
     document.paragraphs.applyInsertion(start, text);
     for (final attr in attributes) {
       store.insert(attr);
-      // AttributeStore is no longer written to for header anywhere
-      // headers are actively set (see setHeaderLevel) — but `attributes`
-      // here can still contain a header-typed entry when this
-      // restoration is undoing the deletion of *pasted* content
-      // (MarkdownImporter/HtmlImporter still emit header this way, and
-      // EditingEngine.pasteRich mirrors it into AttributeStore too — see
-      // pasteRich's own comment on why). For that case, this branch is
-      // what makes undoing the deletion correctly restore the heading.
-      //
-      // A header set via SetHeaderLevelCommand (the toolbar/programmatic
-      // path, as opposed to paste) never gets an AttributeStore entry at
-      // all, so this branch alone can't recover it —
-      // ReplaceRangeCommand closes that gap separately, with its own
-      // ParagraphIndex snapshot restored after this method returns (see
-      // its doc comment). This branch and that one are complementary,
-      // not overlapping: this one for headers that arrived via paste,
-      // that one for headers set directly.
+      // header/align/textDirection are ParagraphIndex-owned everywhere
+      // they're live, so an entry of these types in `attributes` can only
+      // have arrived via pasted content — mirror it into ParagraphIndex
+      // too. A header/alignment/direction set directly (not via paste)
+      // never gets an AttributeStore entry, so ReplaceRangeCommand
+      // restores that case separately via its own ParagraphIndex
+      // snapshot.
       if (attr.type == AttributeType.header && attr.end > attr.start) {
         document.paragraphs.setHeaderLevel(attr.start, attr.end, attr.value as String?);
       }
-      // Same reasoning as the header branch just above — alignment is
-      // ParagraphIndex-owned everywhere it's live, so an
-      // AttributeType.align entry only ever arrives here via pasted
-      // content (HtmlImporter) and needs the equivalent explicit write.
       if (attr.type == AttributeType.align && attr.end > attr.start) {
         document.paragraphs.setAlignment(
           attr.start,
@@ -1508,7 +1181,6 @@ class EditingEngine {
           attr.value == null ? null : ParagraphAlignment.values.byName(attr.value as String),
         );
       }
-      // Same reasoning as the align branch just above.
       if (attr.type == AttributeType.textDirection && attr.end > attr.start) {
         document.paragraphs.setTextDirection(
           attr.start,
@@ -1579,20 +1251,13 @@ class EditingEngine {
           type: attr.type,
           value: attr.value,
         ));
-        // Same reasoning as restoreRange: MarkdownImporter/HtmlImporter
-        // still emit header as a plain TextAttribute, so a pasted
-        // heading needs its own explicit ParagraphIndex write here —
-        // applyInsertion above only knows about '\n' positions, not
-        // formatting. Inserting into `store` above is otherwise dead
-        // weight now (nothing reads header from AttributeStore for a
-        // freshly-pasted paragraph going forward). A *subsequent*
-        // delete-then-undo of this pasted content is covered separately
-        // by ReplaceRangeCommand's own ParagraphIndex snapshot, not by
-        // this branch — see its doc comment.
+        // Pasted content (Markdown/HTML import) still carries
+        // header/align/textDirection as plain TextAttributes, so mirror
+        // them into ParagraphIndex explicitly here — applyInsertion only
+        // knows about '\n' positions, not formatting.
         if (attr.type == AttributeType.header && attr.end > attr.start) {
           document.paragraphs.setHeaderLevel(start + attr.start, start + attr.end, attr.value as String?);
         }
-        // Same reasoning as the header branch above.
         if (attr.type == AttributeType.align && attr.end > attr.start) {
           document.paragraphs.setAlignment(
             start + attr.start,
@@ -1600,7 +1265,6 @@ class EditingEngine {
             attr.value == null ? null : ParagraphAlignment.values.byName(attr.value as String),
           );
         }
-        // Same reasoning as the align branch above.
         if (attr.type == AttributeType.textDirection && attr.end > attr.start) {
           document.paragraphs.setTextDirection(
             start + attr.start,

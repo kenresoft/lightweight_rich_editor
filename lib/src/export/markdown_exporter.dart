@@ -3,25 +3,8 @@ import '../models/text_attribute.dart';
 
 /// Converts plain text and [TextAttribute]s into a Markdown string.
 ///
-/// Closes and reopens inline markers at each paragraph boundary, rather
-/// than letting one span's markers straddle a `'\n'` — matters only for
-/// the narrow case of a bold/italic/etc. span crossing a paragraph
-/// break (most formatting stays within one paragraph and is unaffected
-/// either way). Same windowed-attribute approach as `HtmlExporter`
-/// (`activeAtStart`/`stillOpenAtEnd`), adapted for Markdown's symmetric
-/// marker syntax (`**` opens and closes bold, unlike HTML's distinct
-/// `<b>`/`</b>`) — `_markerFor` already returns the same string for
-/// both, so no other change was needed to reuse the pattern.
-///
-/// `AttributeType.align`/`AttributeType.textDirection` are deliberately
-/// unhandled here (`_markerFor`'s `default` case) — unlike `header`,
-/// there's no native CommonMark syntax for paragraph alignment or
-/// direction, and inventing a raw-HTML escape-hatch convention is more
-/// risk than a not-yet-visually-rendered property (see
-/// `ParagraphAlignment`'s/`ParagraphTextDirection`'s doc comments)
-/// currently justifies. Both survive document JSON save/load and HTML
-/// export/import; a Markdown round-trip is a deliberate gap, not an
-/// oversight.
+/// Paragraph alignment and text direction have no CommonMark equivalent
+/// and are not exported; they still round-trip via JSON and HTML.
 class MarkdownExporter {
   const MarkdownExporter();
 
@@ -54,15 +37,9 @@ class MarkdownExporter {
     return buffer.toString();
   }
 
-  /// Renders `[start, end)` — one paragraph's worth of inline content —
-  /// applying whatever `sorted` attributes overlap that range. An
-  /// attribute already active when the window starts is opened before
-  /// the loop (it may have started in an earlier paragraph); one still
-  /// active when the window ends is force-closed there regardless of
-  /// its true `.end` (it may continue into a later paragraph, which
-  /// reopens it in its own call to this method). See `HtmlExporter
-  /// ._renderInline`'s doc comment — same logic, hand-traced there
-  /// against a spanning-attribute example before being reused here.
+  // Renders one paragraph's inline content. Attributes already active
+  // when the window starts are opened up front; ones still open at the
+  // end are force-closed and reopened by the next paragraph's call.
   String _renderInline(String text, int start, int end, List<TextAttribute> sorted) {
     if (start >= end) return '';
     final buffer = StringBuffer();

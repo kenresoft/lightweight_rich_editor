@@ -33,25 +33,14 @@ import '../utils/url_detector.dart';
 /// coordinates [EditorDocument], [EditingEngine], [HistoryManager]/
 /// [CommandDispatcher], [TextSpanRenderer], and [ClipboardManager].
 ///
-/// This is deliberately thin — it does not implement editing logic,
-/// span math, undo grouping, style resolution, or clipboard handling
-/// itself. Every one of those lives in the component built for it.
-/// What this class owns is the handful of things that only make sense
-/// at the `TextField` boundary:
-/// 1. Diffing `TextField`'s before/after whole-string reports into
-///    [ReplaceRangeCommand]s (see the `set value` override).
-/// 2. Converting between Flutter's [TextSelection] and the engine's
-///    framework-agnostic [EditorSelection].
-/// 3. Keeping [TextEditingController.value] in sync with [document] as
-///    the single [TransactionManager] commit callback ([_handleCommit]).
-/// 4. Detecting a just-completed URL token at a typing boundary
-///    (space/newline/tab) and autolinking it via the same
-///    [CommandDispatcher.setLink] path the manual link dialog uses
-///    (see [_maybeAutolink]).
-///
-/// Compare this to the original `RichTextEditingController`, which did
-/// all of the above *and* every editing method *and* undo/redo *and*
-/// `buildTextSpan` in one file.
+/// Deliberately thin — editing logic, span math, undo grouping, style
+/// resolution, and clipboard handling all live in the component built
+/// for it. This class owns only what makes sense at the `TextField`
+/// boundary: diffing `TextField`'s before/after text into
+/// [ReplaceRangeCommand]s, converting between Flutter's [TextSelection]
+/// and the engine's [EditorSelection], keeping [TextEditingController.value]
+/// in sync via [_handleCommit], and autolinking a just-completed URL
+/// token at a typing boundary (see [_maybeAutolink]).
 class RichEditorController extends TextEditingController {
   final EditorDocument document;
   late final TransactionManager transactions;
@@ -69,11 +58,7 @@ class RichEditorController extends TextEditingController {
   /// Whether the host supplied its own `onTapLink` to this constructor,
   /// as opposed to relying on the default ([launchLinkUrl]). Read by
   /// `RichTextEditor` to decide whether it's safe to layer its own
-  /// tap-confirmation UI on top of `renderer.onTapLink` — see
-  /// `RichTextEditor.confirmBeforeOpeningLinks`. A host that already
-  /// asked for custom tap behavior (e.g. routing taps to an in-app
-  /// webview) is left completely alone rather than having that
-  /// silently wrapped in a confirmation dialog it didn't ask for.
+  /// tap-confirmation UI on top of `renderer.onTapLink`.
   final bool hasCustomTapHandler;
 
   /// A visual-only selection range to be rendered even when the editor
@@ -98,12 +83,8 @@ class RichEditorController extends TextEditingController {
     void Function(String url)? onTapLink,
     bool interactiveLinks = false,
   }) : document = EditorDocument.fromText(text, initialAttributes),
-       // Defaults to the standard external-browser launcher
-       // (`launchLinkUrl`) when the host doesn't supply its own
-       // `onTapLink` — so both manually-created and autolinked links
-       // are tappable out of the box. Hosts that want different
-       // behavior still override it via the constructor param exactly
-       // as before; see `hasCustomTapHandler`.
+       // Defaults to the standard external-browser launcher when the
+       // host doesn't supply its own onTapLink; see hasCustomTapHandler.
        renderer = TextSpanRenderer(
          theme: theme,
          onTapLink: onTapLink ?? launchLinkUrl,
@@ -130,9 +111,7 @@ class RichEditorController extends TextEditingController {
     search = SearchIndex(document: document, commands: commands);
     this.focusNode.addListener(_handleFocusChange);
     // Tapping a checkbox glyph toggles that specific paragraph, not
-    // whatever the current selection happens to be — same reasoning as
-    // routing a link tap through `onTapLink` rather than a selection-based
-    // action.
+    // whatever the current selection happens to be.
     renderer.onToggleCheckbox = (paragraphStart) {
       _syncSelection(
         commands.toggleTaskItem(EditorSelection.collapsed(paragraphStart)),
@@ -141,9 +120,7 @@ class RichEditorController extends TextEditingController {
   }
 
   void _handleFocusChange() {
-    // Reserved for future focus-driven behavior (e.g. committing a
-    // pending IME composition on blur). No-op today, same as the
-    // original controller.
+    // Reserved for future focus-driven behavior. No-op today.
   }
 
   @override
@@ -155,35 +132,19 @@ class RichEditorController extends TextEditingController {
   }
 
   /// Forces the editor's underlying platform text-input connection to
-  /// re-attach after some *other* interactive widget the host placed
-  /// near the editor (a custom app-bar button, a floating action button,
-  /// anything outside this library's own [FormatToolbar]) has just been
-  /// tapped.
+  /// re-attach after some *other* interactive widget near the editor
+  /// (outside this library's own [FormatToolbar]) has just been tapped.
   ///
-  /// On Flutter web specifically, tapping practically any interactive
-  /// widget elsewhere on the page blurs the editor's hidden text-input
-  /// element at the browser level — [focusNode] still reports itself as
-  /// focused (Flutter's own bookkeeping is fine), but the OS/browser
-  /// text-input connection has been torn down, so the very next
-  /// keystroke typed is silently dropped until the user clicks back into
-  /// the text. `FormatToolbar`'s own buttons already call this
-  /// internally after every action, which is why typing right after
-  /// clicking Bold "just works" — a host's *own* UI (a dark-mode toggle
-  /// in an app bar is a real example that hits exactly this) doesn't get
-  /// that for free, since it isn't part of this library's toolbar. Call
-  /// this right after any such interaction your app performs, and the
-  /// same fix applies.
+  /// On Flutter web, tapping another interactive widget elsewhere on the
+  /// page blurs the editor's hidden text-input element at the browser
+  /// level even though [focusNode] still reports itself as focused, so
+  /// the next keystroke is silently dropped until the user clicks back
+  /// in. Call this right after any such interaction your app performs.
   ///
   /// Deliberately a synchronous `unfocus()` immediately followed by
-  /// `requestFocus()` — a bare `requestFocus()` alone is a no-op when
-  /// Flutter already considers the node focused, and it never re-attaches
-  /// the connection; deferring the `requestFocus()` to the next frame
-  /// (an earlier approach) works too but paints a visible one-frame
-  /// "unfocused" flicker (cursor/selection handles disappearing and
-  /// reappearing) that calling both synchronously avoids entirely, since
-  /// Flutter's frame pipeline coalesces the two into a single rebuild —
-  /// see `FormatToolbar`'s internal `_reclaimEditorFocus` for the full
-  /// reasoning and how this was verified live.
+  /// `requestFocus()`: a bare `requestFocus()` is a no-op when Flutter
+  /// already considers the node focused, and deferring to the next frame
+  /// paints a visible unfocused flicker that the synchronous pair avoids.
   void reclaimFocus() {
     focusNode.unfocus();
     focusNode.requestFocus();
@@ -197,23 +158,15 @@ class RichEditorController extends TextEditingController {
   /// controller has a new value — every keystroke, autocorrect
   /// replacement, IME composition update, and selection change.
   ///
-  /// This is the only place raw text-diffing happens. It figures out
+  /// This is the only place raw text-diffing happens: it figures out
   /// *what* changed via [diffText], turns that into one
   /// [ReplaceRangeCommand], and lets [HistoryManager] decide whether it
   /// coalesces with the in-progress typing session. Selection-only
-  /// changes (arrow keys, taps) skip straight to syncing sticky
-  /// formatting and breaking coalescing — no diffing needed since the
-  /// text didn't change.
+  /// changes skip straight to syncing sticky formatting.
   ///
-  /// A diff whose entire inserted text is a bare `'\n'` — a live Enter
-  /// keypress, indistinguishable at this layer from any other single-
-  /// character insertion — is routed through
-  /// [EditingEngine.enterKeyEdit] first, so typing Enter inside a
-  /// literal list line (`'- '`, `'3. '`, ...) continues or exits the
-  /// list as plain text. This is the actual typing path a live
-  /// `TextField` takes; [CommandDispatcher.insertText] has the same
-  /// hook for programmatic/toolbar-driven insertion, but that method is
-  /// never called for ordinary keystrokes — they come through here.
+  /// A diff whose entire inserted text is a bare `'\n'` is routed
+  /// through [EditingEngine.enterKeyEdit] first, so typing Enter inside
+  /// a literal list line continues or exits the list as plain text.
   @override
   set value(TextEditingValue newValue) {
     final oldText = document.text;
@@ -233,47 +186,25 @@ class RichEditorController extends TextEditingController {
     final cursorHint = selection.start >= 0 ? selection.start : null;
     final diff = diffText(oldText, newText, cursorHint: cursorHint);
 
-    // Flutter's own `newValue.selection` is a guess based on what *it*
-    // thinks was inserted — always correct for the ordinary path below,
-    // where the document ends up with exactly `diff.insertedText`. The
-    // smart-Enter path can insert a longer (or shorter) string than the
-    // bare '\n' Flutter guessed for, so that guess is stale the moment
-    // it's taken; this computes the real post-edit caret instead of
-    // trusting it.
+    // newValue.selection is Flutter's guess based on a bare '\n'; the
+    // smart-Enter path below can insert a longer/shorter string, so this
+    // gets overwritten with the real post-edit caret where needed.
     var resultSelection = newValue.selection;
     var resultComposing = newValue.composing;
     var ranAutolink = false;
 
-    // Defensive safety net, not a substitute for fixing bugs at the
-    // source: if anything in this block throws — a real one already
-    // did once (an EditingEngine helper returned an immutable list a
-    // caller then tried to mutate) — the failure mode is severe enough
-    // to guard against explicitly. The exception aborts this method
-    // partway through, after Flutter's own EditableText has already
-    // applied the keystroke to its internal state but before
-    // `document.text`/`super.value` are updated to match. Every
-    // subsequent keystroke's diff is then computed against a stale
-    // `oldText` that no longer matches what's actually on screen —
-    // one crash corrupts the rest of the session, not just the one
-    // keystroke. On catch: force the field back to exactly what
-    // `document` (left unmodified, since nothing committed) already
-    // says, discarding this one keystroke rather than leaving
-    // Flutter's state and the engine's state permanently desynced —
-    // then rethrow, so the error still surfaces for debugging instead
-    // of silently swallowing a real bug.
+    // If anything in this block throws, Flutter's EditableText has
+    // already applied the keystroke internally but document/super.value
+    // haven't been updated to match, so every later diff would run
+    // against a stale oldText. On catch: force the field back to exactly
+    // what `document` (left unmodified) already says, then rethrow.
     try {
       if (!diff.isNoOp) {
         if (diff.insertedText == '\n') {
-          // relativeAttributes, not attributesForInsertion: see
-          // EditingEngine.enterKeyEditWithRenumber's doc comment — this
-          // edit can reconstruct pre-existing text (a mid-line split's
-          // tail, renumbered subsequent items), which needs to keep its
-          // own original formatting rather than having sticky attributes
-          // smeared across the whole combined replacement. Sticky
-          // attributes are still applied, just only to the genuinely new
-          // marker portion — enterKeyEditWithRenumber folds that into the
-          // relativeAttributes it returns, given the current sticky state
-          // as a parameter.
+          // relativeAttributes, not attributesForInsertion: this edit may
+          // reconstruct pre-existing text that must keep its own
+          // formatting rather than having sticky attributes smeared
+          // across the whole combined replacement.
           final edit = engine.enterKeyEditWithRenumber(
             EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
             Map.of(engine.stickyAttributes),
@@ -291,27 +222,15 @@ class RichEditorController extends TextEditingController {
           );
           resultComposing = TextRange.empty;
           // Not autolinking here: the exit-list variant deletes the
-          // prefix, which shifts everything `_maybeAutolink` assumes
-          // about `diff`'s positions still lining up with the document.
-          // Narrow trade-off — no autolink on the exact keystroke where
-          // Enter also exits a list — over reusing position math that no
-          // longer holds.
+          // prefix, shifting positions _maybeAutolink assumes line up
+          // with the document.
         } else if (diff.insertedText.isEmpty && diff.end - diff.start == 1) {
-          // A single-character deletion — live backspace. Routed through
-          // the same consolidated EditingEngine.deleteBackwardEdit the
-          // programmatic CommandDispatcher.deleteBackward path uses, so
-          // live typing gets smart list-marker removal and numbered-list
-          // renumbering too, not just the raw one-character diff. Called
-          // with the caret at diff.end (where it was *before* backspacing,
-          // matching deleteBackwardEdit's own "collapsed selection at the
-          // pre-deletion caret" contract) — document.paragraphs/text still
-          // reflect the pre-deletion state here, since nothing has been
-          // dispatched yet. relativeAttributes, not attributesForInsertion
-          // — same reasoning as the Enter branch above: the renumbering
-          // case reconstructs existing paragraphs' text and must keep
-          // their own attributes, never sticky ones (there's no "new"
-          // portion here the way Enter's marker is, so no sticky
-          // application at all makes sense for this specific edit).
+          // Live backspace, routed through the same
+          // EditingEngine.deleteBackwardEdit the programmatic
+          // CommandDispatcher.deleteBackward path uses, for smart
+          // list-marker removal and renumbering. Called with the caret at
+          // diff.end (the pre-deletion caret), since nothing has been
+          // dispatched yet.
           final edit = engine.deleteBackwardEdit(
             EditorSelection.collapsed(diff.end),
           );
@@ -330,8 +249,7 @@ class RichEditorController extends TextEditingController {
             resultComposing = TextRange.empty;
           } else {
             // Shouldn't happen — diff implies something was deletable —
-            // but fall back to the raw diff defensively rather than
-            // silently dropping the edit.
+            // but fall back to the raw diff defensively.
             history.execute(
               ReplaceRangeCommand(
                 start: diff.start,
@@ -341,16 +259,11 @@ class RichEditorController extends TextEditingController {
               ),
             );
           }
-          // Backspace never autolinks — _maybeAutolink no-ops on empty
-          // insertedText anyway, but ranAutolink stays false for clarity
-          // of intent, not just because the guard happens to catch it.
         } else {
           // Markdown-style header shortcut: a bare '#'/'##'/... at the
-          // very start of an otherwise-empty paragraph, followed by the
-          // space the user just typed. Checked before the generic
-          // handling below, not folded into it — a match consumes the
-          // space entirely (never inserted) rather than treating this as
-          // ordinary text entry.
+          // start of an otherwise-empty paragraph, followed by the space
+          // just typed. A match consumes the space entirely rather than
+          // treating this as ordinary text entry.
           final autoHeaderLevel =
               diff.insertedText == ' ' && diff.start == diff.end
               ? engine.autoFormatHeaderLevel(diff.start)
@@ -360,11 +273,9 @@ class RichEditorController extends TextEditingController {
             final paragraphStart = document.paragraphs
                 .paragraphAt(diff.start)!
                 .start;
-            // Two separate undo steps, deliberately — same "one keystroke,
-            // two commits" trade-off already used below for
-            // repairListNumbering's follow-up: stripping the literal
-            // '#'/'##' is a text edit, setting headerLevel is metadata: two
-            // different kinds of change, restored independently on undo.
+            // Two separate undo steps: stripping the '#'/'##' is a text
+            // edit, setting headerLevel is metadata — restored
+            // independently on undo.
             history.execute(
               ReplaceRangeCommand(
                 start: paragraphStart,
@@ -380,27 +291,17 @@ class RichEditorController extends TextEditingController {
             );
             resultSelection = TextSelection.collapsed(offset: paragraphStart);
             resultComposing = TextRange.empty;
-            // Not autolinking here: there's no text left after becoming a
+            // Not autolinking here: no text is left after becoming a
             // heading for _maybeAutolink to look at.
           } else {
-            // A bulk insert (see _maybeAutolink's doc comment: never a
-            // live keystroke, always an already-finished chunk) gets its
-            // autolinks computed *before* dispatch and folded into this
-            // same `ReplaceRangeCommand` as `relativeAttributes`, rather
-            // than inserted first and linked after the fact via a
-            // separate `commands.setLink` call per URL. A real, reported
-            // bug: doing it after the fact put each autolinked URL on
-            // the undo stack as its own step, so undoing a single paste
-            // took N+1 presses — one per link, plus one for the text —
-            // unwinding the links one at a time before ever touching the
-            // pasted text itself, instead of the whole paste
-            // disappearing on the first undo like every other editor.
-            // Single-character live typing (the only other caller of
-            // `ranAutolink`) is unaffected — it still goes through
-            // `_maybeAutolink`'s separate-command path below exactly as
-            // before, since that one *keystroke* being its own undo step
-            // (distinct from the autolink it triggers) is a deliberate,
-            // pre-existing design choice, not part of this bug.
+            // A bulk insert gets its autolinks computed *before* dispatch
+            // and folded into this same ReplaceRangeCommand as
+            // relativeAttributes, rather than linked after the fact via a
+            // separate commands.setLink call per URL — otherwise each
+            // autolinked URL becomes its own undo step, so undoing a
+            // single paste takes N+1 presses instead of one. Single-
+            // character live typing still goes through _maybeAutolink's
+            // separate-command path below, unaffected.
             final urls = diff.insertedText.length > 1
                 ? detectAllUrls(diff.insertedText)
                 : const <DetectedUrl>[];
@@ -441,17 +342,9 @@ class RichEditorController extends TextEditingController {
             }
 
             // Same "range edit can orphan a numbered run" concern as
-            // CommandDispatcher.deleteSelection — this branch is what
-            // actually runs when a real device backspaces over a
-            // multi-paragraph selection (or types over one), not the
-            // programmatic path, so it needs the same follow-up check.
-            // Two separate undo steps when a repair is needed, same
-            // reasoning as CommandDispatcher.deleteSelection's doc comment.
-            // Not relying on history.execute's return value here — every
-            // other call site in this file discards it too, and computing
-            // the post-edit position directly from diff (start + however
-            // much was inserted) is exactly where the merge boundary
-            // landed regardless.
+            // CommandDispatcher.deleteSelection, for a live multi-
+            // paragraph backspace/overwrite. Two separate undo steps when
+            // a repair is needed.
             final repairEdit = engine.repairListNumbering(
               EditorSelection.collapsed(diff.start + diff.insertedText.length),
             );
@@ -478,12 +371,9 @@ class RichEditorController extends TextEditingController {
       rethrow;
     }
 
-    // Trust the TextField/IME's own reported selection for where the
-    // caret actually lands — autocorrect and IME composition can put it
-    // somewhere `diff` alone wouldn't predict. Only valid on the
-    // ordinary path above, where `resultSelection`/`resultComposing`
-    // still equal Flutter's own values; the smart-Enter path already
-    // overrode both for the reason noted there.
+    // Trust the TextField/IME's own reported selection where it wasn't
+    // overridden above — autocorrect and IME composition can put the
+    // caret somewhere `diff` alone wouldn't predict.
     super.value = TextEditingValue(
       text: document.text,
       selection: resultSelection,
@@ -495,45 +385,18 @@ class RichEditorController extends TextEditingController {
     }
   }
 
-  /// After a single-character live keystroke, checks whether it just
-  /// completed an autolink boundary (space/newline/tab) and, if the
-  /// token immediately before that boundary is a confidently URL-shaped
-  /// token, applies the link attribute over it via
-  /// [CommandDispatcher.setLink] — the exact same path the manual link
-  /// dialog uses, so an autolinked URL is its own undo step and is
-  /// editable/removable exactly like a manually-inserted link.
-  ///
-  /// Only ever called for a genuine one-character diff — every other
-  /// caller of `ranAutolink` is a *bulk* insert (never a live keystroke;
-  /// always an already-finished chunk arriving as one atomic unit — a
-  /// real device's own keyboard pasting directly via its clipboard
-  /// suggestion, autocomplete, voice input), which computes and applies
-  /// its own autolinks *before* dispatch instead, baked into the very
-  /// same `ReplaceRangeCommand` as `relativeAttributes` — see the `set
-  /// value` override's general-insert branch. That split exists because
-  /// this method's contract — undo the *character* and the *link* it
-  /// triggered as two separate steps — is a deliberate, pre-existing
-  /// design choice for live typing, but is exactly the bug a bulk paste
-  /// hit: doing it after the fact, one `setLink` call per URL, put every
-  /// autolinked URL from a single paste on the undo stack as its own
-  /// step, so undoing the paste took N+1 presses instead of one.
-  ///
-  /// Only ever inspects the single token immediately before the
-  /// boundary that was just typed — never the whole document — which is
-  /// what keeps this from firing while a URL is still being typed: a
-  /// boundary char has to have actually just been inserted for
-  /// `diff.insertedText` to end with one, and no URL contains a
-  /// space/newline/tab.
-  ///
-  /// Deliberately runs *after* `super.value = ...` in `set value` rather
-  /// than before. By the time `commands.setLink` fires
-  /// `transactions.notify()` -> `_handleCommit` -> `_applyValue`,
-  /// `this.selection` already equals the correct, final, IME-reported
-  /// selection — so `_handleCommit`'s clamp-and-reapply computes a
-  /// genuine no-op `TextEditingValue`, and `_applyValue` takes the
-  /// documented "notify anyway" path for pure-formatting changes,
-  /// instead of momentarily computing a stale, pre-edit-selection
-  /// guess and then immediately overwriting it.
+  // After a single-character live keystroke, checks whether it just
+  // completed an autolink boundary (space/newline/tab) and, if the token
+  // before it is URL-shaped, applies the link attribute via
+  // CommandDispatcher.setLink — the same path the manual link dialog
+  // uses, so it's its own undo step. Only called for a one-character
+  // diff; bulk inserts compute their own autolinks before dispatch
+  // instead (see set value's general-insert branch), so a paste's links
+  // don't each become a separate undo step.
+  //
+  // Runs after super.value = ... in set value, not before, so
+  // this.selection already equals the final IME-reported selection by
+  // the time commands.setLink triggers a notify.
   void _maybeAutolink(TextDiff diff) {
     if (diff.insertedText.isEmpty) return;
     final lastChar = diff.insertedText[diff.insertedText.length - 1];
@@ -568,23 +431,12 @@ class RichEditorController extends TextEditingController {
     history.breakCoalescing();
   }
 
-  /// Assigns `newValue`, guaranteeing listeners are notified even when
-  /// `newValue == value`.
-  ///
-  /// `ValueNotifier.value`'s setter — which `TextEditingController`
-  /// inherits — skips `notifyListeners()` when the new value equals the
-  /// old one. That's the right optimization for `ValueNotifier` in
-  /// general, but wrong here: `TextEditingValue` equality only covers
-  /// text, selection, and composing range. It has no concept of
-  /// formatting, which lives entirely in [document]'s `AttributeStore`.
-  /// A pure formatting change (toggle bold, undo a formatting command)
-  /// leaves text/selection/composing all unchanged, so it produces a
-  /// `TextEditingValue` indistinguishable from the current one — and the
-  /// inherited setter would silently swallow the notification, leaving
-  /// the `TextField` showing stale styling until some *other*, genuinely
-  /// value-changing edit forces a rebuild. Every call site that can
-  /// possibly be a formatting-only change routes through this instead of
-  /// `super.value =` directly.
+  // Assigns newValue, guaranteeing listeners are notified even when
+  // newValue == value: TextEditingValue equality doesn't cover
+  // formatting (lives in document's AttributeStore), so a pure
+  // formatting change would otherwise be silently swallowed by
+  // ValueNotifier's inherited setter and leave the TextField showing
+  // stale styling.
   void _applyValue(TextEditingValue newValue) {
     final valueActuallyChanged = newValue != value;
     super.value = newValue;
@@ -593,23 +445,12 @@ class RichEditorController extends TextEditingController {
     }
   }
 
-  /// The single [TransactionManager] commit callback — fires once per
-  /// logical edit (however many engine calls it took) and keeps
-  /// [TextEditingController.value]'s text in sync with [document].
-  ///
-  /// This clamps the *existing* selection to the new text length rather
-  /// than computing where it should end up; that's correct for
-  /// formatting-only changes (text length is unchanged, so the current
-  /// selection is already right) but not for text-content changes
-  /// (inserting/deleting moves the caret). Every call site that changes
-  /// text content — [insertText], [deleteBackward]/[deleteForward],
-  /// paste, undo/redo, and the `set value` override above — corrects the
-  /// selection explicitly afterward via [_syncSelection]. The one
-  /// accepted trade-off: those call sites end up notifying listeners
-  /// twice (once from this guess, once from the correction) instead of
-  /// once. Simpler and more robust than threading "what selection should
-  /// this commit produce" through [TransactionManager], which has no
-  /// business knowing that.
+  // The single TransactionManager commit callback — keeps
+  // TextEditingController.value's text in sync with document. Clamps the
+  // *existing* selection to the new text length, which is correct for
+  // formatting-only changes but not text-content changes; call sites that
+  // change content correct the selection afterward via _syncSelection
+  // (accepting a double notification for those).
   void _handleCommit() {
     final newText = document.text;
     final length = newText.length;
@@ -636,18 +477,11 @@ class RichEditorController extends TextEditingController {
     );
   }
 
-  /// The current selection as an [EditorSelection], defensively clamped.
-  ///
-  /// A freshly constructed `TextEditingController` starts with
-  /// `selection = TextSelection.collapsed(offset: -1)` until the bound
-  /// `TextField` is focused — Flutter's own sentinel for "no selection
-  /// yet". Every programmatic editing method below (`insertText`,
-  /// `toggleBold`, ...) reads this getter, so without this guard,
-  /// calling one of them before the field is ever focused — entirely
-  /// plausible for something like "insert a template into a new note" —
-  /// would pass `-1` straight through to [EditingEngine.replaceRange]
-  /// and trip its bounds assertion. Falling back to the end of the
-  /// document is the same thing focusing an empty text field would do.
+  // The current selection as an EditorSelection, defensively clamped: a
+  // freshly constructed TextEditingController starts with
+  // selection = TextSelection.collapsed(offset: -1) until the bound
+  // TextField is focused, which would otherwise trip EditingEngine's
+  // bounds assertion if a programmatic edit is called first.
   EditorSelection get _currentSelection {
     if (_selectionHighlight != null && _selectionHighlight!.isValid) {
       return EditorSelection(
@@ -684,34 +518,17 @@ class RichEditorController extends TextEditingController {
 
   /// Deletes the current selection outright. No-op if the selection is
   /// collapsed. Prefer this over `deleteBackward()` at call sites (like
-  /// cut) that mean "delete what's selected" — `deleteBackward` happens
-  /// to fall back to the same behavior for a non-collapsed selection,
-  /// but that's an implementation detail, not something a call site
-  /// should rely on to read clearly.
+  /// cut) that mean "delete what's selected".
   void deleteSelection() =>
       _syncSelection(commands.deleteSelection(_currentSelection));
 
   /// Pastes `text` as plain content at the current selection — the
   /// programmatic equivalent of typing it in.
   ///
-  /// Any bare URL inside `text` is autolinked immediately, the same as
-  /// [paste] (the system-clipboard path, via `ClipboardManager`) already
-  /// does — a real, reported bug: only `ClipboardManager.paste()` ran
-  /// autolink detection, so any paste path that doesn't go through the
-  /// OS clipboard (drag-and-drop, a share-sheet handoff, a host's own
-  /// "insert this text" action) left a pasted URL sitting there unlinked
-  /// until the user happened to type a boundary character (space,
-  /// newline, tab — never actually "Enter" specifically, despite how
-  /// that's sometimes described) right after it.
-  ///
-  /// `text` is normalized to '\n' line endings before anything else runs
-  /// — a host calling this with clipboard- or drag-and-drop-sourced text
-  /// (its own doc comment above already names both as expected callers)
-  /// may well be handing over '\r\n', same as `ClipboardManager.paste`'s
-  /// own text can be; see that method's doc comment for the full
-  /// explanation of why an un-normalized '\r' silently breaks autolink
-  /// detection for every URL on the affected line, not just malformats
-  /// the text itself.
+  /// Any bare URL inside `text` is autolinked immediately, same as
+  /// [paste] (the system-clipboard path). `text` is normalized to '\n'
+  /// line endings first, since an un-normalized '\r' breaks autolink
+  /// detection for the affected line.
   void pasteText(String text) {
     final normalized = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final urls = detectAllUrls(normalized);
@@ -720,16 +537,10 @@ class RichEditorController extends TextEditingController {
       return;
     }
 
-    // The non-URL portion of `text` still inherits whatever sticky
-    // formatting (bold, an active color, ...) ordinary typing would —
-    // this method is meant to behave like typing `text` in one go, not
-    // like a rich external paste bringing its own formatting (that's
-    // [pasteRichText]/[pasteHtml]/[pasteMarkdown]'s job).
-    // AttributeType.link is deliberately excluded from that inherited
-    // set: a stale sticky link value (see EditingEngine.applyAttribute's
-    // doc comment on why that no longer persists past a range apply,
-    // but collapsed-caret sticky link state is still legitimate) must
-    // never compete with the URLs actually detected in `text` below.
+    // The non-URL portion still inherits sticky formatting, same as
+    // ordinary typing (this isn't a rich external paste bringing its own
+    // formatting). AttributeType.link is excluded so a stale sticky link
+    // value can't compete with the URLs detected in `text` below.
     final sticky = engine.stickyAttributes;
     final relativeAttributes = <TextAttribute>[
       for (final entry in sticky.entries)
@@ -787,21 +598,11 @@ class RichEditorController extends TextEditingController {
     if (result != null) _repairAndSync(result);
   }
 
-  /// Syncs selection, then checks whether the paragraph the paste/import
-  /// landed in (or the one right after it) is part of a numbered run
-  /// whose markers are no longer sequential, and repairs it if so — see
-  /// `EditingEngine.repairListNumbering`'s doc comment. This is the
-  /// "Paste and Import" half of that method's intended use; the other
-  /// half (range deletions orphaning a run) is handled directly in
-  /// `CommandDispatcher.deleteSelection` and this class's `set value`.
-  ///
-  /// External content is the case this matters most for: pasted or
-  /// imported text can arrive with numbering that was never generated
-  /// by this editor's own toggle/renumber logic at all (a list typed in
-  /// some other app, an inconsistently-numbered HTML/Markdown source),
-  /// so there's no guarantee it was ever sequential to begin with —
-  /// unlike this editor's own edits, which stay self-consistent by
-  /// construction.
+  // Syncs selection, then checks whether the paragraph the paste/import
+  // landed in (or the one right after it) is part of a numbered run
+  // whose markers are no longer sequential, and repairs it — pasted or
+  // imported text can arrive with numbering this editor never generated
+  // (a list typed in another app, an inconsistent HTML/Markdown source).
   void _repairAndSync(EditorSelection resultSelection) {
     _syncSelection(resultSelection);
     final edit = engine.repairListNumbering(resultSelection);
@@ -817,19 +618,15 @@ class RichEditorController extends TextEditingController {
 
   void toggleBold() => commands.toggleBold(_currentSelection);
 
-  /// Exports the current document as an HTML string.
-  ///
-  /// Uses [EditorDocument.exportAttributes] rather than
-  /// [EditorDocument.attributes] directly — header formatting is read
-  /// from `document.paragraphs` now (Phase 3 of the block-architecture
-  /// migration), and `exportAttributes` is what synthesizes that back
-  /// into the flat span list `HtmlExporter` itself is unchanged and
-  /// still expects.
+  /// Exports the current document as an HTML string. Uses
+  /// [EditorDocument.exportAttributes] rather than
+  /// [EditorDocument.attributes] directly, since header/alignment/
+  /// direction are read from `document.paragraphs`, not the attribute
+  /// store.
   String toHtml() =>
       const HtmlExporter().export(document.text, document.exportAttributes());
 
-  /// Exports the current document as a Markdown string. See [toHtml]'s
-  /// doc comment — same reasoning applies here.
+  /// Exports the current document as a Markdown string. See [toHtml].
   String toMarkdown() => const MarkdownExporter().export(
     document.text,
     document.exportAttributes(),
@@ -849,9 +646,7 @@ class RichEditorController extends TextEditingController {
 
   /// Whether the paragraph containing the current selection starts with
   /// a literal prefix of `type` — drives the list toolbar buttons'
-  /// active state. Purely derived from text (`listPrefixLength`/
-  /// `listTypeOfPrefix`), same as rendering and `enterKeyEdit` — no
-  /// stored list state to read.
+  /// active state.
   bool isListActive(ParagraphListType type) {
     final sel = _currentSelection;
     final record = document.paragraphs.paragraphAt(sel.start);
@@ -869,10 +664,8 @@ class RichEditorController extends TextEditingController {
 
   /// Whether the paragraph containing the current selection is a
   /// task-list item, and if so, whether it's checked — `null` if it
-  /// isn't a checklist item at all. Purely derived from text
-  /// ([checkboxStateOfPrefix]), same as [isListActive] — no stored
-  /// checked state to read. Drives the checklist toolbar button/toggle's
-  /// display state.
+  /// isn't a checklist item at all. Drives the checklist toolbar
+  /// button/toggle's display state.
   bool? isTaskChecked() {
     final sel = _currentSelection;
     final record = document.paragraphs.paragraphAt(sel.start);
@@ -928,12 +721,9 @@ class RichEditorController extends TextEditingController {
   /// at that position; a range checks whether a single span covers the
   /// whole selection. Drives toolbar button highlighted state.
   ///
-  /// For [AttributeType.header] this delegates entirely to
-  /// [activeAttributeValue] — header no longer lives in
-  /// [EditorDocument.attributeStore] at all (see the block-architecture
-  /// design notes), so the generic `attributeStore`-based logic below
-  /// would silently go stale the moment a heading is set via
-  /// `CommandDispatcher.setHeader`.
+  /// Header/alignment/text-direction delegate to [activeAttributeValue]
+  /// since they're read from [EditorDocument.paragraphs], not
+  /// `attributeStore`.
   bool isAttributeActive(AttributeType type) {
     if (type == AttributeType.header ||
         type == AttributeType.align ||
@@ -954,12 +744,8 @@ class RichEditorController extends TextEditingController {
   /// (e.g. showing the current color swatch).
   ///
   /// [AttributeType.header] reads from [EditorDocument.paragraphs]
-  /// instead of `attributeStore` — same reasoning as
-  /// [isAttributeActive]. "Active" for a multi-paragraph selection
-  /// means every paragraph the selection touches agrees on the same
-  /// `headerLevel`, mirroring what the old `attributeStore`-based
-  /// `coversRange`/`covers` check meant: a value only counts as active
-  /// if it uniformly covers the whole selection, not just part of it.
+  /// instead of `attributeStore`. "Active" for a multi-paragraph
+  /// selection means every paragraph agrees on the same `headerLevel`.
   Object? activeAttributeValue(AttributeType type) {
     if (type == AttributeType.header) {
       final sel = _currentSelection;
@@ -1022,20 +808,12 @@ class RichEditorController extends TextEditingController {
   /// The link URL at [offset], or `null` if [offset] isn't inside a
   /// link attribute.
   ///
-  /// Checks both `offset` and `offset - 1`. A single tap's resulting
-  /// caret offset lands wherever `RenderEditable` rounds to the
-  /// nearest character boundary — tapping the *right half* of a
-  /// link's very last character is a completely ordinary way to tap
-  /// "on" that link, and it produces `offset == link.end`, not
-  /// `link.end - 1`. Checking only `offset` would silently miss that
-  /// (common) case. The trade-off: a tap intended to place the caret
-  /// just *after* a link (to keep typing) at that exact same boundary
-  /// offset is indistinguishable from a tap "on" the link's last
-  /// character — this is inherently ambiguous from offset alone, the
-  /// same ambiguity Google Docs/Notion have at a link's edge. Pairing
-  /// this with a confirmation dialog before actually launching (see
-  /// `RichTextEditor`) is what makes that ambiguity harmless rather
-  /// than something that needs pixel-perfect resolution here.
+  /// Checks both `offset` and `offset - 1`, since a tap on the right
+  /// half of a link's last character produces `offset == link.end`, not
+  /// `link.end - 1`. This is inherently ambiguous with a tap intended to
+  /// place the caret just after the link — pairing this with a
+  /// confirmation dialog before launching (see `RichTextEditor`) is what
+  /// makes that harmless.
   String? linkUrlAt(int offset) {
     if (offset < 0) return null;
     final atOffset = document.attributeStore.findAt(
@@ -1144,13 +922,10 @@ class RichEditorController extends TextEditingController {
 
   /// Ends the current search and clears its match selection.
   ///
-  /// Notifies unconditionally, even though nothing about
-  /// [TextEditingController.value] changes — the current-match highlight
-  /// (see [buildTextSpan]) is driven by `search.currentMatch`, not by
-  /// `value`, specifically so it stays visible while a find bar has
-  /// focus. That means clearing it needs its own explicit rebuild
-  /// trigger; without this, a highlighted match would visibly linger on
-  /// screen after the find bar closes.
+  /// Notifies unconditionally: the current-match highlight is driven by
+  /// `search.currentMatch`, not `value`, so it needs its own explicit
+  /// rebuild trigger or it would visibly linger after the find bar
+  /// closes.
   void clearFind() {
     search.clear();
     notifyListeners();
@@ -1159,11 +934,8 @@ class RichEditorController extends TextEditingController {
   void _selectCurrentMatch() {
     final match = search.currentMatch;
     if (match == null) {
-      // No match (e.g. a query with zero results) — still notify, or a
-      // *previous* search's highlight would stay visibly stuck on
-      // screen. Same reasoning as clearFind above: the highlight isn't
-      // driven by `value`, so a `value`-only change check can't be
-      // trusted to catch this.
+      // Still notify, or a previous search's highlight would stay stuck
+      // on screen (same reasoning as clearFind).
       notifyListeners();
       return;
     }
@@ -1181,16 +953,10 @@ class RichEditorController extends TextEditingController {
   // Rendering
   // ---------------------------------------------------------------------
 
-  // Converted from `search.matches` (a `List<SearchMatch>`, Flutter-free
-  // by design — see `SearchIndex`'s own doc comment) to the `TextRange`s
-  // `TextSpanRenderer.renderSpan` actually wants. Memoized by reference
-  // to the *source* list rather than recomputed every `buildTextSpan`
-  // call: `SearchIndex.matches` already returns a stable reference that
-  // only changes when the match set itself does, and `renderSpan`'s own
-  // cache compares `allMatchesRanges` by `identical()` — recomputing a
-  // fresh list here on every call (even with identical matches) would
-  // silently defeat that cache on every keystroke while a search is
-  // active.
+  // Converted from search.matches to the TextRanges renderSpan wants,
+  // memoized by reference to the source list — renderSpan's own cache
+  // compares allMatchesRanges by identical(), so recomputing a fresh list
+  // every call would defeat that cache on every keystroke.
   List<SearchMatch>? _allMatchesRangesSource;
   List<TextRange>? _allMatchesRanges;
 

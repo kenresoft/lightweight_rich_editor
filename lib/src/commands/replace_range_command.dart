@@ -8,9 +8,8 @@ import 'editor_command.dart';
 /// Replaces `[start, end)` (positions in the document as it stood
 /// *before* this command runs) with `text`. Covers insert (`start ==
 /// end`), delete (`text.isEmpty`), plain replace, plain-text paste, and
-/// rich paste (via `relativeAttributes`) — every text-content edit is
-/// one of these, mirroring how [EditingEngine.replaceRange] is the one
-/// primitive underneath all of them.
+/// rich paste (via `relativeAttributes`) — every text-content edit goes
+/// through this command.
 ///
 /// Exactly one of `attributesForInsertion` / `relativeAttributes` is
 /// meaningful for a given command:
@@ -19,35 +18,11 @@ import 'editor_command.dart';
 /// - `relativeAttributes`: per-character spans expressed relative to the
 ///   start of `text` — a rich paste bringing its own formatting.
 ///
-/// Undo is exact, not best-effort: [execute] snapshots the text and
-/// spans it's about to remove *every time it runs* (so redo — which
-/// calls [execute] again — snapshots correctly too), and [undo] restores
-/// that exact snapshot via [EditingEngine.restoreRange] rather than
-/// re-deriving it from sticky attributes or guessing.
-///
-/// [_removedBlockMetadata] is a second, separate snapshot alongside
-/// [_removedSpans] — `headerLevel`/`alignment` live in `ParagraphIndex`
-/// now, not `AttributeStore` (see the block-architecture design notes),
-/// so a deleted paragraph's block metadata isn't recoverable from
-/// `_removedSpans` the way it used to be. Concretely: deleting a
-/// paragraph headed via `SetHeaderLevelCommand` (as opposed to an old
-/// paragraph loaded from a note saved before that migration) leaves
-/// nothing in `AttributeStore` to snapshot at all — `_removedSpans`
-/// would simply be missing the header entry, and undo would silently
-/// restore the text without the heading. This snapshot is what closes
-/// that gap. It's redundant (harmless, not wrong) for a pure insert —
-/// `ParagraphIndex.applyDeletion`'s "keep the leftmost fragment's
-/// metadata on merge" rule is the exact inverse of `applyInsertion`'s
-/// "keep the first fragment's metadata on split", so undoing a pure
-/// insert via a symmetric deletion already restores the original
-/// metadata on its own; the snapshot only does real work for
-/// delete/replace.
-///
-/// Snapshots full `ParagraphRecord`s (via `recordsOverlapping`) rather
-/// than a bespoke per-field tuple, restored through
-/// `ParagraphIndex.restoreBlockMetadata` — see that method's doc comment
-/// for why: a future stored block field doesn't need this file touched
-/// again to snapshot/restore it too.
+/// [execute] snapshots the text, spans, and paragraph block metadata
+/// (`headerLevel`/`alignment` live in `ParagraphIndex`, not
+/// `AttributeStore`, so they need their own snapshot) it's about to
+/// remove every time it runs, so [undo] can restore the exact prior
+/// state via [EditingEngine.restoreRange].
 class ReplaceRangeCommand extends EditorCommand {
   final int start;
   final int end;
@@ -114,8 +89,7 @@ class ReplaceRangeCommand extends EditorCommand {
   bool canCoalesceWith(EditorCommand previous) {
     if (previous is! ReplaceRangeCommand) return false;
 
-    // Rich-paste and attributed inserts never coalesce with anything —
-    // they represent a single deliberate action, not incremental typing.
+    // Rich-paste never coalesces — it's a single deliberate action.
     if (relativeAttributes != null || previous.relativeAttributes != null) return false;
 
     if (_isPureInsert && previous._isPureInsert) {

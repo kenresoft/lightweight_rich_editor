@@ -6,13 +6,10 @@ import 'editor_command.dart';
 
 /// Toggles `type` over `selection`, via [EditingEngine.toggleAttribute].
 ///
-/// Toggling twice does not, in general, undo itself: toggling a
-/// selection that's *partially* bold makes it fully bold (see
-/// [EditingEngine.toggleAttribute]'s doc comment), and toggling that
-/// result again would clear it entirely — losing the original partial
-/// pattern. So [execute] snapshots the exact spans of `type` intersecting
-/// `selection` before the toggle runs, and [undo] restores that exact
-/// snapshot rather than toggling again.
+/// Toggling twice does not, in general, undo itself (a partially-bold
+/// selection becomes fully bold, not toggled off), so [execute] snapshots
+/// the exact spans of `type` intersecting `selection` and [undo] restores
+/// that snapshot rather than toggling again.
 class ToggleAttributeCommand extends EditorCommand {
   final AttributeType type;
   final EditorSelection selection;

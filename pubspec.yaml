@@ -1,6 +1,6 @@
 name: lightweight_rich_editor
 description: "A lightweight, performance-focused rich-text editor for Flutter with notebook-style ruled lines and high customizability."
-version: 0.1.1
+version: 0.2.0
 repository: https://github.com/kenresoft/lightweight_rich_editor
 issue_tracker: https://github.com/kenresoft/lightweight_rich_editor/issues
 topics:

@@ -3,11 +3,6 @@ import '../core/editor_selection.dart';
 import '../models/paragraph_text_direction.dart';
 import 'editor_command.dart';
 
-/// One paragraph's `textDirection` immediately before a
-/// [SetTextDirectionCommand] ran — enough to restore that exact
-/// paragraph's prior state on undo. Same shape as `SetAlignmentCommand`'s
-/// own `_AlignmentSnapshot`, deliberately — see that class for the full
-/// reasoning this mirrors.
 class _TextDirectionSnapshot {
   final int start;
   final int end;
@@ -16,16 +11,9 @@ class _TextDirectionSnapshot {
 }
 
 /// Sets `textDirection` on the paragraph(s) containing `selection`, via
-/// [EditingEngine.setTextDirection]. Structural copy of
-/// `SetAlignmentCommand` — see that class's doc comment for the full
-/// reasoning (per-paragraph undo snapshots, since a multi-paragraph
-/// selection can have several different previous directions; snapshot
-/// taken inside [execute], not the constructor, since [execute] also runs
-/// on redo).
-///
-/// See [ParagraphTextDirection]'s doc comment for the caveat this shares
-/// with alignment: stored + round-tripped state, no live rendering effect
-/// in the editor today.
+/// [EditingEngine.setTextDirection]. Snapshots each affected paragraph's
+/// prior direction individually, since a multi-paragraph selection can
+/// span several different previous values.
 class SetTextDirectionCommand extends EditorCommand {
   final EditorSelection selection;
   final ParagraphTextDirection? textDirection;

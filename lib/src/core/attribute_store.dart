@@ -5,27 +5,17 @@ import '../utils/clamp_int.dart';
 /// Owns every [TextAttribute] span for a document and every operation
 /// that keeps them consistent as the underlying text changes.
 ///
-/// Nothing outside this class should hold a mutable reference to spans or
-/// reimplement span math — the old controller manipulated
-/// `List<TextAttribute>` directly in half a dozen places (toggle, set,
-/// clear, undo, redo, sync-on-edit), which is exactly how the identity-
-/// equality undo bug and the scattered clamping logic happened. Every one
-/// of those call sites becomes a method here instead.
-///
-/// [AttributeStore] does not know about the document's text or selection
-/// — it only knows offsets. Callers (the `EditingEngine`) are
-/// responsible for calling [shiftForInsertion] / [shiftForDeletion] in
-/// step with the corresponding [TextBuffer] edit, and for calling
-/// [clampTo] after any edit that isn't routed through those two methods
-/// (e.g. a full document reset).
+/// [AttributeStore] does not know about the document's text or
+/// selection — it only knows offsets. Callers (the `EditingEngine`) must
+/// call [shiftForInsertion] / [shiftForDeletion] in step with the
+/// corresponding [TextBuffer] edit, and call [clampTo] after any edit
+/// that bypasses those two methods (e.g. a full document reset).
 class AttributeStore {
   final List<TextAttribute> _spans = [];
   bool _sorted = true;
 
-  /// Bumped on every mutation. The `Renderer` (Phase 4) uses this as a
-  /// cheap cache-invalidation key instead of diffing the span list on
-  /// every rebuild — same role the old controller's `_attributesRevision`
-  /// played, just owned by the class whose state it actually tracks.
+  /// Bumped on every mutation. Used as a cheap cache-invalidation key
+  /// instead of diffing the span list on every rebuild.
   int _revision = 0;
 
   int get revision => _revision;
@@ -167,8 +157,7 @@ class AttributeStore {
 
   /// Removes formatting (optionally filtered to `type`) from
   /// `[start, end)`, trimming boundary spans so text outside the range
-  /// keeps its formatting untouched. This is "clear formatting" and the
-  /// removal half of "set attribute" from the old controller, unified.
+  /// keeps its formatting untouched.
   void clearRange(int start, int end, {AttributeType? type}) {
     final affected = findIntersecting(start, end, type: type);
     if (affected.isEmpty) return;
@@ -251,13 +240,8 @@ class AttributeStore {
   }
 
   /// Merges adjacent or overlapping spans of the same type and value
-  /// (optionally restricted to `type`, which is cheaper — pass it
-  /// whenever the caller knows which type it just touched, exactly as
-  /// the old controller did for single-attribute toggles).
-  ///
-  /// This is what keeps the span count bounded after repeated edits —
-  /// without it, toggling bold on then off a thousand times would leave
-  /// a thousand dead spans behind.
+  /// (optionally restricted to `type`, which is cheaper). Keeps the span
+  /// count bounded after repeated edits.
   void optimize({AttributeType? type}) {
     final types = type != null ? [type] : AttributeType.values;
     for (final t in types) {

@@ -80,6 +80,53 @@ void main() {
     });
   });
 
+  group('LightweightRichEditor — textAlign/textDirection', () {
+    testWidgets('defaults to TextAlign.start and inherits ambient Directionality', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(body: LightweightRichEditor(initialText: 'hello')),
+      ));
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.textAlign, TextAlign.start);
+      expect(field.textDirection, isNull);
+    });
+
+    testWidgets('forwards textAlign and textDirection to the underlying TextField', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+          body: LightweightRichEditor(
+            initialText: 'hello',
+            textAlign: TextAlign.center,
+            textDirection: TextDirection.rtl,
+          ),
+        ),
+      ));
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.textAlign, TextAlign.center);
+      expect(field.textDirection, TextDirection.rtl);
+    });
+
+    testWidgets('renders and scrolls to a search match without error in RTL', (tester) async {
+      final key = GlobalKey<LightweightRichEditorState>();
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: LightweightRichEditor(
+            key: key,
+            initialText: 'مرحبا بالعالم\nhello world',
+            textDirection: TextDirection.rtl,
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      key.currentState!.controller.search.search('world');
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('LightweightRichEditor — externally-supplied controller', () {
     testWidgets('uses the supplied controller rather than creating a new one', (tester) async {
       final controller = RichEditorController(text: 'external');

@@ -4,26 +4,17 @@ import '../core/editing_engine.dart';
 import '../core/editor_selection.dart';
 
 /// Owns undo/redo for an [EditingEngine] and decides how edits group into
-/// history entries.
-///
-/// Behavior target (from the product brief): sequential typing becomes
-/// one history event, sequential deletes become one history event,
+/// history entries: sequential typing/deleting coalesces into one entry,
 /// formatting changes always get their own, and cursor movement starts a
-/// new typing session — matching VS Code / Notion / Obsidian / Apple
-/// Notes rather than recording one entry per keystroke like the old
-/// controller did.
+/// new typing session.
 ///
 /// [HistoryManager] never mutates the document itself; every stack entry
-/// is an [EditorCommand], and it's the command's job to know how to
-/// apply and reverse itself. This class only decides *when* two commands
-/// belong in the same undo step and drives the stacks.
+/// is an [EditorCommand] responsible for applying and reversing itself.
 class HistoryManager {
   final EditingEngine engine;
 
-  /// How long a gap between edits is still considered "the same typing
-  /// session" for coalescing purposes. Pausing longer than this before
-  /// the next keystroke starts a fresh history entry, same as most
-  /// editors' typing-pause heuristic.
+  /// How long a gap between edits is still considered the same typing
+  /// session for coalescing purposes.
   final Duration typingTimeout;
 
   /// Oldest entries are dropped once the stack exceeds this size, so
