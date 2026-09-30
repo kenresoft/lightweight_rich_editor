@@ -94,8 +94,14 @@ class _OutdentListAction extends Action<OutdentListIntent> {
 // Shared by the real `TextField` (via `DefaultTextHeightBehavior`) and
 // `TextSpanRenderer.lineBottomOffsets`'s parallel layout — both must use
 // the same value or they'll disagree about where a line's glyphs fall.
+//
+// `proportional` (not `even`): the spare leading in a row goes above the
+// glyphs, so the baseline keeps one constant distance from its ruled line
+// at every font size and row count. Measured with real Roboto metrics, `even`
+// drifts the baseline by several px across sizes and floats multi-row
+// headings mid-row.
 const _kTextHeightBehavior = TextHeightBehavior(
-  leadingDistribution: TextLeadingDistribution.even,
+  leadingDistribution: TextLeadingDistribution.proportional,
 );
 
 /// Renders nothing — its only job is scrolling [scrollController] so the
@@ -114,6 +120,8 @@ class _ScrollToCurrentMatch extends StatefulWidget {
     required this.strutStyle,
     required this.topPadding,
     required this.textDirection,
+    required this.textScaler,
+    required this.devicePixelRatio,
   });
 
   final RichEditorController controller;
@@ -123,6 +131,8 @@ class _ScrollToCurrentMatch extends StatefulWidget {
   final StrutStyle strutStyle;
   final double topPadding;
   final TextDirection textDirection;
+  final TextScaler textScaler;
+  final double devicePixelRatio;
 
   @override
   State<_ScrollToCurrentMatch> createState() => _ScrollToCurrentMatchState();
@@ -170,6 +180,8 @@ class _ScrollToCurrentMatchState extends State<_ScrollToCurrentMatch> {
           strutStyle: widget.strutStyle,
           textHeightBehavior: _kTextHeightBehavior,
           textDirection: widget.textDirection,
+          textScaler: widget.textScaler,
+          devicePixelRatio: widget.devicePixelRatio,
         );
 
     // Already comfortably on screen -- leave the scroll position alone
@@ -247,6 +259,27 @@ class RichTextEditor extends StatelessWidget {
   /// wrapping this widget in `Theme`/`CupertinoTheme` instead.
   final EditableTextContextMenuBuilder? contextMenuBuilder;
 
+  /// Forwarded verbatim to the underlying `TextField` — e.g. a
+  /// `LengthLimitingTextInputFormatter` to cap note length at the input
+  /// layer, the same way any other Flutter text field would. Applied
+  /// before text ever reaches [controller]/the document.
+  final List<TextInputFormatter>? inputFormatters;
+
+  /// Whether the editor requests keyboard focus as soon as it's built.
+  /// Defaults to `true`, matching plain Flutter `TextField`/`TextFormField`
+  /// convention... except `TextField.autofocus` itself actually defaults
+  /// to `false`; `true` is kept here only for backward compatibility with
+  /// hosts built before this parameter existed. Prefer passing `false`
+  /// explicitly for any editor that isn't the sole focus target on
+  /// first frame (e.g. one embedded in a page with its own title field,
+  /// or reached via a transition where grabbing the keyboard immediately
+  /// would fight the transition/hero animation).
+  final bool autofocus;
+
+  /// Hint text shown when the document is empty. `null` (the default)
+  /// shows no hint, matching plain `TextField` behavior.
+  final String? placeholder;
+
   const RichTextEditor({
     super.key,
     required this.controller,
@@ -259,6 +292,9 @@ class RichTextEditor extends StatelessWidget {
     this.textDirection,
     this.confirmBeforeOpeningLinks = true,
     this.contextMenuBuilder,
+    this.inputFormatters,
+    this.autofocus = true,
+    this.placeholder,
   });
 
   void _openLink(BuildContext context, String url) {
@@ -431,19 +467,39 @@ class RichTextEditor extends StatelessWidget {
     // pointer-move, fighting RenderEditable's own gesture tracking.
     final renderTheme = controller.renderer.theme;
     final resolvedTextDirection = textDirection ?? Directionality.of(context);
+    // Must reach every manual measurement below (`lineBottomOffsets`,
+    // `offsetYFor`, and the header/oversized-run clamp inside the
+    // renderer) so they agree with what the real `TextField` renders --
+    // that field has no explicit `textScaler` override, so it applies
+    // this exact ambient value automatically.
+    final textScaler = MediaQuery.textScalerOf(context);
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+
+    // The one row grid (scaled, pixel-snapped pitch) shared with the
+    // renderer's span heights and the painter below — same scaler, same
+    // ratio, same instance-per-inputs, so none of them can disagree.
+    final metrics = controller.renderer.rowMetrics(
+      textScaler: textScaler,
+      devicePixelRatio: devicePixelRatio,
+    );
+    final rowHeight = metrics.heightMultiplier(renderTheme.baseFontSize);
 
     final baseTextStyle = TextStyle(
       fontSize: renderTheme.baseFontSize,
-      height: renderTheme.lineHeight / renderTheme.baseFontSize,
-      color: Colors.black,
+      height: rowHeight,
+      leadingDistribution: TextLeadingDistribution.proportional,
+      color: renderTheme.textColor,
       letterSpacing: 0.2,
     );
     final strutStyle = StrutStyle(
       fontSize: renderTheme.baseFontSize,
-      height: renderTheme.lineHeight / renderTheme.baseFontSize,
-      // forceStrutHeight defaults to false: a header's line height is
-      // already quantized up to a multiple of renderTheme.lineHeight, so
-      // the strut only sets a floor for plain body text.
+      height: rowHeight,
+      leadingDistribution: TextLeadingDistribution.proportional,
+      // forceStrutHeight stays false: a header line is several pitches
+      // tall and must be allowed to exceed the strut. Every inline span is
+      // fitted to exactly one pitch and every header to a whole number of
+      // them, so the strut only sets the floor for a genuinely empty line,
+      // which carries no styled span of its own.
       leading: 0.0,
     );
 
@@ -644,6 +700,8 @@ class RichTextEditor extends StatelessWidget {
                         strutStyle: strutStyle,
                         topPadding: editorStyle.paddingTop,
                         textDirection: resolvedTextDirection,
+                        textScaler: textScaler,
+                        devicePixelRatio: devicePixelRatio,
                       ),
                     ),
                     Positioned.fill(
@@ -654,7 +712,9 @@ class RichTextEditor extends StatelessWidget {
                           curve: Curves.easeInOut,
                           builder: (context, marginOpacity, child) {
                             return ListenableBuilder(
-                              listenable: controller,
+                              // Only recalculate line geometry when the document
+                              // itself changes, not on every selection move.
+                              listenable: controller.documentMutationNotifier,
                               builder: (context, child) {
                                 final lineBottoms = controller.renderer
                                     .lineBottomOffsets(
@@ -664,6 +724,8 @@ class RichTextEditor extends StatelessWidget {
                                       strutStyle: strutStyle,
                                       textHeightBehavior: _kTextHeightBehavior,
                                       textDirection: resolvedTextDirection,
+                                      textScaler: textScaler,
+                                      devicePixelRatio: devicePixelRatio,
                                     );
                                 return ListenableBuilder(
                                   listenable: scrollController,
@@ -671,8 +733,8 @@ class RichTextEditor extends StatelessWidget {
                                     return CustomPaint(
                                       painter: RuledLinesPainter(
                                         lineBottoms: lineBottoms,
-                                        fallbackLineHeight:
-                                            renderTheme.lineHeight,
+                                        fallbackLineHeight: metrics.pitch,
+                                        devicePixelRatio: devicePixelRatio,
                                         topPadding: editorStyle.paddingTop,
                                         scrollOffset:
                                             scrollController.hasClients
@@ -713,7 +775,7 @@ class RichTextEditor extends StatelessWidget {
                               focusNode: controller.focusNode,
                               scrollController: scrollController,
                               maxLines: null,
-                              autofocus: true,
+                              autofocus: autofocus,
                               textAlign: textAlign,
                               textDirection: textDirection,
                               textCapitalization: TextCapitalization.sentences,
@@ -722,10 +784,32 @@ class RichTextEditor extends StatelessWidget {
                               selectionWidthStyle: BoxWidthStyle.tight,
                               style: baseTextStyle,
                               strutStyle: strutStyle,
-                              decoration: const InputDecoration(
+                              inputFormatters: inputFormatters,
+                              decoration: InputDecoration(
+                                // Explicit `false`/`none`/zero on every
+                                // fill-affecting property, not just the
+                                // ones this editor wants — a host's ambient
+                                // `Theme.inputDecorationTheme` (e.g.
+                                // `filled: true` with a rounded
+                                // `OutlineInputBorder`, common in Material
+                                // 3 apps) would otherwise paint straight
+                                // through any gaps left unset, showing up
+                                // as an unwanted rounded card behind the
+                                // ruled paper.
+                                filled: false,
+                                fillColor: Colors.transparent,
                                 border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                errorBorder: InputBorder.none,
+                                disabledBorder: InputBorder.none,
+                                focusedErrorBorder: InputBorder.none,
                                 isDense: true,
                                 contentPadding: EdgeInsets.zero,
+                                hintText: placeholder,
+                                hintStyle: baseTextStyle.copyWith(
+                                  color: baseTextStyle.color?.withValues(alpha: 0.4),
+                                ),
                               ),
                               contextMenuBuilder:
                                   contextMenuBuilder ??

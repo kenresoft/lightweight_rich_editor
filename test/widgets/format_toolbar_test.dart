@@ -95,6 +95,17 @@ void main() {
       expect(find.text('H2'), findsOneWidget);
     });
 
+    testWidgets('shows H3 once setHeader(h3) is applied at the caret', (tester) async {
+      final controller = RichEditorController(text: 'a heading');
+      controller.selection = const TextSelection.collapsed(offset: 2);
+      await _pumpToolbar(tester, controller);
+
+      controller.setHeader('h3');
+      await tester.pump();
+
+      expect(find.text('H3'), findsOneWidget);
+    });
+
     testWidgets('reverts to the paragraph mark after clearing the heading', (tester) async {
       final controller = RichEditorController(text: 'a heading');
       controller.selection = const TextSelection.collapsed(offset: 2);

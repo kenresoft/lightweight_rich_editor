@@ -87,7 +87,9 @@ class MarkdownExporter {
         return isOpen ? '[' : ']($value)';
       case AttributeType.header:
         if (isOpen) {
-          return value == 'h1' ? '# ' : '## ';
+          if (value == 'h1') return '# ';
+          if (value == 'h2') return '## ';
+          return '### ';
         }
         return ''; // headers don't have closing markers in this model (line-based)
       default:

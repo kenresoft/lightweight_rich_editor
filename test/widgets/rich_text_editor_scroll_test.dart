@@ -5,6 +5,48 @@ import 'package:lightweight_rich_editor/src/controller/rich_editor_controller.da
 import 'package:lightweight_rich_editor/src/widgets/rich_text_editor.dart';
 
 void main() {
+  group('RichTextEditor — autofocus', () {
+    testWidgets('defaults to true, requesting focus as soon as it is built', (tester) async {
+      final controller = RichEditorController(text: 'hello');
+      final scrollController = ScrollController();
+      addTearDown(controller.dispose);
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: RichTextEditor(controller: controller, scrollController: scrollController),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(controller.focusNode.hasFocus, isTrue);
+    });
+
+    testWidgets('autofocus: false does not request focus', (tester) async {
+      final controller = RichEditorController(text: 'hello');
+      final scrollController = ScrollController();
+      addTearDown(controller.dispose);
+      addTearDown(scrollController.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: RichTextEditor(
+              controller: controller,
+              scrollController: scrollController,
+              autofocus: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(controller.focusNode.hasFocus, isFalse);
+    });
+  });
+
   group('RichTextEditor — scroll to current search match', () {
     testWidgets('scrolls an off-screen match into view after find', (tester) async {
       final lines = List.generate(60, (i) => i == 55 ? 'TARGET line' : 'Line $i');

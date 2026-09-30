@@ -32,6 +32,7 @@ class RuledLinesPainter extends CustomPainter {
     required this.marginOpacity,
     required this.lineStyle,
     required this.marginLineX,
+    this.devicePixelRatio = 1.0,
     this.lineColor = const Color(0x66607D8B),
     this.marginColor = const Color(0xCCFFCDD2),
   }) {
@@ -53,10 +54,17 @@ class RuledLinesPainter extends CustomPainter {
   /// [_firstVisibleIndex] valid.
   final List<double> lineBottoms;
 
-  /// The constant spacing continued below the last entry in
-  /// [lineBottoms], for the blank ruled space past wherever the
-  /// document's actual content ends.
+  /// The notebook's row pitch (`RuledRowMetrics.pitch`, already text-scaled).
+  ///
+  /// Continued below the last entry in [lineBottoms] for the blank ruled
+  /// space past the document's content, and used to draw the interior rules
+  /// of a line that spans several rows (a heading): each measured line
+  /// contributes one rule per whole pitch it is tall.
   final double fallbackLineHeight;
+
+  /// Physical pixels per logical pixel; rule positions are snapped to it so
+  /// un-antialiased 1px lines never land unevenly between rows.
+  final double devicePixelRatio;
 
   /// The top padding of the text area.
   final double topPadding;
@@ -115,9 +123,19 @@ class RuledLinesPainter extends CustomPainter {
     var index = _firstVisibleIndex(minBottom);
 
     while (index < lineBottoms.length) {
-      final y = topPadding + lineBottoms[index] - scrollOffset;
-      if (y > size.height + 1.0) return;
-      if (y >= topPadding) _drawOneLine(canvas, y, size.width);
+      final bottom = lineBottoms[index];
+      final top = index == 0 ? 0.0 : lineBottoms[index - 1];
+      final topY = topPadding + top - scrollOffset;
+      if (topY > size.height + 1.0) return;
+      // A measured line that is several pitches tall (a heading) still gets
+      // a rule at every pitch inside it, derived from the same measured
+      // geometry the text was laid out with.
+      final rows = math.max(1, ((bottom - top) / fallbackLineHeight).round());
+      for (var j = rows - 1; j >= 0; j--) {
+        final y = _snap(topPadding + bottom - j * fallbackLineHeight - scrollOffset);
+        if (y > size.height + 1.0) return;
+        if (y >= topPadding) _drawOneLine(canvas, y, size.width);
+      }
       index++;
     }
 
@@ -129,10 +147,15 @@ class RuledLinesPainter extends CustomPainter {
     // one, then continue at a constant interval from there.
     if (lineBottoms.isNotEmpty) y += fallbackLineHeight;
     while (y <= size.height + 1.0) {
-      if (y >= topPadding) _drawOneLine(canvas, y, size.width);
+      final snapped = _snap(y);
+      if (snapped >= topPadding) _drawOneLine(canvas, snapped, size.width);
       y += fallbackLineHeight;
     }
   }
+
+  double _snap(double y) => devicePixelRatio > 0
+      ? (y * devicePixelRatio).roundToDouble() / devicePixelRatio
+      : y;
 
   void _drawOneLine(Canvas canvas, double y, double width) {
     if (lineStyle == RuledLineStyle.dashed) {
@@ -168,6 +191,7 @@ class RuledLinesPainter extends CustomPainter {
   bool shouldRepaint(covariant RuledLinesPainter oldDelegate) =>
       !identical(oldDelegate.lineBottoms, lineBottoms) ||
       oldDelegate.fallbackLineHeight != fallbackLineHeight ||
+      oldDelegate.devicePixelRatio != devicePixelRatio ||
       oldDelegate.topPadding != topPadding ||
       oldDelegate.scrollOffset != scrollOffset ||
       oldDelegate.marginOpacity != marginOpacity ||

@@ -2,6 +2,7 @@ import '../models/attribute_type.dart';
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../models/text_attribute.dart';
+import '../utils/clamp_int.dart';
 import '../utils/list_prefix.dart';
 import 'editor_document.dart';
 import 'editor_selection.dart';
@@ -38,10 +39,29 @@ class EditingEngine {
   /// `position`, for when the cursor moves without a text change (the
   /// caret landing inside bold text should show "bold" as active). Call
   /// this from the controller on selection-only changes.
+  ///
+  /// Checks both `position` and `position - 1` so the caret landing at
+  /// the very end of a formatted span correctly picks up that
+  /// formatting for the next character typed.
   void syncStickyAttributesAt(int position) {
     _stickyAttributes.clear();
-    if (position < 0 || position >= document.length) return;
-    for (final attr in document.attributeStore.findAt(position)) {
+    final length = document.length;
+    if (length == 0) return;
+
+    final target = clampInt(position, 0, length);
+    // Prefer the attributes at the current position (middle of a span).
+    var attrs = document.attributeStore.findAt(target);
+
+    // If empty (end of a span or end of document), check one character back
+    // unless we're at a paragraph boundary.
+    if (attrs.isEmpty && target > 0) {
+      final text = document.text;
+      if (text.codeUnitAt(target - 1) != 0x0A) {
+        attrs = document.attributeStore.findAt(target - 1);
+      }
+    }
+
+    for (final attr in attrs) {
       _stickyAttributes[attr.type] = attr.value;
     }
   }
@@ -394,14 +414,16 @@ class EditingEngine {
   /// Pure query, no mutation. Answers "if a space were inserted right
   /// now at `spaceInsertPos`, would this be a markdown-style header
   /// shortcut (`'# '`/`'## '`/.../`'###### '`)?" — `null` if not.
-  /// `'#{1,6}'` collapses to `'h1'`/`'h2'` since this editor only models
-  /// two header levels.
+  /// `'#{1,6}'` collapses to `'h1'`/`'h2'`/`'h3'` since this editor only
+  /// models three header levels.
   String? autoFormatHeaderLevel(int spaceInsertPos) {
     final record = document.paragraphs.paragraphAt(spaceInsertPos);
     if (record == null) return null;
     final prefix = document.text.substring(record.start, spaceInsertPos);
     if (!RegExp(r'^#{1,6}$').hasMatch(prefix)) return null;
-    return prefix.length == 1 ? 'h1' : 'h2';
+    if (prefix.length == 1) return 'h1';
+    if (prefix.length == 2) return 'h2';
+    return 'h3';
   }
 
   /// Computes the replacement for a live Enter keypress at `selection`:

@@ -12,5 +12,8 @@ export 'src/widgets/find_replace_bar.dart';
 export 'src/widgets/lightweight_rich_editor.dart';
 export 'src/painters/ruled_lines_painter.dart';
 export 'src/rendering/render_theme.dart';
+export 'src/rendering/ruled_row_metrics.dart';
+export 'src/rendering/text_span_renderer.dart' show TextSpanRenderer;
 export 'src/rendering/editor_style.dart';
 export 'src/utils/string_utils.dart';
+export 'src/utils/list_prefix.dart';

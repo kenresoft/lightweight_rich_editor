@@ -11,8 +11,10 @@ RuledLinesPainter _painter({
   double marginOpacity = 1,
   RuledLineStyle lineStyle = RuledLineStyle.solid,
   double marginLineX = 44,
+  double devicePixelRatio = 1.0,
 }) {
   return RuledLinesPainter(
+    devicePixelRatio: devicePixelRatio,
     lineBottoms: lineBottoms,
     fallbackLineHeight: fallbackLineHeight,
     topPadding: topPadding,
@@ -21,6 +23,20 @@ RuledLinesPainter _painter({
     lineStyle: lineStyle,
     marginLineX: marginLineX,
   );
+}
+
+/// Records the y of every horizontal rule drawn (margin lines are vertical and
+/// ignored); every other Canvas call is a no-op.
+class _RecordingCanvas implements Canvas {
+  final List<double> lineYs = [];
+
+  @override
+  void drawLine(Offset p1, Offset p2, Paint paint) {
+    if (p1.dy == p2.dy) lineYs.add(p1.dy);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
 
 void main() {
@@ -108,6 +124,70 @@ void main() {
       final a = _painter(lineBottoms: shared, fallbackLineHeight: 24);
       final b = _painter(lineBottoms: shared, fallbackLineHeight: 30);
 
+      expect(b.shouldRepaint(a), isTrue);
+    });
+  });
+
+  group('RuledLinesPainter — multi-row lines and pixel snapping', () {
+    List<double> ruleYs(RuledLinesPainter painter, {double height = 200}) {
+      final canvas = _RecordingCanvas();
+      painter.paint(canvas, Size(400, height));
+      return canvas.lineYs;
+    }
+
+    test('a line that is several pitches tall gets a rule at every pitch inside it', () {
+      // Row 1 is one pitch; row 2 (a heading) is three pitches tall.
+      final ys = ruleYs(_painter(
+        lineBottoms: const [30, 120],
+        fallbackLineHeight: 30,
+        topPadding: 0,
+        marginOpacity: 0,
+      ));
+      expect(ys.take(5).toList(), [30, 60, 90, 120, 150]);
+    });
+
+    test('a one-pitch-per-line document draws exactly the measured bottoms', () {
+      final ys = ruleYs(_painter(
+        lineBottoms: const [24, 48, 72],
+        fallbackLineHeight: 24,
+        topPadding: 0,
+        marginOpacity: 0,
+      ), height: 72);
+      expect(ys, [24, 48, 72]);
+    });
+
+    test('interior rules of a partly scrolled heading still appear', () {
+      final ys = ruleYs(_painter(
+        lineBottoms: const [30, 120],
+        fallbackLineHeight: 30,
+        topPadding: 0,
+        scrollOffset: 65,
+        marginOpacity: 0,
+      ), height: 100);
+      // absolute rules 90, 120, 150 → 25, 55, 85 on screen (30/60 are above
+      // the viewport's top edge).
+      expect(ys.take(3).toList(), [25, 55, 85]);
+    });
+
+    test('rule y positions are snapped to the device pixel grid', () {
+      const dpr = 2.75;
+      final ys = ruleYs(_painter(
+        lineBottoms: const [30, 60, 90],
+        fallbackLineHeight: 30,
+        topPadding: 0,
+        marginOpacity: 0,
+        devicePixelRatio: dpr,
+      ), height: 100);
+      expect(ys, isNotEmpty);
+      for (final y in ys) {
+        expect((y * dpr) % 1.0, anyOf(closeTo(0, 1e-9), closeTo(1, 1e-9)));
+      }
+    });
+
+    test('shouldRepaint is true when devicePixelRatio differs', () {
+      final shared = <double>[24, 48];
+      final a = _painter(lineBottoms: shared);
+      final b = _painter(lineBottoms: shared, devicePixelRatio: 3.0);
       expect(b.shouldRepaint(a), isTrue);
     });
   });

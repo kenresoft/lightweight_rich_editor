@@ -59,10 +59,11 @@ class MarkdownImporter {
   }
 
   ({String? headerLevel, String rest}) _stripPrefix(String line) {
+    if (line.startsWith('### ')) return (headerLevel: 'h3', rest: line.substring(4));
     if (line.startsWith('## ')) return (headerLevel: 'h2', rest: line.substring(3));
     if (line.startsWith('# ')) return (headerLevel: 'h1', rest: line.substring(2));
-    final headerMatch = RegExp(r'^(#{3,6}) ').firstMatch(line);
-    if (headerMatch != null) return (headerLevel: 'h2', rest: line.substring(headerMatch.end));
+    final headerMatch = RegExp(r'^(#{4,6}) ').firstMatch(line);
+    if (headerMatch != null) return (headerLevel: 'h3', rest: line.substring(headerMatch.end));
 
     return (headerLevel: null, rest: line);
   }

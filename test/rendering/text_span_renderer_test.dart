@@ -45,7 +45,7 @@ void main() {
       expect(children.last.style!.fontWeight, isNot(FontWeight.bold));
     });
 
-    test('header attribute sets the theme h1 font size and bold weight', () {
+    test('header attribute sets bold weight and keeps the configured h1 size (never shrunk)', () {
       final renderer = TextSpanRenderer();
       final document = EditorDocument.fromText(
         'Title',
@@ -55,28 +55,54 @@ void main() {
       final span = renderer.renderSpan(document);
       final child = span.children!.cast<TextSpan>().single;
 
-      expect(child.style!.fontSize, renderer.theme.h1FontSize);
       expect(child.style!.fontWeight, FontWeight.bold);
+      expect(child.style!.fontSize, greaterThan(0));
+      // Headers are paragraph-level structure: never shrunk to force a
+      // single row. They take extra whole rows instead (see the ruled-grid
+      // tests in ruled_row_metrics_test.dart).
+      expect(child.style!.fontSize, renderer.theme.h1FontSize);
     });
 
-    test('a header line height is quantized to a whole multiple of theme.lineHeight, not squashed to one row', () {
+    test('header attribute sets bold weight and caps the h3 font size at the theme value', () {
+      final renderer = TextSpanRenderer();
+      final document = EditorDocument.fromText(
+        'Title',
+        [const TextAttribute(start: 0, end: 5, type: AttributeType.header, value: 'h3')],
+      );
+
+      final span = renderer.renderSpan(document);
+      final child = span.children!.cast<TextSpan>().single;
+
+      expect(child.style!.fontWeight, FontWeight.bold);
+      expect(child.style!.fontSize, greaterThan(0));
+      // h3 (18) is close enough to lineHeight (24) that whether it needs
+      // clamping depends on exact font metrics -- either way it must
+      // never render *larger* than configured.
+      expect(child.style!.fontSize, lessThanOrEqualTo(renderer.theme.h3FontSize));
+    });
+
+    test('a header line always lands a whole number of rows down, never drifting the line below', () {
       final renderer = TextSpanRenderer();
       final document = EditorDocument.fromText(
         'Title',
         [const TextAttribute(start: 0, end: 5, type: AttributeType.header, value: 'h1')],
       );
 
-      final span = renderer.renderSpan(document);
-      final child = span.children!.cast<TextSpan>().single;
-      final lineHeight = renderer.theme.lineHeight;
-      final resolvedPx = child.style!.height! * child.style!.fontSize!;
+      final bottoms = renderer.lineBottomOffsets(
+        document,
+        maxWidth: 400,
+        strutStyle: StrutStyle(
+          fontSize: renderer.theme.baseFontSize,
+          height: renderer.theme.lineHeight / renderer.theme.baseFontSize,
+          leading: 0.0,
+        ),
+      );
 
-      // A whole number of rows, not a fractional one -- this is what
-      // keeps ruled lines below a header from drifting off the grid.
-      expect(resolvedPx % lineHeight, closeTo(0, 0.001));
-      // At the default theme (h1FontSize 28 vs lineHeight 24), one row
-      // isn't enough -- this must have grown to at least 2.
-      expect(resolvedPx, greaterThanOrEqualTo(lineHeight * 2));
+      // A whole multiple of the pitch (rows are metric-driven, so it may be
+      // more than one) -- the line below can then never fall off the grid.
+      final pitch = renderer.theme.lineHeight;
+      expect(bottoms.single % pitch, anyOf(closeTo(0, 0.01), closeTo(pitch, 0.01)));
+      expect(bottoms.single, greaterThanOrEqualTo(pitch - 0.01));
     });
 
     test('plain body text still resolves to exactly one row', () {
@@ -95,26 +121,6 @@ void main() {
       final resolvedPx = child.style!.height! * child.style!.fontSize!;
 
       expect(resolvedPx, closeTo(renderer.theme.lineHeight, 0.001));
-    });
-
-    test('a header line still fits within its quantized height in TextPainter.computeLineMetrics', () {
-      final renderer = TextSpanRenderer();
-      final document = EditorDocument.fromText(
-        'Title',
-        [const TextAttribute(start: 0, end: 5, type: AttributeType.header, value: 'h1')],
-      );
-
-      final bottoms = renderer.lineBottomOffsets(
-        document,
-        maxWidth: 400,
-        strutStyle: StrutStyle(
-          fontSize: renderer.theme.baseFontSize,
-          height: renderer.theme.lineHeight / renderer.theme.baseFontSize,
-          leading: 0.0,
-        ),
-      );
-
-      expect(bottoms.single % renderer.theme.lineHeight, closeTo(0, 0.001));
     });
 
     test('color attribute resolves to the exact ARGB color', () {

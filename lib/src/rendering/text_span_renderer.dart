@@ -10,6 +10,7 @@ import '../utils/horizontal_rule.dart';
 import '../utils/list_prefix.dart';
 import 'document_renderer.dart';
 import 'render_theme.dart';
+import 'ruled_row_metrics.dart';
 
 // What kind of marker a `type == null` event represents — composing,
 // match-highlight, and selection-highlight events all use `type == null`
@@ -70,18 +71,58 @@ class _StyleEvent {
 /// call inputs, so re-rendering after a selection-only change is a
 /// cache hit.
 class TextSpanRenderer implements DocumentRenderer<TextSpan> {
-  /// Reassigning this (e.g. a dark-mode theme swap) clears the
-  /// quantized-line-height cache, which is keyed by font size/weight/
-  /// style alone and would otherwise reuse heights computed against the
-  /// old [RichTextRenderTheme.lineHeight].
+  /// Reassigning this (e.g. a dark-mode theme swap) drops every
+  /// [RuledRowMetrics] instance, whose pitch and fit measurements were all
+  /// taken against the old [RichTextRenderTheme.lineHeight]/`rowFill`.
   RichTextRenderTheme get theme => _theme;
   set theme(RichTextRenderTheme value) {
     if (_theme == value) return;
     _theme = value;
-    _quantizedLineHeightCache.clear();
+    _rowMetricsByFamily.clear();
+    activeRowMetrics = null;
   }
 
   RichTextRenderTheme _theme;
+
+  // One RuledRowMetrics per base font family for the current (theme,
+  // scaler, dpr) — the real TextField's merged style and the editor's own
+  // measurement style can differ in family, and both hit this on every
+  // frame, so a single slot would thrash. Cleared whenever any of the
+  // shared inputs changes, so stale measurements can never outlive them.
+  final Map<String?, RuledRowMetrics> _rowMetricsByFamily = {};
+  TextScaler? _rowMetricsScaler;
+  double? _rowMetricsDpr;
+
+  /// The row grid for the given effective scaler / pixel ratio / base style.
+  ///
+  /// The one place row geometry is decided: [renderSpan] (span heights),
+  /// `RichTextEditor` (strut, fallback rule spacing, painter) and the
+  /// toolbar's font-size limits all read it from here, so they cannot
+  /// disagree about the pitch or which sizes fit.
+  RuledRowMetrics rowMetrics({
+    TextScaler textScaler = TextScaler.noScaling,
+    double devicePixelRatio = 1.0,
+    TextStyle? style,
+  }) {
+    if (_rowMetricsScaler != textScaler ||
+        _rowMetricsDpr != devicePixelRatio) {
+      _rowMetricsByFamily.clear();
+      _rowMetricsScaler = textScaler;
+      _rowMetricsDpr = devicePixelRatio;
+    }
+    final family = style?.fontFamily;
+    return _rowMetricsByFamily[family] ??= RuledRowMetrics(
+      theme: theme,
+      textScaler: textScaler,
+      devicePixelRatio: devicePixelRatio,
+      baseFontFamily: family,
+    );
+  }
+
+  /// The metrics of the most recent *real* render (recorded by the
+  /// controller's `buildTextSpan`), which is what a toolbar should quote
+  /// font-size limits from. `null` before the first build.
+  RuledRowMetrics? activeRowMetrics;
 
   /// Called when the user taps a link span, with the link's URL.
   void Function(String url)? onTapLink;
@@ -116,6 +157,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   List<TextRange>? _cachedAllMatches;
   RichTextRenderTheme? _cachedTheme;
   bool? _cachedInteractiveLinks;
+  TextScaler? _cachedTextScaler;
+  double? _cachedDevicePixelRatio;
 
   // GestureRecognizers must be explicitly disposed — every rebuild
   // disposes the previous batch before creating a new one, and dispose()
@@ -152,6 +195,15 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     TextRange? matchHighlightRange,
     TextRange? selectionHighlightRange,
     List<TextRange>? allMatchesRanges,
+    // Must match whatever the real `TextField` will apply (its own
+    // ambient `MediaQuery.textScalerOf(context)`) -- header/oversized-run
+    // clamping (see `_clampedFontSize`) measures glyphs at the *scaled*
+    // size, so a mismatched scaler here would fit against the wrong
+    // target and let real (scaled) glyphs overflow their row again.
+    TextScaler textScaler = TextScaler.noScaling,
+    // Rows are snapped to whole physical pixels, so this must match the
+    // real view's ratio as well.
+    double devicePixelRatio = 1.0,
   }) {
     final text = document.text;
     final revision = document.attributeStore.revision;
@@ -167,7 +219,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         _cachedSelectionHighlight == selectionHighlightRange &&
         identical(_cachedAllMatches, allMatchesRanges) &&
         _cachedTheme == theme &&
-        _cachedInteractiveLinks == interactiveLinks) {
+        _cachedInteractiveLinks == interactiveLinks &&
+        _cachedTextScaler == textScaler &&
+        _cachedDevicePixelRatio == devicePixelRatio) {
       return _cachedSpan!;
     }
 
@@ -178,6 +232,11 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       matchHighlightRange,
       selectionHighlightRange,
       allMatchesRanges,
+      rowMetrics(
+        textScaler: textScaler,
+        devicePixelRatio: devicePixelRatio,
+        style: style,
+      ),
     );
 
     _cachedSpan = span;
@@ -191,6 +250,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedAllMatches = allMatchesRanges;
     _cachedTheme = theme;
     _cachedInteractiveLinks = interactiveLinks;
+    _cachedTextScaler = textScaler;
+    _cachedDevicePixelRatio = devicePixelRatio;
     return span;
   }
 
@@ -207,6 +268,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   TextStyle? _cachedLineBottomsBaseStyle;
   TextHeightBehavior? _cachedLineBottomsHeightBehavior;
   TextDirection? _cachedLineBottomsDirection;
+  TextScaler? _cachedLineBottomsTextScaler;
+  double? _cachedLineBottomsDpr;
+  RichTextRenderTheme? _cachedLineBottomsTheme;
 
   /// The bottom Y offset (document/unscrolled space) of every actually
   /// *rendered* line, accounting for wrapping and any per-paragraph
@@ -229,6 +293,11 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     required StrutStyle strutStyle,
     TextHeightBehavior? textHeightBehavior,
     TextDirection textDirection = TextDirection.ltr,
+    // Same requirement as `renderSpan`'s: must match the real `TextField`'s
+    // ambient scaler, or this measurement disagrees with what actually
+    // renders.
+    TextScaler textScaler = TextScaler.noScaling,
+    double devicePixelRatio = 1.0,
   }) {
     final text = document.text;
     final revision = document.attributeStore.revision;
@@ -242,17 +311,26 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         _cachedLineBottomsStrut == strutStyle &&
         _cachedLineBottomsBaseStyle == style &&
         _cachedLineBottomsHeightBehavior == textHeightBehavior &&
-        _cachedLineBottomsDirection == textDirection) {
+        _cachedLineBottomsDirection == textDirection &&
+        _cachedLineBottomsTextScaler == textScaler &&
+        _cachedLineBottomsDpr == devicePixelRatio &&
+        _cachedLineBottomsTheme == theme) {
       return _cachedLineBottoms!;
     }
 
-    final span = renderSpan(document, style: style);
+    final span = renderSpan(
+      document,
+      style: style,
+      textScaler: textScaler,
+      devicePixelRatio: devicePixelRatio,
+    );
     final painter = TextPainter(
       text: span,
       strutStyle: strutStyle,
       textDirection: textDirection,
       textWidthBasis: TextWidthBasis.parent,
       textHeightBehavior: textHeightBehavior,
+      textScaler: textScaler,
     )..layout(maxWidth: maxWidth <= 0 ? double.infinity : maxWidth);
 
     final bottoms = <double>[];
@@ -271,6 +349,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedLineBottomsBaseStyle = style;
     _cachedLineBottomsHeightBehavior = textHeightBehavior;
     _cachedLineBottomsDirection = textDirection;
+    _cachedLineBottomsTextScaler = textScaler;
+    _cachedLineBottomsDpr = devicePixelRatio;
+    _cachedLineBottomsTheme = theme;
     return bottoms;
   }
 
@@ -290,14 +371,22 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     required StrutStyle strutStyle,
     TextHeightBehavior? textHeightBehavior,
     TextDirection textDirection = TextDirection.ltr,
+    TextScaler textScaler = TextScaler.noScaling,
+    double devicePixelRatio = 1.0,
   }) {
-    final span = renderSpan(document, style: style);
+    final span = renderSpan(
+      document,
+      style: style,
+      textScaler: textScaler,
+      devicePixelRatio: devicePixelRatio,
+    );
     final painter = TextPainter(
       text: span,
       strutStyle: strutStyle,
       textDirection: textDirection,
       textWidthBasis: TextWidthBasis.parent,
       textHeightBehavior: textHeightBehavior,
+      textScaler: textScaler,
     )..layout(maxWidth: maxWidth <= 0 ? double.infinity : maxWidth);
 
     final clamped = clampInt(charOffset, 0, document.text.length);
@@ -341,6 +430,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     TextRange? matchHighlightRange,
     TextRange? selectionHighlightRange,
     List<TextRange>? allMatchesRanges,
+    RuledRowMetrics metrics,
   ) {
     _disposeRecognizers();
 
@@ -391,7 +481,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
     return TextSpan(
       style: style,
-      children: _buildChildren(document, events, style),
+      children: _buildChildren(document, events, style, metrics),
     );
   }
 
@@ -587,6 +677,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     EditorDocument document,
     List<_StyleEvent> events,
     TextStyle? baseStyle,
+    RuledRowMetrics metrics,
   ) {
     final text = document.text;
     final children = <TextSpan>[];
@@ -662,6 +753,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           activeMatchHighlight > 0,
           activeSelectionHighlight > 0,
           activeAllMatchesHighlight > 0,
+          metrics,
         );
 
         // A horizontal-rule line is entirely marker — the whole run of
@@ -727,69 +819,6 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     return children;
   }
 
-  // Keyed by '$fontSize|${fontWeight.value}|$isItalic'.
-  final Map<String, double> _quantizedLineHeightCache = {};
-
-  /// The line-box height to target for text at `fontSize`/`fontWeight`/
-  /// `isItalic`, rounded *up* to the nearest whole multiple of
-  /// [RichTextRenderTheme.lineHeight] rather than forced to exactly one
-  /// line. A header's font is often intrinsically taller than one row;
-  /// rounding up to a whole number of rows keeps every ruled line still
-  /// landing on a multiple of `theme.lineHeight`, while giving the
-  /// header's glyphs a box tall enough for them (centered within it via
-  /// [TextLeadingDistribution.even] — see where this is consumed in
-  /// `RichTextEditor` and [lineBottomOffsets], which need the same
-  /// leading distribution).
-  double _quantizedLineHeight(
-    double fontSize,
-    FontWeight fontWeight,
-    bool isItalic,
-  ) {
-    final key = '$fontSize|${fontWeight.value}|$isItalic';
-    final cached = _quantizedLineHeightCache[key];
-    if (cached != null) return cached;
-
-    // theme.lineHeight is the fallback for anything that doesn't come
-    // back as a real, finite, positive measurement — this runs on every
-    // styled segment of every render, so a bad result here can't be
-    // allowed to take the whole document's layout down with it.
-    final result = _measureQuantizedLineHeight(fontSize, fontWeight, isItalic) ?? theme.lineHeight;
-    _quantizedLineHeightCache[key] = result;
-    return result;
-  }
-
-  double? _measureQuantizedLineHeight(
-    double fontSize,
-    FontWeight fontWeight,
-    bool isItalic,
-  ) {
-    try {
-      final probe = TextPainter(
-        text: TextSpan(
-          text: 'Ág', // tall ascender + descender, a representative worst case
-          style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: fontWeight,
-            fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      final metrics = probe.computeLineMetrics();
-      if (metrics.length != 1) return null;
-
-      final natural = metrics.single.height;
-      if (!natural.isFinite || natural <= 0) return null;
-      if (!theme.lineHeight.isFinite || theme.lineHeight <= 0) return null;
-
-      final rows = (natural / theme.lineHeight).ceil().clamp(1, 1000);
-      final result = rows * theme.lineHeight;
-      return result.isFinite ? result : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
   TextStyle _resolveStyle(
     TextStyle? baseStyle,
     Map<AttributeType, List<Object?>> active,
@@ -798,6 +827,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     bool isCurrentMatch,
     bool isSelectionHighlight,
     bool isOtherMatch,
+    RuledRowMetrics metrics,
   ) {
     bool isActive(AttributeType type) => active[type]!.isNotEmpty;
     Object? topValue(AttributeType type) {
@@ -820,9 +850,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     } else if (headerLevel == 'h2') {
       fontSize = theme.h2FontSize;
       fontWeight = FontWeight.bold;
+    } else if (headerLevel == 'h3') {
+      fontSize = theme.h3FontSize;
+      fontWeight = FontWeight.bold;
     } else if (sizeValue != null) {
       fontSize = sizeValue.toDouble();
     }
+    final isHeader = headerLevel == 'h1' || headerLevel == 'h2' || headerLevel == 'h3';
 
     final decorations = <TextDecoration>[
       if (isActive(AttributeType.underline) || isComposing || linkUrl != null)
@@ -833,10 +867,33 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final isCode = isActive(AttributeType.code);
     final isItalic = isActive(AttributeType.italic);
 
+    // Row policy (see RuledRowMetrics): a paragraph header is never shrunk —
+    // it takes the minimum whole number of rows its measured glyph height
+    // needs, and its line box is exactly that many pitches. Inline text is
+    // fitted to one row instead, so no inline span can grow a row.
+    final double resolvedFontSize;
+    final int rows;
+    if (isHeader) {
+      resolvedFontSize = fontSize;
+      rows = metrics.rowsForParagraph(fontSize, fontWeight);
+    } else {
+      resolvedFontSize = metrics.fitInlineFontSize(
+        fontSize,
+        fontWeight,
+        isItalic,
+        family: isCode ? theme.codeFontFamily : baseStyle?.fontFamily,
+      );
+      rows = 1;
+    }
+
     return (baseStyle ?? const TextStyle()).copyWith(
-      fontSize: fontSize,
+      fontSize: resolvedFontSize,
       fontWeight: fontWeight,
-      height: _quantizedLineHeight(fontSize, fontWeight, isItalic) / fontSize,
+      height: metrics.heightMultiplier(resolvedFontSize, rows: rows),
+      // Spare leading goes above the glyphs, so the baseline keeps one
+      // constant distance from the rule at every size (measured: even
+      // distribution drifts by several px across sizes).
+      leadingDistribution: TextLeadingDistribution.proportional,
       fontStyle: isItalic
           ? FontStyle.italic
           : (baseStyle?.fontStyle ?? FontStyle.normal),

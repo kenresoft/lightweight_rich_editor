@@ -19,7 +19,7 @@ import 'package:flutter/material.dart';
 class ToolButton extends StatefulWidget {
   final IconData icon;
   final bool isActive;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final String tooltip;
 
   const ToolButton({
@@ -48,7 +48,13 @@ class _ToolButtonState extends State<ToolButton> {
     return IconButton(
       focusNode: _focusNode,
       tooltip: widget.tooltip,
-      icon: Icon(widget.icon, size: 20, color: widget.isActive ? Colors.blue : Colors.black87),
+      icon: Icon(
+        widget.icon,
+        size: 20,
+        color: widget.onPressed == null
+            ? Colors.black26
+            : (widget.isActive ? Colors.blue : Colors.black87),
+      ),
       onPressed: widget.onPressed,
     );
   }

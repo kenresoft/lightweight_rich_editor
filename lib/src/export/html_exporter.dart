@@ -123,7 +123,7 @@ class HtmlExporter {
       case AttributeType.link:
         return isOpen ? '<a href="$value">' : '</a>';
       case AttributeType.header:
-        final tag = value == 'h1' ? 'h1' : 'h2';
+        final tag = value == 'h1' ? 'h1' : (value == 'h2' ? 'h2' : 'h3');
         return isOpen ? '<$tag>' : '</$tag>';
       case AttributeType.align:
         // value is ParagraphAlignment.name ('left'/'center'/'right').

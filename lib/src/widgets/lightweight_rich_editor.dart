@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../controller/rich_editor_controller.dart';
 import '../models/text_attribute.dart';
@@ -86,6 +87,15 @@ class LightweightRichEditor extends StatefulWidget {
   /// Forwarded to [RichTextEditor.contextMenuBuilder].
   final EditableTextContextMenuBuilder? contextMenuBuilder;
 
+  /// Forwarded to [RichTextEditor.inputFormatters].
+  final List<TextInputFormatter>? inputFormatters;
+
+  /// Forwarded to [RichTextEditor.autofocus].
+  final bool autofocus;
+
+  /// Forwarded to [RichTextEditor.placeholder].
+  final String? placeholder;
+
   const LightweightRichEditor({
     super.key,
     this.controller,
@@ -101,6 +111,9 @@ class LightweightRichEditor extends StatefulWidget {
     this.textDirection,
     this.confirmBeforeOpeningLinks = true,
     this.contextMenuBuilder,
+    this.inputFormatters,
+    this.autofocus = true,
+    this.placeholder,
   });
 
   @override
@@ -187,6 +200,9 @@ class LightweightRichEditorState extends State<LightweightRichEditor> {
             textDirection: widget.textDirection,
             confirmBeforeOpeningLinks: widget.confirmBeforeOpeningLinks,
             contextMenuBuilder: widget.contextMenuBuilder,
+            inputFormatters: widget.inputFormatters,
+            autofocus: widget.autofocus,
+            placeholder: widget.placeholder,
           ),
         ),
       ],

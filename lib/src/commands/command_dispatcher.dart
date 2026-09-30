@@ -148,7 +148,7 @@ class CommandDispatcher {
 
   void setLink(EditorSelection selection, String? url) => apply(AttributeType.link, selection, url);
 
-  /// `level` is e.g. `'h1'`/`'h2'`; `null` clears the header. Applies to
+  /// `level` is e.g. `'h1'`/`'h2'`/`'h3'`; `null` clears the header. Applies to
   /// the whole paragraph containing `selection`.
   void setHeader(EditorSelection selection, String? level) {
     dispatch(SetHeaderLevelCommand(selection, level));

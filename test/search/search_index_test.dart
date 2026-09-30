@@ -98,6 +98,27 @@ void main() {
       expect(h.search.next(), isNull);
       expect(h.search.previous(), isNull);
     });
+
+    test('selectMatch(index) jumps directly to that match', () {
+      final h = _harness('a-a-a');
+      h.search.search('a');
+      expect(h.search.matchCount, 3);
+
+      expect(h.search.selectMatch(2)!.start, 4);
+      expect(h.search.currentIndex, 2);
+      expect(h.search.selectMatch(0)!.start, 0);
+      expect(h.search.currentIndex, 0);
+    });
+
+    test('selectMatch(index) is a no-op for an out-of-range index', () {
+      final h = _harness('a-a-a');
+      h.search.search('a');
+      h.search.selectMatch(1);
+
+      expect(h.search.selectMatch(-1), isNull);
+      expect(h.search.selectMatch(99), isNull);
+      expect(h.search.currentIndex, 1); // unchanged
+    });
   });
 
   group('SearchIndex.replaceCurrent', () {

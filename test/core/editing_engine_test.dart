@@ -554,10 +554,15 @@ void main() {
       expect(engine.autoFormatHeaderLevel(1), 'h1');
     });
 
-    test('two through six #s collapse to h2, matching MarkdownImporter', () {
-      for (final hashes in ['##', '###', '####', '#####', '######']) {
+    test('two #s is h2', () {
+      final engine = _engineFor('##');
+      expect(engine.autoFormatHeaderLevel(2), 'h2');
+    });
+
+    test('three through six #s collapse to h3, matching MarkdownImporter', () {
+      for (final hashes in ['###', '####', '#####', '######']) {
         final engine = _engineFor(hashes);
-        expect(engine.autoFormatHeaderLevel(hashes.length), 'h2', reason: hashes);
+        expect(engine.autoFormatHeaderLevel(hashes.length), 'h3', reason: hashes);
       }
     });
 

@@ -29,7 +29,7 @@ class TextAttribute {
   /// The attribute's payload. `null` for toggle attributes
   /// ([AttributeType.isToggle]); for value attributes this is an ARGB
   /// `int` (color), a `num` (size), a `String` (link, or header level
-  /// like `'h1'`/`'h2'`).
+  /// like `'h1'`/`'h2'`/`'h3'`).
   final Object? value;
 
   const TextAttribute({

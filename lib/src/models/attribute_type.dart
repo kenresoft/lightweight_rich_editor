@@ -15,7 +15,8 @@
 ///
 /// [header] is a different situation: it's **kept in this enum
 /// deliberately, and permanently** — not as a migration artifact waiting
-/// on one more file. Header formatting is owned by `ParagraphIndex`
+/// on one more file. Header levels are `'h1'`/`'h2'`/`'h3'`. Header
+/// formatting is owned by `ParagraphIndex`
 /// everywhere it's *live*: editing (`EditingEngine.setHeaderLevel`,
 /// `SetHeaderLevelCommand`), rendering (`TextSpanRenderer`), undo, and
 /// toolbar state all read/write `ParagraphIndex.headerLevel` and never

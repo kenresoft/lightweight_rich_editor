@@ -417,6 +417,7 @@ class _HeaderMenu extends StatelessWidget {
   static String _labelFor(String? level) => switch (level) {
     'h1' => 'H1',
     'h2' => 'H2',
+    'h3' => 'H3',
     _ => '¶',
   };
 
@@ -485,6 +486,12 @@ class _HeaderMenu extends StatelessWidget {
           label: 'Heading 2',
           isActive: activeLevel == 'h2',
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        _HeaderMenuItem(
+          value: 'h3',
+          label: 'Heading 3',
+          isActive: activeLevel == 'h3',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
       ],
     );
@@ -606,9 +613,9 @@ class _FontSizeControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final size =
-        (controller.activeAttributeValue(AttributeType.size) as num?) ??
-        controller.renderer.theme.baseFontSize;
+    // The *rendered* size (fitted to the grid), not the raw stored
+    // attribute, so the number never claims more than what's on screen.
+    final size = controller.effectiveFontSize;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -617,7 +624,9 @@ class _FontSizeControl extends StatelessWidget {
           icon: Icons.text_decrease,
           isActive: false,
           tooltip: 'Decrease Font Size',
-          onPressed: () {
+          onPressed: !controller.canDecreaseFontSize
+              ? null
+              : () {
             controller.decreaseFontSize();
             _reclaimEditorFocus(controller);
           },
@@ -636,7 +645,9 @@ class _FontSizeControl extends StatelessWidget {
           icon: Icons.text_increase,
           isActive: false,
           tooltip: 'Increase Font Size',
-          onPressed: () {
+          onPressed: !controller.canIncreaseFontSize
+              ? null
+              : () {
             controller.increaseFontSize();
             _reclaimEditorFocus(controller);
           },

@@ -267,11 +267,12 @@ class HtmlImporter {
       case 'h1':
         return const _StyleFrame(AttributeType.header, 'h1');
       case 'h2':
+        return const _StyleFrame(AttributeType.header, 'h2');
       case 'h3':
       case 'h4':
       case 'h5':
       case 'h6':
-        return const _StyleFrame(AttributeType.header, 'h2');
+        return const _StyleFrame(AttributeType.header, 'h3');
       default:
         return null;
     }

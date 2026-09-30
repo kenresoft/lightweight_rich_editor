@@ -12,7 +12,7 @@ class ParagraphRecord {
   /// last paragraph in the document.
   final int end;
 
-  /// `'h1'` | `'h2'` | `null`.
+  /// `'h1'` | `'h2'` | `'h3'` | `null`.
   final String? headerLevel;
 
   /// `null` (default/left) | `center` | `right`. Stored and

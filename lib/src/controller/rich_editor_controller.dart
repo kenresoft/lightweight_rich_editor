@@ -21,6 +21,7 @@ import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../models/text_attribute.dart';
 import '../rendering/render_theme.dart';
+import '../rendering/ruled_row_metrics.dart';
 import '../rendering/text_span_renderer.dart';
 import '../search/search_index.dart';
 import '../utils/clamp_int.dart';
@@ -54,6 +55,12 @@ class RichEditorController extends TextEditingController {
 
   final FocusNode focusNode;
   final bool _ownsFocusNode;
+
+  /// A listenable that only triggers when the document's text or
+  /// formatting has changed, ignoring pure selection/caret movements.
+  /// Useful for expensive re-layouts (like ruled lines) that don't
+  /// depend on selection.
+  late final ChangeNotifier documentMutationNotifier;
 
   /// Whether the host supplied its own `onTapLink` to this constructor,
   /// as opposed to relying on the default ([launchLinkUrl]). Read by
@@ -94,6 +101,7 @@ class RichEditorController extends TextEditingController {
        focusNode = focusNode ?? FocusNode(),
        _ownsFocusNode = focusNode == null,
        super(text: text) {
+    documentMutationNotifier = ChangeNotifier();
     transactions = TransactionManager(_handleCommit);
     engine = EditingEngine(document: document, transactions: transactions);
     history = HistoryManager(
@@ -127,6 +135,7 @@ class RichEditorController extends TextEditingController {
   void dispose() {
     focusNode.removeListener(_handleFocusChange);
     if (_ownsFocusNode) focusNode.dispose();
+    documentMutationNotifier.dispose();
     renderer.dispose();
     super.dispose();
   }
@@ -465,6 +474,11 @@ class RichEditorController extends TextEditingController {
         composing: newText == value.text ? value.composing : TextRange.empty,
       ),
     );
+    // ignore: invalid_use_of_protected_member
+    if (documentMutationNotifier.hasListeners) {
+      // ignore: invalid_use_of_visible_for_testing_member
+      documentMutationNotifier.notifyListeners();
+    }
   }
 
   void _syncSelection(EditorSelection result) {
@@ -680,18 +694,74 @@ class RichEditorController extends TextEditingController {
   void setColor(int? argb) => commands.setColor(_currentSelection, argb);
   void setSize(num? size) => commands.setSize(_currentSelection, size);
 
+  /// Smallest inline font size the toolbar offers.
+  static const double minInlineFontSize = 8.0;
+  static const double _fontSizeStep = 2.0;
+
+  RuledRowMetrics get _rowMetrics =>
+      renderer.activeRowMetrics ?? renderer.rowMetrics();
+
+  bool get _isHeaderActive => activeAttributeValue(AttributeType.header) != null;
+
+  /// The largest inline size that actually fits one ruled row at the current
+  /// effective text scale — the ceiling the toolbar exposes. Inline sizes
+  /// above it render fitted to it, so offering more would be a lie.
+  double get maxInlineFontSize => _rowMetrics.maxInlineFontSize(
+    weight: isAttributeActive(AttributeType.bold)
+        ? FontWeight.bold
+        : FontWeight.normal,
+    italic: isAttributeActive(AttributeType.italic),
+    family: isAttributeActive(AttributeType.code)
+        ? renderer.theme.codeFontFamily
+        : null,
+  );
+
+  /// The font size actually *rendered* at the selection (what the toolbar
+  /// should display): the stored `size` attribute (or base size) fitted to
+  /// the grid, or the header's own size inside a header paragraph. A stored
+  /// size larger than the grid allows — e.g. from an import — is preserved in
+  /// the document but reported here at its rendered size.
+  double get effectiveFontSize {
+    final theme = renderer.theme;
+    switch (activeAttributeValue(AttributeType.header)) {
+      case 'h1':
+        return theme.h1FontSize;
+      case 'h2':
+        return theme.h2FontSize;
+      case 'h3':
+        return theme.h3FontSize;
+    }
+    final stored =
+        (activeAttributeValue(AttributeType.size) as num?)?.toDouble() ??
+        theme.baseFontSize;
+    final max = maxInlineFontSize;
+    return stored < max ? stored : max;
+  }
+
+  /// Whether an inline size can be changed here: never inside a header
+  /// paragraph, whose size is structural (and which ignores inline sizes).
+  bool get canChangeFontSize => !_isHeaderActive;
+  bool get canIncreaseFontSize =>
+      canChangeFontSize && effectiveFontSize + 0.5 < maxInlineFontSize;
+  bool get canDecreaseFontSize =>
+      canChangeFontSize && effectiveFontSize - 0.5 > minInlineFontSize;
+
   void increaseFontSize() {
-    final current =
-        activeAttributeValue(AttributeType.size) as num? ??
-        renderer.theme.baseFontSize;
-    setSize((current.toDouble() + 2.0).clamp(8.0, 72.0));
+    if (!canIncreaseFontSize) return;
+    final next = (effectiveFontSize + _fontSizeStep).clamp(
+      minInlineFontSize,
+      maxInlineFontSize,
+    );
+    setSize(next);
   }
 
   void decreaseFontSize() {
-    final current =
-        activeAttributeValue(AttributeType.size) as num? ??
-        renderer.theme.baseFontSize;
-    setSize((current.toDouble() - 2.0).clamp(8.0, 72.0));
+    if (!canDecreaseFontSize) return;
+    final next = (effectiveFontSize - _fontSizeStep).clamp(
+      minInlineFontSize,
+      maxInlineFontSize,
+    );
+    setSize(next);
   }
 
   void setLink(String? url) => commands.setLink(_currentSelection, url);
@@ -875,6 +945,11 @@ class RichEditorController extends TextEditingController {
         selection: const TextSelection.collapsed(offset: 0),
       ),
     );
+    // ignore: invalid_use_of_protected_member
+    if (documentMutationNotifier.hasListeners) {
+      // ignore: invalid_use_of_visible_for_testing_member
+      documentMutationNotifier.notifyListeners();
+    }
   }
 
   Map<String, dynamic> toJson() => document.toJson();
@@ -903,6 +978,13 @@ class RichEditorController extends TextEditingController {
   /// Selects the previous match, wrapping around. No-op if there are none.
   void findPrevious() {
     search.previous();
+    _selectCurrentMatch();
+  }
+
+  /// Jumps directly to the match at `index` into [search]'s `matches`. No-op
+  /// if `index` is out of range. See [SearchIndex.selectMatch].
+  void findAt(int index) {
+    search.selectMatch(index);
     _selectCurrentMatch();
   }
 
@@ -979,6 +1061,15 @@ class RichEditorController extends TextEditingController {
     required bool withComposing,
   }) {
     final match = search.currentMatch;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    // The row grid of the *real* render (merged TextField style), so the
+    // toolbar's font-size limits always describe what is on screen.
+    renderer.activeRowMetrics = renderer.rowMetrics(
+      textScaler: textScaler,
+      devicePixelRatio: devicePixelRatio,
+      style: style,
+    );
     final span = renderer.renderSpan(
       document,
       style: style,
@@ -988,6 +1079,12 @@ class RichEditorController extends TextEditingController {
           : null,
       selectionHighlightRange: _selectionHighlight,
       allMatchesRanges: _currentAllMatchesRanges,
+      // Must match the scaler `RichTextEditor` measures ruled lines
+      // against (its own `MediaQuery.textScalerOf(context)`) — this is
+      // the same ambient value, read from the context RenderEditable
+      // hands buildTextSpan.
+      textScaler: textScaler,
+      devicePixelRatio: devicePixelRatio,
     );
     assert(() {
       final renderedLength = span.toPlainText().length;

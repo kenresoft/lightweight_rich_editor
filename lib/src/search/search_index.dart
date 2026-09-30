@@ -107,6 +107,17 @@ class SearchIndex {
     return currentMatch;
   }
 
+  /// Jumps directly to `index` into [matches] — for a host that lets
+  /// users tap/scrub straight to a specific result (e.g. a position
+  /// indicator) instead of stepping one at a time via [next]/[previous].
+  /// No-op (returns `null`) if `index` is out of range or there are no
+  /// matches.
+  SearchMatch? selectMatch(int index) {
+    if (index < 0 || index >= _matches.length) return null;
+    _currentIndex = index;
+    return currentMatch;
+  }
+
   /// Replaces [currentMatch] with `replacement`, as one undoable edit,
   /// then [refresh]es (resetting [currentIndex] to the first remaining
   /// match). Returns the resulting caret selection, or `null` if there's

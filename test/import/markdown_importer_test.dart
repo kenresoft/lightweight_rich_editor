@@ -97,10 +97,16 @@ void main() {
       expect(result.attributes.single.value, 'h2');
     });
 
-    test('###+ collapses to h2', () {
+    test('### becomes h3', () {
+      final result = _importer.parse('### Section');
+      expect(result.text, 'Section');
+      expect(result.attributes.single.value, 'h3');
+    });
+
+    test('####+ collapses to h3', () {
       final result = _importer.parse('#### Deep heading');
       expect(result.text, 'Deep heading');
-      expect(result.attributes.single.value, 'h2');
+      expect(result.attributes.single.value, 'h3');
     });
 
     test('header only applies to its own line', () {

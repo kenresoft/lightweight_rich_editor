@@ -12,6 +12,14 @@ import 'package:flutter/material.dart';
 class RichTextRenderTheme {
   final double baseFontSize;
 
+  /// Color for plain, unattributed text — the base every other color
+  /// resolution (an explicit [AttributeType.color] span, a link) falls
+  /// back to. Also the base for the ruled-editor's TextField `style`
+  /// itself, so it's the one color a host must theme to support e.g.
+  /// dark mode; every other themed color (link, highlight, code
+  /// background) already lives here too.
+  final Color textColor;
+
   /// Target line height in logical pixels. Converted to Flutter's
   /// height-multiplier convention (`height = lineHeight / fontSize`) per
   /// segment, so line spacing stays visually constant across mixed font
@@ -19,8 +27,22 @@ class RichTextRenderTheme {
   /// original controller used.
   final double lineHeight;
 
+  /// Fraction of one ruled row that a glyph run's natural height may occupy
+  /// before it no longer counts as fitting. Inline spans above it are shrunk
+  /// to fit one row; headers above it take additional whole rows. Leaves the
+  /// rest of the row as clearance around the glyphs.
+  final double rowFill;
+
+  /// Like [rowFill], but for paragraph headers. Higher by default: a heading
+  /// only sits on its ruled line when it fits a single row (a multi-row line
+  /// box cannot push its glyphs down to the bottom rule — the baseline lands
+  /// a fixed fraction of the *whole* box above it), so headers may use almost
+  /// the entire row before they are given a second one.
+  final double headerRowFill;
+
   final double h1FontSize;
   final double h2FontSize;
+  final double h3FontSize;
 
   final Color highlightColor;
   final Color codeBackgroundColor;
@@ -44,9 +66,13 @@ class RichTextRenderTheme {
 
   const RichTextRenderTheme({
     this.baseFontSize = 16.0,
+    this.textColor = const Color(0xFF000000),
     this.lineHeight = 24.0,
+    this.rowFill = 0.9,
+    this.headerRowFill = 0.98,
     this.h1FontSize = 28.0,
     this.h2FontSize = 22.0,
+    this.h3FontSize = 18.0,
     this.highlightColor = const Color(0x66FFEB3B),
     this.codeBackgroundColor = const Color(0x1F000000),
     this.linkColor = const Color(0xFF1A73E8),
@@ -60,9 +86,13 @@ class RichTextRenderTheme {
 
   RichTextRenderTheme copyWith({
     double? baseFontSize,
+    Color? textColor,
     double? lineHeight,
+    double? rowFill,
+    double? headerRowFill,
     double? h1FontSize,
     double? h2FontSize,
+    double? h3FontSize,
     Color? highlightColor,
     Color? codeBackgroundColor,
     Color? linkColor,
@@ -73,9 +103,13 @@ class RichTextRenderTheme {
   }) {
     return RichTextRenderTheme(
       baseFontSize: baseFontSize ?? this.baseFontSize,
+      textColor: textColor ?? this.textColor,
       lineHeight: lineHeight ?? this.lineHeight,
+      rowFill: rowFill ?? this.rowFill,
+      headerRowFill: headerRowFill ?? this.headerRowFill,
       h1FontSize: h1FontSize ?? this.h1FontSize,
       h2FontSize: h2FontSize ?? this.h2FontSize,
+      h3FontSize: h3FontSize ?? this.h3FontSize,
       highlightColor: highlightColor ?? this.highlightColor,
       codeBackgroundColor: codeBackgroundColor ?? this.codeBackgroundColor,
       linkColor: linkColor ?? this.linkColor,
@@ -91,9 +125,13 @@ class RichTextRenderTheme {
     if (identical(this, other)) return true;
     return other is RichTextRenderTheme &&
         other.baseFontSize == baseFontSize &&
+        other.textColor == textColor &&
         other.lineHeight == lineHeight &&
+        other.rowFill == rowFill &&
+        other.headerRowFill == headerRowFill &&
         other.h1FontSize == h1FontSize &&
         other.h2FontSize == h2FontSize &&
+        other.h3FontSize == h3FontSize &&
         other.highlightColor == highlightColor &&
         other.codeBackgroundColor == codeBackgroundColor &&
         other.linkColor == linkColor &&
@@ -106,9 +144,13 @@ class RichTextRenderTheme {
   @override
   int get hashCode => Object.hash(
     baseFontSize,
+    textColor,
     lineHeight,
+    rowFill,
+    headerRowFill,
     h1FontSize,
     h2FontSize,
+    h3FontSize,
     highlightColor,
     codeBackgroundColor,
     linkColor,
