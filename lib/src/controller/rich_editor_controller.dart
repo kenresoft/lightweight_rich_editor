@@ -4,6 +4,8 @@ import '../clipboard/clipboard_manager.dart';
 import '../clipboard/in_memory_rich_clipboard_delegate.dart';
 import '../clipboard/rich_clipboard_delegate.dart';
 import '../commands/command_dispatcher.dart';
+import '../commands/composite_command.dart';
+import '../commands/editor_command.dart';
 import '../commands/replace_range_command.dart';
 import '../commands/set_header_level_command.dart';
 import '../core/editing_engine.dart';
@@ -26,6 +28,10 @@ import '../rendering/text_span_renderer.dart';
 import '../search/search_index.dart';
 import '../utils/clamp_int.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
+import '../images/rich_image_cache.dart';
+import '../images/rich_image_store.dart';
+import 'image_actions.dart';
 import '../utils/link_launcher.dart';
 import '../utils/list_prefix.dart';
 import '../utils/text_diff.dart';
@@ -62,6 +68,23 @@ class RichEditorController extends TextEditingController {
   /// Useful for expensive re-layouts (like ruled lines) that don't
   /// depend on selection.
   late final ChangeNotifier documentMutationNotifier;
+
+  RichImageStore? _imageStore;
+
+  /// Where this document's pictures are kept. Set before the editor is shown to
+  /// enable pasting and drawing images; `null` (the default) means the editor
+  /// has no image support and ignores image clipboard content.
+  RichImageStore? get imageStore => _imageStore;
+  set imageStore(RichImageStore? store) {
+    if (identical(store, _imageStore)) return;
+    imageCache?.dispose();
+    _imageStore = store;
+    imageCache = store == null ? null : RichImageCache(store);
+    notifyListeners();
+  }
+
+  /// Decoded pictures for the paper layer (bounded; see [RichImageCache]).
+  RichImageCache? imageCache;
 
   /// Whether the host supplied its own `onTapLink` to this constructor,
   /// as opposed to relying on the default ([launchLinkUrl]). Read by
@@ -138,6 +161,7 @@ class RichEditorController extends TextEditingController {
     if (_ownsFocusNode) focusNode.dispose();
     documentMutationNotifier.dispose();
     renderer.dispose();
+    imageCache?.dispose();
     super.dispose();
   }
 
@@ -195,6 +219,17 @@ class RichEditorController extends TextEditingController {
 
     final cursorHint = selection.start >= 0 ? selection.start : null;
     final diff = diffText(oldText, newText, cursorHint: cursorHint);
+
+    // Image rows are not text: typing, Enter or a delete aimed at one acts on the
+    // picture (or moves out of it) instead of writing into its blank rows.
+    if (!diff.isNoOp && document.paragraphs.hasAnyImage) {
+      final handled = _guardImageEdit(diff);
+      if (handled != null) {
+        history.breakCoalescing();
+        super.value = TextEditingValue(text: document.text, selection: handled);
+        return;
+      }
+    }
 
     // newValue.selection is Flutter's guess based on a bare '\n'; the
     // smart-Enter path below can insert a longer/shorter string, so this
@@ -401,6 +436,131 @@ class RichEditorController extends TextEditingController {
     }
   }
 
+  // The image block containing [offset], or null. Reads paragraph metadata only,
+  // so it does not depend on a layout having happened.
+  ImageRun? imageRunAt(int offset) {
+    final paragraphs = document.paragraphs;
+    final i = paragraphs.indexAt(offset);
+    final run = paragraphs.imageRunAround(i);
+    if (run == null) return null;
+    final first = paragraphs.recordAt(run.first);
+    final last = paragraphs.recordAt(run.last);
+    final level = first.headerLevel!;
+    return ImageRun(
+      start: first.start,
+      end: last.end,
+      rows: run.last - run.first + 1,
+      level: level,
+      id: imageIdOf(level) ?? '',
+    );
+  }
+
+  /// The image block the selection is inside (caret on one of its rows, or a
+  /// selection within it), or null.
+  ImageRun? get selectedImageRun {
+    final s = selection;
+    if (!s.isValid) return null;
+    final run = imageRunAt(s.start);
+    if (run == null || s.end > run.end) return null;
+    return run;
+  }
+
+  /// Removes a whole image block (one undo step). The picture's bytes stay in
+  /// the store so that undo can bring it back.
+  void deleteImage(ImageRun run) {
+    selection = _deleteImageRun(run);
+  }
+
+  TextSelection _deleteImageRun(ImageRun run) {
+    final length = document.length;
+    if (run.start > 0) {
+      // Take the line breaks from just before the first row through the last
+      // row: the line above absorbs the (empty) rows and keeps its own kind, and
+      // what follows is untouched.
+      final a = run.start - 1;
+      commands.dispatch(ReplaceRangeCommand(start: a, end: run.end, text: ''));
+      return TextSelection.collapsed(offset: clampInt(a, 0, document.length));
+    }
+    // The picture opens the note: the rows and their breaks go; if nothing is
+    // left after it, the one remaining line must not stay a picture row.
+    final end = run.end < length ? run.end + 1 : run.end;
+    final cmds = <EditorCommand>[
+      ReplaceRangeCommand(start: 0, end: end, text: ''),
+      if (run.end >= length) SetHeaderLevelCommand(const EditorSelection.collapsed(0), null),
+    ];
+    commands.dispatch(cmds.length == 1 ? cmds.first : CompositeCommand(cmds));
+    return const TextSelection.collapsed(offset: 0);
+  }
+
+  // The part of [set value] that protects image blocks. Returns the selection to
+  // settle on when the edit was handled here, or null to let it through.
+  TextSelection? _guardImageEdit(TextDiff diff) {
+    final paragraphs = document.paragraphs;
+    final old = selection;
+    final insertion = diff.insertedText.isNotEmpty;
+
+    // The caret (or selection) is on a picture.
+    if (old.isValid) {
+      final run = imageRunAt(old.start);
+      if (run != null && old.end <= run.end) {
+        if (insertion) {
+          // Typing, Enter or a paste while a picture is selected goes on a new
+          // ordinary line: above it when the caret is in the picture's upper
+          // half (a tap near its top), below it otherwise.
+          final rowIndex = old.start - run.start; // every row is one empty line
+          if (rowIndex * 2 < run.rows) {
+            final text = diff.insertedText == '\n' ? '\n' : '${diff.insertedText}\n';
+            final t = run.start;
+            // The insert splits the first row: the new line takes its level and the
+            // old row is left plain, so put each back.
+            commands.dispatch(CompositeCommand([
+              ReplaceRangeCommand(start: t, end: t, text: text, attributesForInsertion: const {}),
+              SetHeaderLevelCommand(EditorSelection.collapsed(t), null),
+              SetHeaderLevelCommand(EditorSelection.collapsed(t + text.length), run.level),
+            ]));
+            return TextSelection.collapsed(offset: diff.insertedText == '\n' ? t : t + diff.insertedText.length);
+          }
+          final t = run.end;
+          commands.dispatch(ReplaceRangeCommand(start: t, end: t, text: '\n${diff.insertedText}', attributesForInsertion: const {}));
+          return TextSelection.collapsed(offset: t + 1 + diff.insertedText.length);
+        }
+        return _deleteImageRun(run); // Backspace / Delete removes the whole picture
+      }
+    }
+
+    // A single line break removed right next to a picture would join a text
+    // line into its rows.
+    if (!insertion && diff.end == diff.start + 1 && document.text.codeUnitAt(diff.start) == 0x0A) {
+      final i = paragraphs.indexAt(diff.start);
+      if (i >= 0 && i + 1 < paragraphs.length) {
+        final above = paragraphs.recordAt(i);
+        final below = paragraphs.recordAt(i + 1);
+        if (isImageLevel(above.headerLevel) && !isImageLevel(below.headerLevel)) {
+          // Backspace at the start of the line under a picture: an empty line
+          // simply goes; otherwise the caret steps into the picture (a second
+          // Backspace removes it).
+          if (below.start == below.end) return null;
+          return TextSelection.collapsed(offset: above.end);
+        }
+        if (!isImageLevel(above.headerLevel) && isImageLevel(below.headerLevel)) {
+          return old.isValid ? old : TextSelection.collapsed(offset: above.end); // Delete at the end of the line above
+        }
+      }
+    }
+    return null;
+  }
+
+  // Programmatic edits (toolbar, shortcuts, paste) must not write into a picture
+  // either: step out to a fresh line below it first.
+  void _leaveImageRun() {
+    final sel = selection;
+    if (!sel.isValid) return;
+    final run = imageRunAt(sel.start);
+    if (run == null || sel.end > run.end) return;
+    commands.dispatch(ReplaceRangeCommand(start: run.end, end: run.end, text: '\n', attributesForInsertion: const {}));
+    selection = TextSelection.collapsed(offset: run.end + 1);
+  }
+
   // After a single-character live keystroke, checks whether it just
   // completed an autolink boundary (space/newline/tab) and, if the token
   // before it is URL-shaped, applies the link attribute via
@@ -528,8 +688,10 @@ class RichEditorController extends TextEditingController {
   // goes through the `set value` override above instead.
   // ---------------------------------------------------------------------
 
-  void insertText(String text) =>
-      _syncSelection(commands.insertText(_currentSelection, text));
+  void insertText(String text) {
+    _leaveImageRun();
+    _syncSelection(commands.insertText(_currentSelection, text));
+  }
 
   void deleteBackward() =>
       _syncSelection(commands.deleteBackward(_currentSelection));
@@ -620,6 +782,8 @@ class RichEditorController extends TextEditingController {
   /// matching delegate entry, otherwise plain text from the system
   /// clipboard. See [ClipboardManager.paste].
   Future<void> paste() async {
+    if (imageStore != null && await pasteImageFromClipboard()) return;
+    _leaveImageRun();
     final result = await clipboard.paste(_currentSelection);
     if (result != null) _repairAndSync(result);
   }

@@ -2,7 +2,7 @@ import 'attribute_store.dart';
 import 'paragraph_block.dart';
 import 'paragraph_index.dart';
 import '../models/attribute_type.dart';
-import '../models/code_block.dart';
+import '../models/image_block.dart';
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../models/text_buffer.dart';
@@ -91,7 +91,7 @@ class EditorDocument {
     );
     final headers = [
       ..._paragraphs.records
-          .where((r) => r.headerLevel != null && !isCodeBlockLevel(r.headerLevel) && r.end > r.start)
+          .where((r) => r.headerLevel != null && !isRunBlockLevel(r.headerLevel) && r.end > r.start)
           .map((r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.header, value: r.headerLevel)),
       ..._codeBlockSpans(),
     ];
@@ -121,7 +121,7 @@ class EditorDocument {
 
     for (final r in _paragraphs.records) {
       final level = r.headerLevel;
-      if (!isCodeBlockLevel(level)) {
+      if (!isRunBlockLevel(level)) {
         flush();
         continue;
       }
@@ -161,7 +161,7 @@ class EditorDocument {
   void _seedParagraphBlockMetadata() {
     // Code blocks first: a span covers every record inside it, blank ones too.
     for (final span in _attributes.spans.where(
-      (a) => a.type == AttributeType.header && isCodeBlockLevel(a.value as String?),
+      (a) => a.type == AttributeType.header && isRunBlockLevel(a.value as String?),
     )) {
       for (final record in _paragraphs.records) {
         if (record.start >= span.start && record.end <= span.end) {
@@ -171,7 +171,7 @@ class EditorDocument {
     }
     for (final record in _paragraphs.records) {
       if (record.start >= record.end) continue;
-      if (isCodeBlockLevel(record.headerLevel)) continue;
+      if (isRunBlockLevel(record.headerLevel)) continue;
       final headerSpans = _attributes.findAt(record.start, type: AttributeType.header);
       if (headerSpans.isNotEmpty) {
         _paragraphs.setHeaderLevel(record.start, record.end, headerSpans.first.value as String?);

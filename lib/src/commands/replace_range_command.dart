@@ -59,7 +59,7 @@ class ReplaceRangeCommand extends EditorCommand {
 
     _removedText = engine.document.buffer.substring(safeStart, safeEnd);
     _removedSpans = store.findIntersecting(safeStart, safeEnd);
-    _removedBlockMetadata = engine.document.paragraphs.recordsOverlapping(safeStart, safeEnd);
+    _removedBlockMetadata = engine.document.paragraphs.recordsSpanning(safeStart, safeEnd);
 
     if (relativeAttributes != null) {
       return engine.pasteRich(

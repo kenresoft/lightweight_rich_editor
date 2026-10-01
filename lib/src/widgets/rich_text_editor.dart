@@ -8,9 +8,13 @@ import 'package:flutter/rendering.dart' show RenderEditable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../clipboard/native/rich_clipboard_platform.dart';
+import '../controller/image_actions.dart';
 import '../controller/rich_editor_controller.dart';
+import '../models/image_block.dart';
 import '../painters/ruled_lines_painter.dart';
 import '../rendering/code_block_region.dart';
+import '../rendering/image_region.dart';
 import '../rendering/editor_style.dart';
 import '../search/search_index.dart';
 import '../utils/link_launcher.dart';
@@ -398,6 +402,35 @@ class RichTextEditor extends StatelessWidget {
         selection.end <= linkRange.end;
 
     if (!selectionIsWithinLink) {
+      // Android offers Paste only for a text clipboard; a copied picture gets its
+      // own item (found with a cheap native check, no bytes read).
+      if (controller.imageStore != null) {
+        return FutureBuilder<bool>(
+          future: RichClipboardPlatform.hasImage(),
+          builder: (context, snapshot) => AdaptiveTextSelectionToolbar.buttonItems(
+            anchors: editableTextState.contextMenuAnchors,
+            buttonItems: [
+              ..._richButtonItems(editableTextState),
+              if (snapshot.data == true)
+                ContextMenuButtonItem(
+                  label: 'Paste image',
+                  onPressed: () {
+                    editableTextState.hideToolbar();
+                    controller.pasteImageFromClipboard(force: true);
+                  },
+                ),
+              if (!selection.isCollapsed)
+                ContextMenuButtonItem(
+                  label: 'Link',
+                  onPressed: () {
+                    editableTextState.hideToolbar();
+                    showLinkSheetFor(context, controller);
+                  },
+                ),
+            ],
+          ),
+        );
+      }
       return AdaptiveTextSelectionToolbar.buttonItems(
         anchors: editableTextState.contextMenuAnchors,
         buttonItems: [
@@ -809,9 +842,26 @@ class RichTextEditor extends StatelessWidget {
                                   // bars only — selection/focus changes. The paper
                                   // layer is its own repaint boundary, so a drag
                                   // repaints just a few rules here.
-                                  listenable: Listenable.merge([scrollController, controller, controller.focusNode]),
+                                  listenable: Listenable.merge([
+                                    scrollController,
+                                    controller,
+                                    controller.focusNode,
+                                    if (controller.imageCache != null) controller.imageCache!,
+                                  ]),
                                   builder: (context, child) {
                                     final sel = controller.selection;
+                                    final imageBlocks = controller.renderer.imageBlocks;
+                                    final imageCache = controller.imageCache;
+                                    if (imageCache != null && imageBlocks.isNotEmpty) {
+                                      // Ask only for pictures on, or just off, the screen.
+                                      final scrolled = scrollController.hasClients ? scrollController.offset : 0.0;
+                                      final viewport = scrollController.hasClients ? scrollController.position.viewportDimension : 900.0;
+                                      final wanted = ((totalWidth - leftPad - editorStyle.paddingRight) * devicePixelRatio).round();
+                                      for (final b in imageBlocks) {
+                                        final top = editorStyle.paddingTop + b.top - scrolled;
+                                        if (top + b.height > -400 && top < viewport + 400) imageCache.ensure(b.id, wanted);
+                                      }
+                                    }
                                     final selectedBlank = sel.isValid && !sel.isCollapsed && controller.focusNode.hasFocus
                                         ? controller.renderer.blankLinesSelected(sel.start, sel.end)
                                         : const <BlankLineRegion>[];
@@ -825,6 +875,13 @@ class RichTextEditor extends StatelessWidget {
                                         selectionBarWidth: 10,
                                         lineBottoms: lineBottoms,
                                         codeBlocks: controller.renderer.codeBlocks,
+                                        imageBlocks: imageBlocks,
+                                        imageCache: imageCache,
+                                        imageLeft: leftPad,
+                                        imageRight: totalWidth - editorStyle.paddingRight,
+                                        selectionStart: controller.focusNode.hasFocus && sel.isValid ? sel.start : -1,
+                                        selectionEnd: controller.focusNode.hasFocus && sel.isValid ? sel.end : -1,
+                                        imageAccent: Theme.of(context).colorScheme.primary,
                                         codeBlockColor: editorStyle.codeBlockColor,
                                         codeBorderColor: editorStyle.codeBlockLabelColor.withValues(alpha: 0.22),
                                         inlineCode: controller.renderer.inlineCodeRects,
@@ -876,12 +933,25 @@ class RichTextEditor extends StatelessWidget {
                           // room). Its clip is widened by the same amount so a line
                           // scrolling through that gap is drawn whole instead of being
                           // cut mid-glyph at an invisible edge above the bottom bar.
-                          child: ClipRect(
+                          child: ListenableBuilder(
+                            listenable: controller,
+                            builder: (context, _) => ClipRect(
                             clipper: _ExtendBottomClipper(editorStyle.paddingBottom),
                             child: DefaultTextHeightBehavior(
                             textHeightBehavior: _kTextHeightBehavior,
                             child: TextField(
                               clipBehavior: Clip.none,
+                              // A picture is selected as a whole: no caret on its blank rows.
+                              showCursor: controller.selectedImageRun == null ? null : false,
+                              contentInsertionConfiguration: controller.imageStore == null
+                                  ? null
+                                  : ContentInsertionConfiguration(
+                                      allowedMimeTypes: const ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+                                      onContentInserted: (content) {
+                                        final bytes = content.data;
+                                        if (bytes != null) controller.insertImageBytes(bytes);
+                                      },
+                                    ),
                               controller: controller,
                               focusNode: controller.focusNode,
                               scrollController: scrollController,
@@ -937,6 +1007,7 @@ class RichTextEditor extends StatelessWidget {
                             ),
                           ),
                           ),
+                          ),
                         ),
                         ),
                       ),
@@ -957,6 +1028,21 @@ class RichTextEditor extends StatelessWidget {
                         regions: () {
                           layoutBottoms(maxTextWidth);
                           return controller.renderer.codeBlocks;
+                        },
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: _ImageActions(
+                        controller: controller,
+                        scrollController: scrollController,
+                        style: editorStyle,
+                        leftInset: leftPad,
+                        rightInset: editorStyle.paddingRight,
+                        // Same call (same cache key) as the painter's, so the block is
+                        // where the layout now says, not where it was a frame ago.
+                        regions: () {
+                          layoutBottoms(maxTextWidth);
+                          return controller.renderer.imageBlocks;
                         },
                       ),
                     ),
@@ -988,6 +1074,155 @@ String _chipLabel(CodeBlockRegion block) {
   final language = block.language;
   if (language == 'text') return 'plain text';
   return language ?? block.guessedLanguage ?? 'code';
+}
+
+/// Controls of the selected picture: smaller, larger and remove, floating at its
+/// top-right corner. Only the one selected picture has them, so a note full of
+/// pictures builds nothing extra.
+class _ImageActions extends StatelessWidget {
+  const _ImageActions({
+    required this.controller,
+    required this.scrollController,
+    required this.style,
+    required this.leftInset,
+    required this.rightInset,
+    required this.regions,
+  });
+
+  final RichEditorController controller;
+  final ScrollController scrollController;
+  final RichEditorStyle style;
+  final double leftInset;
+  final double rightInset;
+  final List<ImageRegion> Function() regions;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([controller, scrollController, if (controller.imageCache != null) controller.imageCache!]),
+      builder: (context, _) {
+        final run = controller.selectedImageRun;
+        if (run == null) return const SizedBox.shrink();
+        ImageRegion? region;
+        for (final b in regions()) {
+          if (b.level == run.level) {
+            region = b;
+            break;
+          }
+        }
+        if (region == null) return const SizedBox.shrink();
+        final scroll = scrollController.hasClients ? scrollController.offset : 0.0;
+        final top = style.paddingTop + region.top - scroll + RuledLinesPainter.imageInset;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            if (top + 40 < style.paddingTop || top > constraints.maxHeight) return const SizedBox.shrink();
+            // Against the picture's own right edge, not the text area's.
+            final area = Rect.fromLTRB(leftInset, 0, constraints.maxWidth - rightInset, 100);
+            final image = controller.imageCache?.peek(region!.id);
+            final pitch = region!.height / run.rows;
+            final innerHeight = region.height - 2 * RuledLinesPainter.imageInset;
+            final drawn = image == null
+                ? null
+                : RuledLinesPainter.imageDestination(
+                    Rect.fromLTRB(area.left, 0, area.right, innerHeight),
+                    Size(image.width.toDouble(), image.height.toDouble()),
+                  );
+            final right = drawn?.right ?? area.right;
+
+            // Smaller / Larger move the picture one row at a time. Larger stops where
+            // the picture is as wide as the text (more rows would only add empty
+            // room under it); Smaller, from there, first drops that spare room and
+            // then shrinks the picture. Each tap is a visible change.
+            VoidCallback? stepTo(int direction) {
+              final int target;
+              if (image == null || drawn == null) {
+                target = run.rows + direction;
+              } else {
+                final fullWidth = drawn.width >= area.width * 0.985;
+                final needed = ((area.width * image.height / image.width + 2 * RuledLinesPainter.imageInset) / pitch).ceil();
+                if (direction > 0) {
+                  if (fullWidth) return null;
+                  target = run.rows + 1;
+                } else {
+                  target = fullWidth ? math.min(run.rows - 1, needed - 1) : run.rows - 1;
+                }
+              }
+              if (target < minImageRows || target > maxImageRows || target == run.rows) {
+                return direction < 0 && run.rows > minImageRows && target < minImageRows
+                    ? () => controller.resizeImage(controller.selectedImageRun ?? run, minImageRows - (controller.selectedImageRun ?? run).rows)
+                    : null;
+              }
+              return () {
+                final current = controller.selectedImageRun ?? run;
+                controller.resizeImage(current, target - current.rows);
+              };
+            }
+
+            // The controls sit in the picture's top-right corner; on a small picture
+            // (they would cover most of it, or hang off its left edge) they go
+            // beside it instead, in the free room to its right.
+            const pillWidth = _ImageButtons.width;
+            final beside = drawn != null && drawn.width < pillWidth * 2.4 && area.right - drawn.right >= pillWidth + 12;
+            return Stack(
+              children: [
+                Positioned(
+                  top: top + 8,
+                  left: beside ? drawn.right + 10 : null,
+                  right: beside ? null : constraints.maxWidth - right + 8,
+                  child: _ImageButtons(controller: controller, onSmaller: stepTo(-1), onLarger: stepTo(1)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _ImageButtons extends StatelessWidget {
+  const _ImageButtons({required this.controller, required this.onSmaller, required this.onLarger});
+
+  /// Three 36-wide buttons.
+  static const double width = 108;
+
+  final RichEditorController controller;
+
+  /// `null` when the picture cannot go smaller / larger.
+  final VoidCallback? onSmaller;
+  final VoidCallback? onLarger;
+
+  void _act(void Function(ImageRun) action) {
+    final current = controller.selectedImageRun;
+    if (current != null) action(current);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget button(IconData icon, String tooltip, VoidCallback? onTap) => IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 18, color: onTap == null ? Colors.white38 : Colors.white),
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+      padding: EdgeInsets.zero,
+      onPressed: onTap,
+    );
+    return Material(
+      color: const Color(0xCC1C1B1F),
+      elevation: 3,
+      borderRadius: BorderRadius.circular(18),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Each acts on the picture selected *now* (a tap may land before this row
+          // has rebuilt from the previous one).
+          button(Icons.photo_size_select_small_rounded, 'Smaller', onSmaller),
+          button(Icons.photo_size_select_large_rounded, 'Larger', onLarger),
+          button(Icons.delete_outline_rounded, 'Remove picture', () => _act(controller.deleteImage)),
+        ],
+      ),
+    );
+  }
 }
 
 /// Clips to the child's box, extended downward by [extra].

@@ -1,3 +1,4 @@
+
 import 'package:flutter/services.dart';
 
 /// Internal plugin interface for rich clipboard access.
@@ -18,6 +19,26 @@ class RichClipboardPlatform {
       // Degrading to plain text if the native plugin fails or isn't implemented.
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       return (text: data?.text, html: null);
+    }
+  }
+
+  /// Whether the clipboard holds a picture; reads no bytes.
+  static Future<bool> hasImage() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasImage') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// The picture on the clipboard (a copied image, a screenshot), as its encoded
+  /// bytes, or `null` when there is none or the platform cannot read one.
+  static Future<Uint8List?> getImage() async {
+    try {
+      final result = await _channel.invokeMethod<Uint8List>('getImage');
+      return (result == null || result.isEmpty) ? null : result;
+    } catch (_) {
+      return null;
     }
   }
 

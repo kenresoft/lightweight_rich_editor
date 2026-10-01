@@ -3,6 +3,7 @@ import 'package:html/parser.dart' as html_parser;
 
 import '../models/attribute_type.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
 import '../models/text_attribute.dart';
 import '../utils/list_prefix.dart';
 import '../utils/url_detector.dart';
@@ -248,6 +249,10 @@ class _Run {
     }
     if (tag == 'pre') {
       _pre(node);
+      return;
+    }
+    if (node.attributes.containsKey('data-rich-image')) {
+      _imageBlock(node);
       return;
     }
     if (tag == 'td' || tag == 'th') {
@@ -497,6 +502,20 @@ class _Run {
     ));
     // Tight after the block: the code background separates it visually, and a
     // blank line here would make our own <pre> export grow one line per paste.
+    _boundary(0);
+  }
+
+  // An image block this editor exported: its rows come back as blank lines
+  // flagged with the block level.
+  void _imageBlock(dom.Element e) {
+    final level = e.attributes['data-rich-image'] ?? '';
+    if (imageIdOf(level) == null) return;
+    final rows = (int.tryParse(e.attributes['data-rows'] ?? '') ?? minImageRows).clamp(2, maxImageRows);
+    _boundary(0);
+    _beginContent();
+    final start = _length;
+    _write('\n' * (rows - 1));
+    _codeBlocks.add(TextAttribute(start: start, end: _length, type: AttributeType.header, value: level));
     _boundary(0);
   }
 

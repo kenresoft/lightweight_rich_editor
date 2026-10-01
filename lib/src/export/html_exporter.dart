@@ -1,5 +1,6 @@
 import '../models/attribute_type.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
 import '../models/text_attribute.dart';
 import '../utils/list_prefix.dart';
 
@@ -34,7 +35,10 @@ class HtmlExporter {
     bool isCodeSpan(TextAttribute a) =>
         a.type == AttributeType.header && isCodeBlockLevel(a.value as String?);
     final codeSpans = attributes.where(isCodeSpan).toList()..sort((a, b) => a.start.compareTo(b.start));
-    final sorted = attributes.where((a) => !isCodeSpan(a)).toList()
+    // An image block is one element carrying its picture id and height in rows.
+    bool isImageSpan(TextAttribute a) => a.type == AttributeType.header && isImageLevel(a.value as String?);
+    final imageSpans = attributes.where(isImageSpan).toList()..sort((a, b) => a.start.compareTo(b.start));
+    final sorted = attributes.where((a) => !isCodeSpan(a) && !isImageSpan(a)).toList()
       ..sort((a, b) {
         if (a.start != b.start) return a.start.compareTo(b.start);
         return b.end.compareTo(a.end);
@@ -67,6 +71,22 @@ class HtmlExporter {
     while (true) {
       final nextNewline = text.indexOf('\n', pos);
       final paragraphEnd = nextNewline == -1 ? text.length : nextNewline;
+
+      final image = imageSpans.where((a) => a.start <= pos && a.end >= pos && a.end > a.start).firstOrNull;
+      if (image != null) {
+        final wasList = listStack.isNotEmpty;
+        closeOpenList();
+        if (!isFirstParagraph && !afterBlock && !wasList && !prevBlockElement) buffer.write('<br>');
+        prevBlockElement = true;
+        final imageEnd = image.end > text.length ? text.length : image.end;
+        final rows = '\n'.allMatches(text.substring(pos, imageEnd)).length + 1;
+        buffer.write('<div data-rich-image="${image.value}" data-rows="$rows"></div>');
+        isFirstParagraph = false;
+        afterBlock = true;
+        if (imageEnd >= text.length) break;
+        pos = imageEnd + 1;
+        continue;
+      }
 
       final code = codeSpans.where((a) => a.start <= pos && a.end >= pos && a.end > a.start).firstOrNull;
       if (code != null) {

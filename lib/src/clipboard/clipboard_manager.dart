@@ -5,6 +5,7 @@ import '../export/html_exporter.dart';
 import '../import/html_importer.dart';
 import '../import/markdown_importer.dart';
 import '../models/attribute_type.dart';
+import '../models/image_block.dart';
 import '../models/text_attribute.dart';
 import '../utils/url_detector.dart';
 import 'native/rich_clipboard_platform.dart';
@@ -84,7 +85,7 @@ class ClipboardManager {
 
     final rich = delegate?.read();
     if (rich != null && rich.text == normalizedPlainText) {
-      return commands.pasteRich(selection, rich.text, rich.attributes);
+      return commands.pasteRich(selection, rich.text, _freshImageInstances(rich.attributes));
     }
 
     // 1. HTML flavor, if the clipboard provided one.
@@ -94,7 +95,7 @@ class ClipboardManager {
         // _withAutolinks still runs here: a bare URL from e.g. a
         // browser address bar can arrive as unstyled HTML with no
         // anchor tag, so parsed.attributes alone wouldn't catch it.
-        return commands.pasteRich(selection, parsed.text, _withAutolinks(parsed.text, parsed.attributes));
+        return commands.pasteRich(selection, parsed.text, _freshImageInstances(_withAutolinks(parsed.text, parsed.attributes)));
       }
     }
 
@@ -118,6 +119,21 @@ class ClipboardManager {
     }
 
     return null;
+  }
+
+  // A pasted image block is a new block: it gets its own instance tag, so a copy
+  // pasted right under its original is two pictures, not one tall one. Rows of
+  // one pasted block keep sharing one tag.
+  List<TextAttribute> _freshImageInstances(List<TextAttribute> attributes) {
+    if (!attributes.any((a) => a.type == AttributeType.header && isImageLevel(a.value as String?))) return attributes;
+    final fresh = <String, String>{};
+    return [
+      for (final a in attributes)
+        if (a.type == AttributeType.header && isImageLevel(a.value as String?))
+          a.copyWith(value: fresh.putIfAbsent(a.value as String, () => imageLevelFor(imageIdOf(a.value as String?) ?? '', newImageInstance())))
+        else
+          a,
+    ];
   }
 
   // Adds a synthesized link attribute for every detected URL not already

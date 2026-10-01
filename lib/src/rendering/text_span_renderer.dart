@@ -7,12 +7,14 @@ import '../core/attribute_store.dart';
 import '../core/editor_document.dart';
 import '../models/attribute_type.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
 import '../core/paragraph_record.dart';
 import '../models/text_attribute.dart';
 import '../utils/clamp_int.dart';
 import '../utils/horizontal_rule.dart';
 import '../utils/list_prefix.dart';
 import 'code_block_region.dart';
+import 'image_region.dart';
 import 'code_highlighter.dart';
 import 'document_renderer.dart';
 import 'render_theme.dart';
@@ -276,6 +278,10 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   List<CodeBlockRegion> _cachedCodeBlocks = const [];
   List<BlankLineRegion> _cachedBlankLines = const [];
   List<Rect> _cachedInlineCode = const [];
+  List<ImageRegion> _cachedImages = const [];
+
+  /// The image blocks of the document (cached with [codeBlocks]).
+  List<ImageRegion> get imageBlocks => _cachedImages;
 
   /// Inline-code boxes (cached with [codeBlocks]).
   List<Rect> get inlineCodeRects => _cachedInlineCode;
@@ -406,6 +412,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedLineBottoms = bottoms;
     _cachedCodeBlocks = _codeRegions(document, painter, bottoms);
     _cachedInlineCode = _inlineCodeRects(document, painter);
+    _cachedImages = _imageRegions(document, painter, bottoms);
     _cachedBlankLines = _blankLineRegions(document, painter, bottoms);
     _cachedLineBottomsText = text;
     _cachedLineBottomsRevision = revision;
@@ -453,7 +460,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final out = <BlankLineRegion>[];
     for (var i = 0; i < records.length - 1; i++) {
       final r = records[i];
-      if (r.start != r.end) continue;
+      if (r.start != r.end || isImageLevel(r.headerLevel)) continue;
       final dy = painter.getOffsetForCaret(TextPosition(offset: r.start), Rect.zero).dy;
       var lo = 0;
       var hi = bottoms.length - 1;
@@ -467,6 +474,81 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       }
       out.add(BlankLineRegion(offset: r.start, top: lo == 0 ? 0.0 : bottoms[lo - 1], bottom: bottoms[lo]));
     }
+    return out;
+  }
+
+  // Each run of image rows -> its Y extent. Only documents that contain an image
+  // pay for this. A level that appears in two separate runs (a block broken in
+  // two by an edit) is drawn once, from its first run.
+  List<ImageRegion> _imageRegions(EditorDocument document, TextPainter painter, List<double> bottoms) {
+    if (bottoms.isEmpty || !document.paragraphs.hasAnyImage) return const [];
+    final out = <ImageRegion>[];
+    final seen = <String>{};
+
+    double topOf(int offset) {
+      final dy = painter.getOffsetForCaret(TextPosition(offset: offset), Rect.zero).dy;
+      var lo = 0;
+      var hi = bottoms.length - 1;
+      while (lo < hi) {
+        final mid = (lo + hi) >> 1;
+        if (bottoms[mid] > dy + 0.5) {
+          hi = mid;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      return lo == 0 ? 0.0 : bottoms[lo - 1];
+    }
+
+    double bottomOf(int offset) {
+      final dy = painter.getOffsetForCaret(TextPosition(offset: offset), Rect.zero).dy;
+      var lo = 0;
+      var hi = bottoms.length - 1;
+      while (lo < hi) {
+        final mid = (lo + hi) >> 1;
+        if (bottoms[mid] > dy + 0.5) {
+          hi = mid;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      return bottoms[lo];
+    }
+
+    void emit(ParagraphRecord first, ParagraphRecord last, int rows) {
+      final level = first.headerLevel!;
+      final id = imageIdOf(level);
+      if (id == null || !seen.add(level)) return;
+      out.add(ImageRegion(
+        top: topOf(first.start),
+        bottom: bottomOf(last.start),
+        start: first.start,
+        end: last.end,
+        id: id,
+        level: level,
+        rows: rows,
+      ));
+    }
+
+    ParagraphRecord? first;
+    ParagraphRecord? last;
+    var rows = 0;
+    for (final r in document.paragraphs.records) {
+      if (!isImageLevel(r.headerLevel)) {
+        if (first != null) emit(first, last!, rows);
+        first = null;
+        continue;
+      }
+      if (first != null && first.headerLevel != r.headerLevel) {
+        emit(first, last!, rows);
+        first = null;
+      }
+      if (first == null) rows = 0;
+      first ??= r;
+      last = r;
+      rows++;
+    }
+    if (first != null) emit(first, last!, rows);
     return out;
   }
 

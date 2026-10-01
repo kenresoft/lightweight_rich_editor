@@ -1,7 +1,10 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
+import '../images/rich_image_cache.dart';
 import '../rendering/code_block_region.dart';
+import '../rendering/image_region.dart';
 
 /// The style of ruled lines to draw in the background.
 enum RuledLineStyle {
@@ -43,13 +46,20 @@ class RuledLinesPainter extends CustomPainter {
     this.inlineCode = const [],
     this.inlineCodeLeft = 0.0,
     this.inlineCodeColor = const Color(0x1F78909C),
+    this.imageBlocks = const [],
+    this.imageCache,
+    this.imageLeft = 0.0,
+    this.imageRight = 0.0,
+    this.selectionStart = -1,
+    this.selectionEnd = -1,
+    this.imageAccent = const Color(0xFF3F51B5),
     this.selectedBlankLines = const [],
     this.selectionColor = const Color(0x663F51B5),
     this.selectionBarLeft = 0.0,
     this.selectionBarWidth = 0.0,
     this.lineColor = const Color(0x66607D8B),
     this.marginColor = const Color(0xCCFFCDD2),
-  }) {
+  }) : super(repaint: imageCache) {
     _linePaint = Paint()
       ..color = lineColor
       ..strokeWidth = lineStyle == RuledLineStyle.dashed ? 0.7 : 1.0
@@ -94,6 +104,30 @@ class RuledLinesPainter extends CustomPainter {
   final List<Rect> inlineCode;
   final double inlineCodeLeft;
   final Color inlineCodeColor;
+
+  /// Image blocks to paint (document coordinates) and the decoded pictures to
+  /// paint them from; [imageLeft]/[imageRight] is the horizontal extent a
+  /// picture may use. A block the cache has not decoded yet shows a quiet
+  /// placeholder. The selection touching a block outlines it in [imageAccent].
+  final List<ImageRegion> imageBlocks;
+  final RichImageCache? imageCache;
+  final double imageLeft;
+  final double imageRight;
+  final int selectionStart;
+  final int selectionEnd;
+  final Color imageAccent;
+
+  /// Vertical air between a picture and the rows above and below it.
+  static const double imageInset = 4.0;
+
+  /// Where a picture of [imageSize] is drawn in [area]: as large as fits
+  /// (never distorted), against the top-left corner, so a block that is a little
+  /// taller than its picture leaves the spare room below it, not above.
+  static Rect imageDestination(Rect area, Size imageSize) {
+    if (imageSize.isEmpty || area.isEmpty) return area;
+    final fitted = applyBoxFit(BoxFit.contain, imageSize, area.size).destination;
+    return Alignment.topLeft.inscribe(fitted, area);
+  }
 
   /// Blank lines a selection runs across, marked with a short bar in
   /// [selectionColor] at [selectionBarLeft] (the field paints nothing for a
@@ -141,6 +175,7 @@ class RuledLinesPainter extends CustomPainter {
     canvas.clipRect(Rect.fromLTRB(0, topPadding, size.width, size.height));
     _drawCodeBlocks(canvas, size);
     _drawInlineCode(canvas, size);
+    _drawImages(canvas, size);
     _drawSelectedBlankLines(canvas, size);
     canvas.restore();
     if (marginOpacity > 0.0) {
@@ -173,6 +208,61 @@ class RuledLinesPainter extends CustomPainter {
   /// keep the padding around the code even.
   static const double codeBlockInsetTop = 4.0;
   static const double codeBlockInsetBottom = 0.0;
+
+  void _drawImages(Canvas canvas, Size size) {
+    if (imageBlocks.isEmpty) return;
+    final photo = Paint()
+      ..filterQuality = FilterQuality.medium
+      ..isAntiAlias = true;
+    final border = Paint()
+      ..color = codeBorderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    final outline = Paint()
+      ..color = imageAccent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    final wash = Paint()..color = imageAccent.withValues(alpha: 0.18);
+    final placeholder = Paint()..color = codeBlockColor;
+    final right = imageRight > imageLeft ? imageRight : size.width;
+    for (final block in imageBlocks) {
+      final top = topPadding + block.top - scrollOffset + imageInset;
+      final bottom = topPadding + block.bottom - scrollOffset - imageInset;
+      if (bottom < 0 || top > size.height) continue;
+      final area = Rect.fromLTRB(imageLeft, top, right, bottom);
+      final image = imageCache?.peek(block.id);
+      final selected = selectionStart >= 0 && block.touchedBy(selectionStart, selectionEnd);
+
+      final Rect drawn;
+      if (image != null) {
+        drawn = imageDestination(area, Size(image.width.toDouble(), image.height.toDouble()));
+        final rrect = RRect.fromRectAndRadius(drawn, const Radius.circular(10));
+        canvas.save();
+        canvas.clipRRect(rrect);
+        canvas.drawImageRect(image, Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()), drawn, photo);
+        if (selected && selectionEnd > selectionStart) canvas.drawRect(drawn, wash);
+        canvas.restore();
+        canvas.drawRRect(rrect.deflate(0.5), border);
+      } else {
+        // Not decoded yet (or gone): a quiet card where the picture will be.
+        drawn = Rect.fromLTWH(area.left, area.top, math.min(area.width, area.height * 1.4), area.height);
+        final rrect = RRect.fromRectAndRadius(drawn, const Radius.circular(10));
+        canvas.drawRRect(rrect, placeholder);
+        canvas.drawRRect(rrect.deflate(0.5), border);
+        if (imageCache?.hasFailed(block.id) ?? false) {
+          // A picture whose bytes are gone: a cross, so it reads as missing.
+          final cross = Paint()
+            ..color = codeBorderColor
+            ..strokeWidth = 1.5;
+          final c = drawn.center;
+          final r = math.min(drawn.width, drawn.height) * 0.12;
+          canvas.drawLine(c.translate(-r, -r), c.translate(r, r), cross);
+          canvas.drawLine(c.translate(-r, r), c.translate(r, -r), cross);
+        }
+      }
+      if (selected) canvas.drawRRect(RRect.fromRectAndRadius(drawn, const Radius.circular(10)).inflate(1), outline);
+    }
+  }
 
   void _drawInlineCode(Canvas canvas, Size size) {
     if (inlineCode.isEmpty) return;
@@ -269,9 +359,17 @@ class RuledLinesPainter extends CustomPainter {
     ..strokeWidth = _linePaint.strokeWidth
     ..isAntiAlias = false;
 
+  // Whether a rule at document-space `docY` lies inside a code card or an image
+  // block (its top edge excluded: that rule belongs to the line above). Such a
+  // rule is drawn faintly, so the block reads as one object on the ruled paper
+  // while the ruling stays faintly there beside and behind it.
   bool _insideCodeBlock(double docY) {
     for (final block in codeBlocks) {
-      if (block.top > docY) return false;
+      if (block.top > docY) break;
+      if (docY > block.top + 0.5 && docY <= block.bottom + 0.5) return true;
+    }
+    for (final block in imageBlocks) {
+      if (block.top > docY) break;
       if (docY > block.top + 0.5 && docY <= block.bottom + 0.5) return true;
     }
     return false;
@@ -313,6 +411,13 @@ class RuledLinesPainter extends CustomPainter {
       !identical(oldDelegate.lineBottoms, lineBottoms) ||
       !identical(oldDelegate.codeBlocks, codeBlocks) ||
       !identical(oldDelegate.inlineCode, inlineCode) ||
+      !identical(oldDelegate.imageBlocks, imageBlocks) ||
+      !identical(oldDelegate.imageCache, imageCache) ||
+      oldDelegate.imageLeft != imageLeft ||
+      oldDelegate.imageRight != imageRight ||
+      oldDelegate.selectionStart != selectionStart ||
+      oldDelegate.selectionEnd != selectionEnd ||
+      oldDelegate.imageAccent != imageAccent ||
       oldDelegate.inlineCodeColor != inlineCodeColor ||
       oldDelegate.codeBorderColor != codeBorderColor ||
       oldDelegate.inlineCodeLeft != inlineCodeLeft ||

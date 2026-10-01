@@ -1,5 +1,6 @@
 import '../models/attribute_type.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
 import '../models/text_attribute.dart';
 
 /// Converts plain text and [TextAttribute]s into a Markdown string.
@@ -16,7 +17,9 @@ class MarkdownExporter {
     bool isCodeSpan(TextAttribute a) =>
         a.type == AttributeType.header && isCodeBlockLevel(a.value as String?);
     final codeSpans = attributes.where(isCodeSpan).toList();
-    final sorted = attributes.where((a) => !isCodeSpan(a)).toList()
+    bool isImageSpan(TextAttribute a) => a.type == AttributeType.header && isImageLevel(a.value as String?);
+    final imageSpans = attributes.where(isImageSpan).toList();
+    final sorted = attributes.where((a) => !isCodeSpan(a) && !isImageSpan(a)).toList()
       ..sort((a, b) {
         if (a.start != b.start) return a.start.compareTo(b.start);
         return b.end.compareTo(a.end);
@@ -29,6 +32,24 @@ class MarkdownExporter {
     while (true) {
       final nextNewline = text.indexOf('\n', pos);
       final paragraphEnd = nextNewline == -1 ? text.length : nextNewline;
+
+      TextAttribute? image;
+      for (final a in imageSpans) {
+        if (a.start <= pos && a.end >= pos && a.end > a.start) {
+          image = a;
+          break;
+        }
+      }
+      if (image != null) {
+        // The picture itself lives in the app's image store, not in the text.
+        if (!isFirstParagraph) buffer.write('\n');
+        buffer.write('![image](rich-image:${imageIdOf(image.value as String?) ?? ''})');
+        isFirstParagraph = false;
+        final imageEnd = image.end > text.length ? text.length : image.end;
+        if (imageEnd >= text.length) break;
+        pos = imageEnd + 1;
+        continue;
+      }
 
       TextAttribute? code;
       for (final a in codeSpans) {

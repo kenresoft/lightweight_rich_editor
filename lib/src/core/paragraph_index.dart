@@ -1,6 +1,7 @@
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
 import 'paragraph_record.dart';
 
 /// Maintains one [ParagraphRecord] per paragraph in a document — the
@@ -61,6 +62,58 @@ class ParagraphIndex {
   bool get hasAnyCodeBlock => _records.any((r) => isCodeBlockLevel(r.headerLevel));
 
   bool get hasAnyHeader => _records.any((r) => r.headerLevel != null);
+
+  int _imageFlagRevision = -1;
+  bool _hasAnyImage = false;
+
+  /// Whether any paragraph is an image row. Cached per [revision], so asking on
+  /// every keystroke costs one scan only after a structural change.
+  bool get hasAnyImage {
+    if (_imageFlagRevision != _revision) {
+      _hasAnyImage = _records.any((r) => isImageLevel(r.headerLevel));
+      _imageFlagRevision = _revision;
+    }
+    return _hasAnyImage;
+  }
+
+  /// The index in [records] of the paragraph containing [offset], or -1.
+  /// Binary search: records partition the document in order.
+  int indexAt(int offset) {
+    var lo = 0;
+    var hi = _records.length - 1;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      final r = _records[mid];
+      if (offset < r.start) {
+        hi = mid - 1;
+      } else if (offset > r.end) {
+        lo = mid + 1;
+      } else {
+        return mid;
+      }
+    }
+    return -1;
+  }
+
+  /// The paragraph at [index], without copying the list.
+  ParagraphRecord recordAt(int index) => _records[index];
+
+  /// The run of image rows (same level) around the paragraph at [index] as
+  /// `(first, last)` paragraph indices, or `null` if it is not an image row.
+  ({int first, int last})? imageRunAround(int index) {
+    if (index < 0 || index >= _records.length) return null;
+    final level = _records[index].headerLevel;
+    if (!isImageLevel(level)) return null;
+    var first = index;
+    var last = index;
+    while (first > 0 && _records[first - 1].headerLevel == level) {
+      first--;
+    }
+    while (last < _records.length - 1 && _records[last + 1].headerLevel == level) {
+      last++;
+    }
+    return (first: first, last: last);
+  }
 
   /// The record containing `offset`, or `null` if `offset` is out of
   /// bounds. Linear scan.
@@ -171,7 +224,10 @@ class ParagraphIndex {
     // leftmost paragraph wins, as when a line break is deleted between two
     // paragraphs. Deleting through the very end of the last paragraph keeps the
     // leftmost one too: nothing of the last paragraph is left to inherit from.
-    final consumesFirst = start == first.start && end > first.end && end < last.end;
+    // The first row of a picture consumed whole never leaves its picture on what follows.
+    final firstIsPictureTop = isImageLevel(first.headerLevel) &&
+        (firstAffected == 0 || _records[firstAffected - 1].headerLevel != first.headerLevel);
+    final consumesFirst = start == first.start && end > first.end && (end < last.end || firstIsPictureTop);
     final base = consumesFirst ? last : first;
     final merged = ParagraphRecord(
       start: first.start,
@@ -204,6 +260,18 @@ class ParagraphIndex {
   bool _overlaps(ParagraphRecord r, int start, int end) {
     if (start == end) return r.contains(start);
     return r.start < end && r.end >= start;
+  }
+
+  /// Every record from the one containing [start] through the one containing
+  /// [end], inclusive: the paragraphs a deletion of `[start, end)` touches, the
+  /// last one included even when the range stops exactly at its first character
+  /// (which a half-open overlap test would miss: an empty paragraph, or one whose
+  /// block level a merge replaced).
+  List<ParagraphRecord> recordsSpanning(int start, int end) {
+    final a = indexAt(start);
+    final b = indexAt(end);
+    if (a == -1 || b == -1) return recordsOverlapping(start, end);
+    return _records.sublist(a, b + 1);
   }
 
   /// Every record overlapping `[start, end)`.
