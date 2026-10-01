@@ -428,13 +428,18 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('shows a language label and Copy for each block; Copy puts the exact code on the clipboard', (tester) async {
-      String? copied;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
-        if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String?;
+    testWidgets('shows a language label and Copy for each block; Copy puts the exact code on the clipboard, as a code block', (tester) async {
+      String? copiedText;
+      String? copiedHtml;
+      const channel = MethodChannel('com.kenresoft.lightweight_rich_editor/rich_clipboard');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'setData') {
+          copiedText = (call.arguments as Map)['text'] as String?;
+          copiedHtml = (call.arguments as Map)['html'] as String?;
+        }
         return null;
       });
-      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
 
       final c = make('intro\n$dartCode\nafter', [codeSpan(6, 6 + dartCode.length, 'code:dart')]);
       addTearDown(c.dispose);
@@ -442,8 +447,10 @@ void main() {
 
       expect(find.text('dart'), findsOneWidget);
       await tester.tap(find.byIcon(Icons.copy_rounded));
-      await tester.pump();
-      expect(copied, dartCode);
+      await tester.pumpAndSettle();
+      expect(copiedText, dartCode, reason: 'plain text is the exact code');
+      expect(copiedHtml, contains('<pre'), reason: 'the rich flavour is a code block, so pasting it back restores one');
+      expect(copiedHtml, contains('language-dart'));
       expect(find.text('Code copied'), findsOneWidget);
     });
 

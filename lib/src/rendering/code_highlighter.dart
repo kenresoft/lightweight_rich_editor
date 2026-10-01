@@ -428,8 +428,11 @@ String? guessLanguage(String code) {
   };
   // Structured data: judged on shape, not keywords.
   final head = t.trimRight();
-  if ((head.startsWith('{') && head.endsWith('}')) || (head.startsWith('[') && head.endsWith(']'))) {
-    if (t.contains('":')) scores['json'] = 5;
+  // JSON, also as a fragment or one still being typed: an object/array opening
+  // with quoted keys, or lines that are `"key": value`.
+  final quotedKeyLines = RegExp(r'^\s*"[^"\n]+"\s*:', multiLine: true).allMatches(t).length;
+  if (((head.startsWith('{') || head.startsWith('[')) && (t.contains('":') || t.contains('" :'))) || quotedKeyLines >= 2) {
+    scores['json'] = 5;
   }
   if (head.startsWith('<') && (head.contains('</') || head.contains('/>') || head.startsWith('<!DOCTYPE') || head.startsWith('<?xml'))) {
     scores['html'] = 4;

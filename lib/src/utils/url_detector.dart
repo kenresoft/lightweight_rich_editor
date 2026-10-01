@@ -34,6 +34,19 @@ const _commonTlds = {
   'me', 'info', 'biz', 'us', 'uk', 'ca', 'de', 'fr', 'jp', 'cn', 'in',
 };
 
+// A telephone number, conservatively: international (`+` and 8-15 digits), a
+// national number with a leading 0 (10-11 digits), or the 3-3-4 pattern with
+// separators. A bare run of digits (an id, a year, an amount) is not a phone.
+String? _phoneHref(String token) {
+  final digits = token.replaceAll(RegExp(r'\D'), '');
+  if (RegExp(r'^\+\d[\d\-.()]{6,18}\d$').hasMatch(token) && digits.length >= 8 && digits.length <= 15) {
+    return 'tel:+$digits';
+  }
+  if (RegExp(r'^0\d{9,10}$').hasMatch(token)) return 'tel:$token';
+  if (RegExp(r'^\(?\d{3}\)?[-.]\d{3}[-.]\d{4}$').hasMatch(token)) return 'tel:$digits';
+  return null;
+}
+
 final RegExp _emailToken = RegExp(r'^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$');
 
 // Trailing punctuation trimmed off a token before treating it as a URL,
@@ -108,6 +121,8 @@ String? normalizeUrlToken(String token) {
   // the host with a user name and open a web page).
   if (_emailToken.hasMatch(token)) return 'mailto:$token';
   if (token.startsWith('mailto:') && _emailToken.hasMatch(token.substring(7))) return token;
+  final phone = _phoneHref(token);
+  if (phone != null) return phone;
 
   if (token.startsWith('http://') || token.startsWith('https://')) {
     final uri = Uri.tryParse(token);

@@ -400,7 +400,17 @@ class RichTextEditor extends StatelessWidget {
     if (!selectionIsWithinLink) {
       return AdaptiveTextSelectionToolbar.buttonItems(
         anchors: editableTextState.contextMenuAnchors,
-        buttonItems: _richButtonItems(editableTextState),
+        buttonItems: [
+          ..._richButtonItems(editableTextState),
+          if (!selection.isCollapsed)
+            ContextMenuButtonItem(
+              label: 'Link',
+              onPressed: () {
+                editableTextState.hideToolbar();
+                showLinkSheetFor(context, controller);
+              },
+            ),
+        ],
       );
     }
 
@@ -1041,20 +1051,7 @@ class _LinkBarHostState extends State<_LinkBarHost> {
     }
   }
 
-  Future<void> _edit(BuildContext context, int offset) async {
-    final c = widget.controller;
-    final range = c.linkRangeAt(offset);
-    final url = c.linkUrlAt(offset);
-    if (range == null || url == null) return;
-    final result = await showLinkEditSheet(context, text: c.document.text.substring(range.start, range.end), url: url);
-    if (result == null) return;
-    if (result.remove) {
-      c.editLink(range, c.document.text.substring(range.start, range.end), null);
-    } else {
-      c.editLink(range, result.text, result.url);
-    }
-    c.focusNode.requestFocus();
-  }
+  Future<void> _edit(BuildContext context, int offset) => showLinkSheetFor(context, widget.controller);
 
   void _remove(int offset) {
     final c = widget.controller;
@@ -1211,7 +1208,7 @@ class _CodeBlockChip extends StatelessWidget {
         InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: () {
-            Clipboard.setData(ClipboardData(text: controller.codeBlockText(block.start, block.end)));
+            controller.copyRange(block.start, block.end);
             ScaffoldMessenger.maybeOf(context)?.showSnackBar(
               const SnackBar(content: Text('Code copied'), duration: Duration(seconds: 1)),
             );

@@ -503,6 +503,23 @@ class EditingEngine {
   ///
   /// Not applied when `selection` isn't collapsed — replacing a real
   /// selection with Enter just inserts a plain newline.
+  /// Enter on an empty (or whitespace-only) line that ends a code block leaves
+  /// the block instead of adding another code line: the line's range is
+  /// returned so the caller can empty it and make it a normal paragraph. A blank
+  /// line in the middle of code is just a blank line, so it returns `null`.
+  ({int start, int end})? codeExitEdit(EditorSelection selection) {
+    if (!selection.isCollapsed) return null;
+    final paragraphs = document.paragraphs;
+    final para = paragraphs.paragraphAt(selection.start);
+    if (para == null || !isCodeBlockLevel(para.headerLevel)) return null;
+    if (document.text.substring(para.start, para.end).trim().isNotEmpty) return null;
+    final records = paragraphs.records;
+    final i = records.indexOf(para);
+    if (i == -1) return null;
+    if (i + 1 < records.length && isCodeBlockLevel(records[i + 1].headerLevel)) return null;
+    return (start: para.start, end: para.end);
+  }
+
   ({int start, int end, String text}) enterKeyEdit(EditorSelection selection) {
     if (!selection.isCollapsed) {
       return (start: selection.start, end: selection.end, text: '\n');

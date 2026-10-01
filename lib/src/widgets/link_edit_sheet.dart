@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../controller/rich_editor_controller.dart';
 import '../utils/link_launcher.dart';
 import '../utils/url_detector.dart';
 
@@ -26,26 +27,54 @@ String? hrefForInput(String input) {
   return uri.hasScheme && text.toLowerCase().startsWith('${uri.scheme}:') ? text : uri.toString();
 }
 
+/// Adds a link at the caret/selection of [controller], or edits the link the
+/// caret is in, through the link sheet. The result is applied through the
+/// controller, so it works even if the widget that asked has gone away (a
+/// toolbar that hides when the sheet takes focus).
+Future<void> showLinkSheetFor(BuildContext context, RichEditorController controller) async {
+  final sel = controller.selection;
+  if (!sel.isValid) return;
+  final linkRange = controller.linkRangeAt(sel.start);
+  final linkUrl = controller.linkUrlAt(sel.start);
+  final inLink = linkRange != null && linkUrl != null && sel.end <= linkRange.end;
+  final range = inLink ? linkRange : TextRange(start: sel.start, end: sel.end);
+  final text = controller.document.text.substring(range.start, range.end);
+  final result = await showLinkEditSheet(
+    context,
+    text: text,
+    url: inLink ? linkUrl : '',
+    title: inLink ? 'Edit link' : 'Add link',
+    allowRemove: inLink,
+  );
+  if (result == null) return;
+  controller.editLink(range, result.remove ? text : result.text, result.remove ? null : result.url);
+  controller.focusNode.requestFocus();
+}
+
 /// A bottom sheet to edit a link's text and address, or remove the link.
 Future<LinkEditResult?> showLinkEditSheet(
   BuildContext context, {
   required String text,
   required String url,
+  String title = 'Edit link',
+  bool allowRemove = true,
 }) {
   return showModalBottomSheet<LinkEditResult>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
     useSafeArea: true,
-    builder: (context) => _LinkEditSheet(text: text, url: url),
+    builder: (context) => _LinkEditSheet(text: text, url: url, title: title, allowRemove: allowRemove),
   );
 }
 
 class _LinkEditSheet extends StatefulWidget {
-  const _LinkEditSheet({required this.text, required this.url});
+  const _LinkEditSheet({required this.text, required this.url, required this.title, required this.allowRemove});
 
   final String text;
   final String url;
+  final String title;
+  final bool allowRemove;
 
   @override
   State<_LinkEditSheet> createState() => _LinkEditSheetState();
@@ -82,7 +111,7 @@ class _LinkEditSheetState extends State<_LinkEditSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Edit link', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+          Text(widget.title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
           const SizedBox(height: 16),
           TextField(
             controller: _text,
@@ -113,12 +142,13 @@ class _LinkEditSheetState extends State<_LinkEditSheet> {
           const SizedBox(height: 16),
           Row(
             children: [
-              TextButton.icon(
-                onPressed: () => Navigator.pop(context, LinkEditResult(text: _text.text, url: null, remove: true)),
-                icon: const Icon(Icons.link_off_rounded, size: 18),
-                label: const Text('Remove link'),
-                style: TextButton.styleFrom(foregroundColor: scheme.error),
-              ),
+              if (widget.allowRemove)
+                TextButton.icon(
+                  onPressed: () => Navigator.pop(context, LinkEditResult(text: _text.text, url: null, remove: true)),
+                  icon: const Icon(Icons.link_off_rounded, size: 18),
+                  label: const Text('Remove link'),
+                  style: TextButton.styleFrom(foregroundColor: scheme.error),
+                ),
               const Spacer(),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               const SizedBox(width: 8),

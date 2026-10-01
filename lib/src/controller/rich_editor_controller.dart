@@ -210,7 +210,13 @@ class RichEditorController extends TextEditingController {
     // what `document` (left unmodified) already says, then rethrow.
     try {
       if (!diff.isNoOp) {
-        if (diff.insertedText == '\n') {
+        final codeExit = diff.insertedText == '\n'
+            ? commands.exitCodeBlock(EditorSelection(baseOffset: diff.start, extentOffset: diff.end))
+            : null;
+        if (codeExit != null) {
+          resultSelection = TextSelection.collapsed(offset: codeExit.start);
+          resultComposing = TextRange.empty;
+        } else if (diff.insertedText == '\n') {
           // relativeAttributes, not attributesForInsertion: this edit may
           // reconstruct pre-existing text that must keep its own
           // formatting rather than having sticky attributes smeared
@@ -600,6 +606,11 @@ class RichEditorController extends TextEditingController {
   /// [clipboard]'s delegate, if one is set, preserving formatting). See
   /// [ClipboardManager.copy].
   Future<void> copy() => clipboard.copy(_currentSelection);
+
+  /// Copies `[start, end)` with its formatting (a code block keeps being a code
+  /// block, with its language, when pasted back) without moving the selection.
+  Future<void> copyRange(int start, int end) =>
+      clipboard.copy(EditorSelection(baseOffset: start, extentOffset: end));
 
   /// Copies then deletes the current selection. See [ClipboardManager.cut].
   Future<void> cut() async =>

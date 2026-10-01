@@ -108,6 +108,9 @@ void main() {
       expect(guessLanguage('fn main() { let mut x = 1; println!("{}", x); }'), 'rust');
       expect(guessLanguage('SELECT id FROM users WHERE id = 1'), 'sql');
       expect(guessLanguage('{"a": [1, 2], "b": null}'), 'json');
+      expect(guessLanguage('{\n  "name": "x",\n  "version": 1,'), 'json', reason: 'still being typed');
+      expect(guessLanguage('"name": "x",\n"id": 4'), 'json', reason: 'a fragment');
+      expect(guessLanguage('[\n  {"a": 1},\n  {"a": 2}\n]'), 'json');
       expect(guessLanguage('<div class="a">hi</div>'), 'html');
       expect(guessLanguage('npm create @kenresoft-cms@latest my-site'), 'shell');
       expect(guessLanguage('pnpm run setup'), 'shell');

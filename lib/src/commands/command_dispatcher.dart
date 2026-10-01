@@ -41,6 +41,8 @@ class CommandDispatcher {
   /// typing does.
   EditorSelection insertText(EditorSelection selection, String text) {
     if (text == '\n') {
+      final exit = exitCodeBlock(selection);
+      if (exit != null) return exit;
       // Use relativeAttributes, not attributesForInsertion: the edit may
       // reconstruct pre-existing text (renumbered subsequent items) that
       // must keep its own formatting rather than inheriting sticky
@@ -60,6 +62,20 @@ class CommandDispatcher {
       text: text,
       attributesForInsertion: Map.of(engine.stickyAttributes),
     ));
+  }
+
+  /// Enter on the empty last line of a code block: empties the line and makes it
+  /// a normal paragraph (one undo step). Returns the caret, or `null` when
+  /// [selection] is not in that situation.
+  EditorSelection? exitCodeBlock(EditorSelection selection) {
+    final exit = engine.codeExitEdit(selection);
+    if (exit == null) return null;
+    final commands = <EditorCommand>[
+      if (exit.end > exit.start) ReplaceRangeCommand(start: exit.start, end: exit.end, text: ''),
+      SetHeaderLevelCommand(EditorSelection.collapsed(exit.start), null),
+    ];
+    dispatch(commands.length == 1 ? commands.first : CompositeCommand(commands));
+    return EditorSelection.collapsed(exit.start);
   }
 
   /// Deletes `selection`, then runs [EditingEngine.repairListNumbering]

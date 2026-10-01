@@ -202,6 +202,16 @@ void main() {
     expect(normalizeUrlToken('kix@gmail.com'), 'mailto:kix@gmail.com');
     expect(normalizeUrlToken('first.last+tag@sub.example.co.uk'), 'mailto:first.last+tag@sub.example.co.uk');
     expect(normalizeUrlToken('example.com'), 'https://example.com');
+    // telephone numbers: international, national with a leading 0, 3-3-4
+    expect(normalizeUrlToken('+2348012345678'), 'tel:+2348012345678');
+    expect(normalizeUrlToken('+1-800-555-0199'), 'tel:+18005550199');
+    expect(normalizeUrlToken('08012345678'), 'tel:08012345678');
+    expect(normalizeUrlToken('800-555-0199'), 'tel:8005550199');
+    expect(detectAllUrls('call +2348012345678 now').single.href, 'tel:+2348012345678');
+    // plain numbers are not phones
+    expect(normalizeUrlToken('12345678'), isNull);
+    expect(normalizeUrlToken('2026'), isNull);
+    expect(normalizeUrlToken('1,500.00'), isNull);
     expect(detectAllUrls('write kix@gmail.com now').single.href, 'mailto:kix@gmail.com');
     // links stored wrongly by an older build still open as mail
     expect(normalizeLinkUri('https://kix@gmail.com')?.toString(), 'mailto:kix@gmail.com');

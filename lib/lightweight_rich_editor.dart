@@ -20,4 +20,5 @@ export 'src/rendering/text_span_renderer.dart' show TextSpanRenderer;
 export 'src/rendering/editor_style.dart';
 export 'src/utils/string_utils.dart';
 export 'src/utils/list_prefix.dart';
-export 'src/utils/link_launcher.dart' show launchLinkUrl, confirmAndLaunchLink, normalizeLinkUri;
+export 'src/utils/link_launcher.dart' show launchLinkUrl, confirmAndLaunchLink, normalizeLinkUri, openLinkNow, linkDisplayTarget;
+export 'src/widgets/link_edit_sheet.dart' show showLinkSheetFor, showLinkEditSheet, LinkEditResult, hrefForInput;
