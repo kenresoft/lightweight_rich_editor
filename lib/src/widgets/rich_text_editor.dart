@@ -321,6 +321,10 @@ class RichTextEditor extends StatelessWidget {
   /// chooses. With `null` the button is not shown.
   final void Function(ImageRun run)? onSaveImage;
 
+  /// Called right after the user removed a picture with its Remove button, so the
+  /// host can offer "Undo" (the removal is a single undo step).
+  final VoidCallback? onImageRemoved;
+
   const RichTextEditor({
     super.key,
     required this.controller,
@@ -339,6 +343,7 @@ class RichTextEditor extends StatelessWidget {
     this.openLinksOnTap = false,
     this.onReplaceImage,
     this.onSaveImage,
+    this.onImageRemoved,
   });
 
   // The bar's Open is an explicit action: it opens at once, with no "Open link?"
@@ -1050,6 +1055,7 @@ class RichTextEditor extends StatelessWidget {
                         controller: controller,
                         onReplace: onReplaceImage,
                         onSave: onSaveImage,
+                        onRemoved: onImageRemoved,
                         scrollController: scrollController,
                         style: editorStyle,
                         leftInset: leftPad,
@@ -1100,6 +1106,7 @@ class _ImageActions extends StatelessWidget {
     required this.controller,
     required this.onReplace,
     required this.onSave,
+    required this.onRemoved,
     required this.scrollController,
     required this.style,
     required this.leftInset,
@@ -1110,6 +1117,7 @@ class _ImageActions extends StatelessWidget {
   final RichEditorController controller;
   final void Function(ImageRun run)? onReplace;
   final void Function(ImageRun run)? onSave;
+  final VoidCallback? onRemoved;
   final ScrollController scrollController;
   final RichEditorStyle style;
   final double leftInset;
@@ -1147,49 +1155,51 @@ class _ImageActions extends StatelessWidget {
                     Rect.fromLTRB(area.left, 0, area.right, innerHeight),
                     Size(image.width.toDouble(), image.height.toDouble()),
                   );
-            final right = drawn?.right ?? area.right;
 
-            // Smaller / Larger move the picture one row at a time. Larger stops where
-            // the picture is as wide as the text (more rows would only add empty
-            // room under it); Smaller, from there, first drops that spare room and
-            // then shrinks the picture. Each tap is a visible change.
-            VoidCallback? stepTo(int direction) {
-              final int target;
-              if (image == null || drawn == null) {
-                target = run.rows + direction;
-              } else {
-                final fullWidth = drawn.width >= area.width * 0.985;
-                final needed = ((area.width * image.height / image.width + 2 * RuledLinesPainter.imageInset) / pitch).ceil();
-                if (direction > 0) {
-                  if (fullWidth) return null;
-                  target = run.rows + 1;
-                } else {
-                  target = fullWidth ? math.min(run.rows - 1, needed - 1) : run.rows - 1;
-                }
+            // Named sizes, as a share of the text width. A picture's rows follow its
+            // height, so each size is the row count that gives that width; sizes that
+            // would land on the same rows are shown once. Without the decoded picture
+            // (still loading) there is nothing to size yet.
+            final presets = <_SizePreset>[];
+            var activeRows = run.rows;
+            if (image != null && drawn != null) {
+              final fullHeight = area.width * image.height / image.width;
+              final full = ((fullHeight + 2 * RuledLinesPainter.imageInset) / pitch).ceil().clamp(minImageRows, maxImageRows);
+              for (final (label, share) in const [('S', 0.4), ('M', 0.6), ('L', 0.8), ('Full', 1.0)]) {
+                final rows = share == 1.0 ? full : ((fullHeight * share + 2 * RuledLinesPainter.imageInset) / pitch).ceil().clamp(minImageRows, maxImageRows);
+                if (presets.isNotEmpty && presets.last.rows == rows) continue;
+                presets.add(_SizePreset(label, rows));
               }
-              if (target < minImageRows || target > maxImageRows || target == run.rows) {
-                return direction < 0 && run.rows > minImageRows && target < minImageRows
-                    ? () => controller.resizeImage(controller.selectedImageRun ?? run, minImageRows - (controller.selectedImageRun ?? run).rows)
-                    : null;
-              }
-              return () {
-                final current = controller.selectedImageRun ?? run;
-                controller.resizeImage(current, target - current.rows);
-              };
+              if (presets.length < 2) presets.clear();
+              // Spare rows under a full-width picture do not make it bigger.
+              activeRows = math.min(run.rows, full);
             }
 
-            // The controls sit in the picture's top-right corner; on a small picture
-            // (they would cover most of it, or hang off its left edge) they go
-            // beside it instead, in the free room to its right.
-            final pillWidth = _ImageButtons.widthFor((onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0));
-            final beside = drawn != null && drawn.width < pillWidth * 2.4 && area.right - drawn.right >= pillWidth + 12;
+            final barWidth = _ImageBar.widthFor(presets.length, (onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0) + 1);
+            final shownHeight = drawn?.height ?? (region.height - 2 * RuledLinesPainter.imageInset);
+            const gap = 8.0;
+            // Below the picture, so it is not covered; above it when the screen ends
+            // first (keyboard); on top of it only when neither fits.
+            double barTop = top + shownHeight + gap;
+            if (barTop + _ImageBar.height > constraints.maxHeight) {
+              barTop = top - _ImageBar.height - gap;
+              if (barTop < style.paddingTop) barTop = top + gap;
+            }
+            final maxLeft = math.max(area.left, constraints.maxWidth - rightInset - barWidth);
+            final barLeft = (drawn?.left ?? area.left).clamp(area.left, maxLeft).toDouble();
             return Stack(
               children: [
                 Positioned(
-                  top: top + 8,
-                  left: beside ? drawn.right + 10 : null,
-                  right: beside ? null : constraints.maxWidth - right + 8,
-                  child: _ImageButtons(controller: controller, onSmaller: stepTo(-1), onLarger: stepTo(1), onReplace: onReplace, onSave: onSave),
+                  top: barTop,
+                  left: barLeft,
+                  child: _ImageBar(
+                    controller: controller,
+                    presets: presets,
+                    activeRows: activeRows,
+                    onReplace: onReplace,
+                    onSave: onSave,
+                    onRemoved: onRemoved,
+                  ),
                 ),
               ],
             );
@@ -1200,21 +1210,40 @@ class _ImageActions extends StatelessWidget {
   }
 }
 
-class _ImageButtons extends StatelessWidget {
-  const _ImageButtons({required this.controller, required this.onSmaller, required this.onLarger, this.onReplace, this.onSave});
+class _SizePreset {
+  const _SizePreset(this.label, this.rows);
 
-  /// 36-wide buttons: Smaller, Larger, Remove, and Replace when the host offers it.
-  static double widthFor(int extras) => 108.0 + 36 * extras;
+  final String label;
+  final int rows;
+}
 
-  final void Function(ImageRun run)? onReplace;
-  final void Function(ImageRun run)? onSave;
+/// The bar under a selected picture: named sizes, then Replace / Save / Remove.
+/// Targets are 44 logical pixels or more, every action has a text label for
+/// screen readers, and Remove is tinted so it is not hit by mistake.
+class _ImageBar extends StatelessWidget {
+  const _ImageBar({
+    required this.controller,
+    required this.presets,
+    required this.activeRows,
+    required this.onReplace,
+    required this.onSave,
+    required this.onRemoved,
+  });
+
+  static const double height = 48;
+  static const double _chip = 44;
+
+  static double widthFor(int presets, int actions) => 12 + presets * _chip + (presets > 0 ? 9 : 0) + actions * _chip;
 
   final RichEditorController controller;
+  final List<_SizePreset> presets;
+  final int activeRows;
+  final void Function(ImageRun run)? onReplace;
+  final void Function(ImageRun run)? onSave;
+  final VoidCallback? onRemoved;
 
-  /// `null` when the picture cannot go smaller / larger.
-  final VoidCallback? onSmaller;
-  final VoidCallback? onLarger;
-
+  // Acts on the picture selected *now*: a tap may land before this bar has
+  // rebuilt from the previous action.
   void _act(void Function(ImageRun) action) {
     final current = controller.selectedImageRun;
     if (current != null) action(current);
@@ -1222,29 +1251,71 @@ class _ImageButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget button(IconData icon, String tooltip, VoidCallback? onTap) => IconButton(
-      tooltip: tooltip,
-      icon: Icon(icon, size: 18, color: onTap == null ? Colors.white38 : Colors.white),
-      visualDensity: VisualDensity.compact,
-      constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-      padding: EdgeInsets.zero,
-      onPressed: onTap,
+    // The preset nearest to the picture's current rows is the active one.
+    _SizePreset? active;
+    for (final p in presets) {
+      if (active == null || (p.rows - activeRows).abs() < (active.rows - activeRows).abs()) active = p;
+    }
+
+    Widget size(_SizePreset p) {
+      final on = identical(p, active);
+      return Semantics(
+        button: true,
+        selected: on,
+        label: 'Picture size ${p.label == 'Full' ? 'full width' : p.label}',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _act((run) => controller.resizeImage(run, p.rows - run.rows)),
+          child: Container(
+            width: _chip,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: on ? Colors.white24 : Colors.transparent, borderRadius: BorderRadius.circular(14)),
+            child: Text(
+              p.label,
+              style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: on ? FontWeight.w700 : FontWeight.w500),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget action(IconData icon, String label, VoidCallback onTap, {Color color = Colors.white}) => Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(width: _chip, height: _chip, child: Icon(icon, size: 21, color: color)),
+        ),
+      ),
     );
+
     return Material(
-      color: const Color(0xCC1C1B1F),
-      elevation: 3,
-      borderRadius: BorderRadius.circular(18),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Each acts on the picture selected *now* (a tap may land before this row
-          // has rebuilt from the previous one).
-          button(Icons.photo_size_select_small_rounded, 'Smaller', onSmaller),
-          button(Icons.photo_size_select_large_rounded, 'Larger', onLarger),
-          if (onSave != null) button(Icons.download_rounded, 'Save picture', () => _act(onSave!)),
-          if (onReplace != null) button(Icons.swap_horiz_rounded, 'Replace picture', () => _act(onReplace!)),
-          button(Icons.delete_outline_rounded, 'Remove picture', () => _act(controller.deleteImage)),
-        ],
+      color: const Color(0xEE1C1B1F),
+      elevation: 4,
+      borderRadius: BorderRadius.circular(height / 2),
+      child: SizedBox(
+        height: height,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final p in presets) size(p),
+              if (presets.isNotEmpty)
+                Container(width: 1, height: 22, margin: const EdgeInsets.symmetric(horizontal: 4), color: Colors.white24),
+              if (onSave != null) action(Icons.download_rounded, 'Save picture', () => _act(onSave!)),
+              if (onReplace != null) action(Icons.swap_horiz_rounded, 'Replace picture', () => _act(onReplace!)),
+              action(Icons.delete_outline_rounded, 'Remove picture', () {
+                _act(controller.deleteImage);
+                onRemoved?.call();
+              }, color: const Color(0xFFFFB4AB)),
+            ],
+          ),
+        ),
       ),
     );
   }

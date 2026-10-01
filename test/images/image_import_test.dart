@@ -153,7 +153,13 @@ void main() {
       c.selection = const TextSelection.collapsed(offset: 2);
       expect(await c.insertImageFromSource(_dataUri), isTrue);
       expect(c.document.paragraphs.records.any((x) => isImageLevel(x.headerLevel)), isTrue);
-      expect(await c.insertImageFromSource('https://127.0.0.1/x.png'), isFalse);
+      final imageRows = c.document.paragraphs.records.where((x) => isImageLevel(x.headerLevel)).length;
+      final text = c.text;
+      final pending = c.insertImageFromSource('https://127.0.0.1/x.png');
+      expect(c.document.paragraphs.records.any((x) => imageIdOf(x.headerLevel) == pendingImageId), isTrue, reason: 'its place shows at once, while it loads');
+      expect(await pending, isFalse);
+      expect(c.document.paragraphs.records.where((x) => isImageLevel(x.headerLevel)).length, imageRows, reason: 'a failed address leaves no empty block');
+      expect(c.text.replaceAll('\n', ''), text.replaceAll('\n', ''));
       expect(await RichEditorController(text: '').insertImageFromSource(_dataUri), isFalse, reason: 'no store');
     });
     test('replaceImageBytes swaps the picture in place, keeps the text around it, and is one undo step', () async {

@@ -40,11 +40,15 @@ extension RichEditorImages on RichEditorController {
   /// stores it and inserts it at the caret. Returns `false` if there is no
   /// [imageStore], or the address cannot be fetched or is not a picture. The
   /// picture is kept in the store, so the note shows it offline afterwards.
+  ///
+  /// The picture's place appears at once as a quiet card, filled in when the bytes
+  /// arrive (so a slow address is visibly "on its way"), and removed again if the
+  /// address fails.
   Future<bool> insertImageFromSource(String source) async {
     if (imageStore == null) return false;
-    final bytes = await loadImageSource(source);
-    if (bytes == null || disposed) return false;
-    return insertImageBytes(bytes);
+    final level = insertImageBlock(pendingImageId, rows: 6);
+    if (level == null) return false;
+    return _resolveImported(ImportedImage(level: level, source: source));
   }
 
   /// Fills in the placeholder blocks an import left for pictures ([items], from a
@@ -57,7 +61,9 @@ extension RichEditorImages on RichEditorController {
     await Future.wait([for (final item in items) _resolveImported(item)]);
   }
 
-  Future<void> _resolveImported(ImportedImage item) async {
+  // Fetches and shows one placeholder's picture; `false` when it could not be
+  // had (the placeholder is then removed).
+  Future<bool> _resolveImported(ImportedImage item) async {
     final store = imageStore;
     String? id;
     PreparedImage? prepared;
@@ -72,14 +78,15 @@ extension RichEditorImages on RichEditorController {
         }
       }
     }
-    if (disposed) return;
+    if (disposed) return false;
     final run = imageRunByLevel(item.level);
-    if (run == null) return; // deleted in the meantime
+    if (run == null) return id != null; // deleted in the meantime
     if (id == null || prepared == null || !isValidImageId(id)) {
       discardImage(run);
-      return;
+      return false;
     }
     _swapPicture(run, id, prepared);
+    return true;
   }
 
   // Shows the stored picture [id] in the block [run] (same place, same instance
@@ -134,9 +141,10 @@ extension RichEditorImages on RichEditorController {
   }
 
   /// Inserts the picture [id] (already in the store) as a block of [rows] rows at
-  /// the caret, with the caret left on the line after it.
-  void insertImageBlock(String id, {required int rows}) {
-    if (!isValidImageId(id)) return;
+  /// the caret, with the caret left on the line after it. Returns the block's
+  /// level (`img:<id>:<instance>`), or `null` if nothing was inserted.
+  String? insertImageBlock(String id, {required int rows}) {
+    if (!isValidImageId(id)) return null;
     final n = rows.clamp(minImageRows, maxImageRows);
     var sel = selection;
     if (!sel.isValid) sel = TextSelection.collapsed(offset: document.length);
@@ -161,6 +169,7 @@ extension RichEditorImages on RichEditorController {
       for (var i = 0; i < n; i++) SetHeaderLevelCommand(EditorSelection.collapsed(firstRow + i), level),
     ]));
     selection = TextSelection.collapsed(offset: firstRow + n);
+    return level;
   }
 
   /// Makes the picture [delta] rows taller (or shorter), within

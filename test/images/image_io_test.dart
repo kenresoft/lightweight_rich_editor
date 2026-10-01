@@ -351,7 +351,10 @@ void main() {
   });
 
   group('the editor', () {
+    var removedCalls = 0;
+
     Future<(RichEditorController, FakeStore)> pumpEditor(WidgetTester tester) async {
+      removedCalls = 0;
       final store = FakeStore()..files['pic'] = _png;
       final c = make('hello')..imageStore = store;
       addTearDown(c.dispose);
@@ -360,7 +363,7 @@ void main() {
       addTearDown(tester.view.reset);
       await tester.pumpWidget(MaterialApp(
         theme: ThemeData(fontFamily: 'Roboto'),
-        home: Scaffold(body: RichTextEditor(controller: c, scrollController: ScrollController(), autofocus: false)),
+        home: Scaffold(body: RichTextEditor(controller: c, scrollController: ScrollController(), autofocus: false, onImageRemoved: () => removedCalls++)),
       ));
       await tester.pump();
       return (c, store);
@@ -377,7 +380,7 @@ void main() {
       expect(c.imageCache!.peek('pic'), isNotNull);
     });
 
-    testWidgets('selecting a picture shows Smaller / Larger / Remove, hides the caret, and they work', (tester) async {
+    testWidgets('selecting a picture shows its bar (hides the caret); Remove works and tells the host', (tester) async {
       final (c, _) = await pumpEditor(tester);
       c.selection = const TextSelection.collapsed(offset: 5);
       c.insertImageBlock('pic', rows: 5);
@@ -388,25 +391,23 @@ void main() {
       c.focusNode.requestFocus();
       c.selection = TextSelection.collapsed(offset: run.start);
       await tester.pump();
-      expect(find.byTooltip('Larger'), findsOneWidget);
-      expect(find.byTooltip('Smaller'), findsOneWidget);
+      expect(find.byTooltip('Remove picture'), findsOneWidget);
       expect(tester.widget<TextField>(find.byType(TextField)).showCursor, isFalse);
-
-      await tester.tap(find.byTooltip('Larger'));
-      await tester.pump();
-      expect(c.imageRunAt(6)!.rows, 6);
-      await tester.tap(find.byTooltip('Smaller'));
-      await tester.pump();
-      expect(c.imageRunAt(6)!.rows, 5);
+      // Every control is a comfortable touch target.
+      final size = tester.getSize(find.ancestor(of: find.byIcon(Icons.delete_outline_rounded), matching: find.byType(InkWell)).first);
+      expect(size.shortestSide, greaterThanOrEqualTo(44));
 
       await tester.tap(find.byTooltip('Remove picture'));
       await tester.pump();
       expect(c.document.paragraphs.hasAnyImage, isFalse);
       expect(c.text, 'hello\n', reason: 'back to the text it was');
       expect(find.byTooltip('Remove picture'), findsNothing);
+      expect(removedCalls, 1, reason: 'the host is told, to offer Undo');
+      c.undo();
+      expect(c.document.paragraphs.hasAnyImage, isTrue, reason: 'and Undo brings it back');
     });
 
-    testWidgets('Smaller / Larger move a row at a time, Larger stops at the page width, and every tap is a visible change', (tester) async {
+    testWidgets('named sizes: S / M / L / Full set the picture\'s width, the active one is marked, and the bar never covers the picture', (tester) async {
       final (c, _) = await pumpEditor(tester);
       c.selection = const TextSelection.collapsed(offset: 5);
       c.insertImageBlock('pic', rows: 14); // more rows than a square picture needs for the full width
@@ -417,50 +418,45 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      IconButton button(IconData icon) => tester.widget<IconButton>(find.widgetWithIcon(IconButton, icon));
-      final smaller = Icons.photo_size_select_small_rounded;
-      final larger = Icons.photo_size_select_large_rounded;
       int rows() => c.imageRunAt(6)!.rows;
       Future<void> settle() async {
         await tester.pump();
         await tester.pump();
       }
 
-      expect(button(larger).onPressed, isNull, reason: 'already as wide as the page: nothing larger to show');
-      final start = rows();
+      expect(find.text('Full'), findsOneWidget);
+      expect(find.text('S'), findsOneWidget);
+      final spare = rows();
 
-      // Smaller: the first press drops the spare room (the picture keeps its size
-      // until it must shrink), and every press changes the block.
-      var previous = start;
-      var taps = 0;
-      while (button(smaller).onPressed != null && taps < 20) {
-        await tester.tap(find.byTooltip('Smaller'));
+      // Full drops the spare room (no bigger picture, no wasted rows).
+      await tester.tap(find.text('Full'));
+      await settle();
+      final full = rows();
+      expect(full, lessThan(spare));
+      expect(c.document.paragraphs.records.where((r) => isImageLevel(r.headerLevel)).length, full, reason: 'one whole block, nothing left over');
+
+      // Each size is its own, increasing, row count.
+      final seen = <String, int>{};
+      for (final label in ['S', 'M', 'L', 'Full']) {
+        if (find.text(label).evaluate().isEmpty) continue; // sizes that coincide are shown once
+        await tester.tap(find.text(label));
         await settle();
-        expect(rows(), lessThan(previous), reason: 'tap ${taps + 1} must change the block');
-        previous = rows();
-        taps++;
+        seen[label] = rows();
       }
-      expect(rows(), minImageRows, reason: 'down to the smallest');
-      // A small picture must not be covered by its own controls: they sit beside it.
+      expect(seen['S'], lessThan(seen['Full']!));
+      expect(seen['Full'], full);
+      final ordered = seen.values.toList();
+      expect([...ordered]..sort(), ordered, reason: 'S <= M <= L <= Full');
+
+      // The bar is under (or over) the picture, never on it.
+      await tester.tap(find.text('Full'));
+      await settle();
       final region = c.renderer.imageBlocks.single;
-      final pictureRight = tester.getTopLeft(find.byType(EditableText)).dx + (region.height - 8);
-      expect(tester.getTopLeft(find.byTooltip('Smaller')).dx, greaterThanOrEqualTo(pictureRight), reason: 'the controls are beside the picture, not over it');
-      expect(tester.getTopRight(find.byTooltip('Remove picture')).dx, lessThanOrEqualTo(tester.view.physicalSize.width), reason: 'and on screen');
-      expect(button(smaller).onPressed, isNull);
-      expect(button(larger).onPressed, isNotNull);
-
-      // Larger: one row per tap until the page width.
-      taps = 0;
-      while (button(larger).onPressed != null && taps < 20) {
-        await tester.tap(find.byTooltip('Larger'));
-        await settle();
-        expect(rows(), previous + 1, reason: 'one row per tap');
-        previous = rows();
-        taps++;
-      }
-      expect(button(larger).onPressed, isNull, reason: 'stopped at the page width');
-      expect(rows(), lessThanOrEqualTo(start));
-      expect(c.document.paragraphs.records.where((r) => isImageLevel(r.headerLevel)).length, rows(), reason: 'one whole block, nothing left over');
+      final editableTop = tester.getTopLeft(find.byType(EditableText)).dy;
+      final pictureTop = editableTop + region.top + RuledLinesPainter.imageInset;
+      final pictureBottom = pictureTop + region.height - 2 * RuledLinesPainter.imageInset;
+      final bar = tester.getRect(find.ancestor(of: find.byIcon(Icons.delete_outline_rounded), matching: find.byType(Material)).first);
+      expect(bar.top >= pictureBottom - 1 || bar.bottom <= pictureTop + 1, isTrue, reason: 'bar $bar vs picture $pictureTop..$pictureBottom');
     });
 
     testWidgets('the grid stays whole: every line is one row high with a picture in the note', (tester) async {
