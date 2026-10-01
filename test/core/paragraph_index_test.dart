@@ -145,6 +145,38 @@ void main() {
     });
   });
 
+  group('ParagraphIndex.applyDeletion — deleting a whole first paragraph', () {
+    test('what follows keeps its own level (a heading, a code line)', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB');
+      index.setHeaderLevel(0, 3, 'h1');
+      index.setHeaderLevel(4, 7, 'code');
+      index.applyDeletion(0, 4); // "AAA\n"
+      expect(index.records, [const ParagraphRecord(start: 0, end: 3, headerLevel: 'code')]);
+    });
+
+    test('a blank line above a heading: removing it leaves the heading a heading', () {
+      final index = ParagraphIndex.rebuild('\nTitle');
+      index.setHeaderLevel(1, 6, 'h1');
+      index.applyDeletion(0, 1); // the blank line's break
+      expect(index.records, [const ParagraphRecord(start: 0, end: 5, headerLevel: 'h1')]);
+    });
+
+    test('joining a line onto a non-empty one above still keeps the upper line\'s level', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB');
+      index.setHeaderLevel(0, 3, 'h1');
+      index.applyDeletion(3, 4); // Backspace at the start of BBB
+      expect(index.records, [const ParagraphRecord(start: 0, end: 6, headerLevel: 'h1')]);
+    });
+
+    test('deleting through the end of the last paragraph keeps the first paragraph\'s level', () {
+      final index = ParagraphIndex.rebuild('AAA\nBBB');
+      index.setHeaderLevel(0, 3, 'h2');
+      index.setHeaderLevel(4, 7, 'code');
+      index.applyDeletion(0, 7); // select all, delete
+      expect(index.records, [const ParagraphRecord(start: 0, end: 0, headerLevel: 'h2')]);
+    });
+  });
+
   group('ParagraphIndex.setHeaderLevel', () {
     test('sets on a single paragraph', () {
       final index = ParagraphIndex.rebuild('AAA\nBBB');

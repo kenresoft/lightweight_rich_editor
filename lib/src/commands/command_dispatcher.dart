@@ -1,5 +1,6 @@
 import '../commands/apply_attribute_command.dart';
 import '../commands/clear_formatting_command.dart';
+import '../commands/composite_command.dart';
 import '../commands/editor_command.dart';
 import '../commands/replace_range_command.dart';
 import '../commands/set_alignment_command.dart';
@@ -205,6 +206,18 @@ class CommandDispatcher {
     final edit = engine.listIndentEdit(selection, outdent: outdent);
     if (edit == null) return selection;
     return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+  }
+
+  /// Tab / Shift+Tab inside a code block: indent or outdent by two spaces (see
+  /// [EditingEngine.codeIndentEdits]) as one undo step. A no-op outside code.
+  EditorSelection indentCode(EditorSelection selection, {bool outdent = false}) {
+    final plan = engine.codeIndentEdits(selection, outdent: outdent);
+    if (plan == null) return selection;
+    final commands = [
+      for (final e in plan.edits) ReplaceRangeCommand(start: e.start, end: e.end, text: e.text),
+    ];
+    dispatch(commands.length == 1 ? commands.first : CompositeCommand(commands));
+    return plan.selection;
   }
 
   void clearFormatting(EditorSelection selection) {

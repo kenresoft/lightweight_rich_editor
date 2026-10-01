@@ -41,17 +41,26 @@ class HtmlExporter {
       });
 
     final buffer = StringBuffer();
-    ParagraphListType? openListType;
+    // One entry per open <ul>/<ol>, outermost first. Each has a <li> open while
+    // it is on the stack (closed when the next item or the list ends), so a
+    // nested list sits inside its parent item.
+    final listStack = <ParagraphListType>[];
     var pos = 0;
     var isFirstParagraph = true;
     var afterBlock = false;
     var prevBlockElement = false;
     var blockEnded = false;
 
+    String closeTag(ParagraphListType t) => t == ParagraphListType.bullet ? '</ul>' : '</ol>';
+
+    void closeLevel() {
+      buffer.write('</li>');
+      buffer.write(closeTag(listStack.removeLast()));
+    }
+
     void closeOpenList() {
-      if (openListType != null) {
-        buffer.write(openListType == ParagraphListType.bullet ? '</ul>' : '</ol>');
-        openListType = null;
+      while (listStack.isNotEmpty) {
+        closeLevel();
       }
     }
 
@@ -61,7 +70,7 @@ class HtmlExporter {
 
       final code = codeSpans.where((a) => a.start <= pos && a.end >= pos && a.end > a.start).firstOrNull;
       if (code != null) {
-        final wasList = openListType != null;
+        final wasList = listStack.isNotEmpty;
         closeOpenList();
         if (!isFirstParagraph && !afterBlock && !wasList && !prevBlockElement) buffer.write('<br>');
         prevBlockElement = true;
@@ -82,17 +91,36 @@ class HtmlExporter {
       final contentStart = pos + prefixLen;
 
       if (listType != null) {
-        if (openListType != listType) {
-          closeOpenList();
-          buffer.write(listType == ParagraphListType.bullet ? '<ul>' : '<ol>');
-          openListType = listType;
+        final prefix = text.substring(pos, contentStart);
+        // '  - ' is the editor's top-level item; every further 2 spaces is one
+        // level deeper. A list can only go one level deeper than the open one.
+        final indent = RegExp(r'^[ \t]*').stringMatch(prefix)!.replaceAll('\t', '  ').length;
+        final depth = (indent ~/ 2 - 1).clamp(0, listStack.length);
+        while (listStack.length > depth + 1) {
+          closeLevel();
+        }
+        if (listStack.length == depth + 1) {
+          if (listStack.last == listType) {
+            buffer.write('</li>');
+          } else {
+            closeLevel();
+          }
+        }
+        if (listStack.length == depth) {
+          if (listType == ParagraphListType.bullet) {
+            buffer.write('<ul>');
+          } else {
+            // A numbered list that does not start at 1 keeps its first number.
+            final first = int.tryParse(RegExp(r'\d+').stringMatch(prefix) ?? '');
+            buffer.write(first == null || first == 1 ? '<ol>' : '<ol start="$first">');
+          }
+          listStack.add(listType);
         }
         buffer.write('<li>');
         buffer.write(_renderInline(text, contentStart, paragraphEnd, sorted));
-        buffer.write('</li>');
         blockEnded = true;
       } else {
-        final wasList = openListType != null;
+        final wasList = listStack.isNotEmpty;
         closeOpenList();
         // A block element already ends its line; a <br> after it would add a
         // second break on re-import.

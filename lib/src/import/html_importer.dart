@@ -159,6 +159,9 @@ class _Run {
   // follows, so leading/trailing breaks cost nothing.
   int _sep = 0;
 
+  // Whether [_sep] was last raised by a block boundary (not by a `<br>`).
+  bool _gapFromBoundary = false;
+
   // An inter-word space seen but not yet written, with the formatting frames
   // of the node it came from; dropped if a line break wins.
   bool _pendingSpace = false;
@@ -184,7 +187,10 @@ class _Run {
   void _boundary(int gap) {
     if (_length == 0 || _length == _glueAt) return;
     final wanted = 1 + gap;
-    if (wanted > _sep) _sep = wanted;
+    if (wanted > _sep) {
+      _sep = wanted;
+      _gapFromBoundary = true;
+    }
     _pendingSpace = false;
   }
 
@@ -218,7 +224,17 @@ class _Run {
     if (tag == null || _skippedTags.contains(tag)) return;
     if (tag == 'br') {
       if (_length > 0) {
-        _sep += 1;
+        // A spacer `<br>` straight after a block that already owes its blank
+        // line (`</p><br><p>`, `</ul><br>`) is that same blank line, not a
+        // second one — otherwise re-importing what we export grows by a line
+        // per cycle. Only the first `<br>` is absorbed, so deliberate runs of
+        // them still count.
+        if (_gapFromBoundary && _sep >= 1 + paragraphGap && paragraphGap > 0) {
+          _gapFromBoundary = false;
+        } else {
+          _sep += 1;
+          _gapFromBoundary = false;
+        }
         _pendingSpace = false;
       }
       return;

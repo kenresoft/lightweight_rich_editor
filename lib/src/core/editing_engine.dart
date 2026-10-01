@@ -412,6 +412,71 @@ class EditingEngine {
     transactions.notify();
   }
 
+  /// The edits for Tab / Shift+Tab in a code block, or `null` when the caret is
+  /// not in one (or nothing would change). Tab with a caret inserts two spaces;
+  /// with a selection (or Shift+Tab) it indents / outdents every selected code
+  /// line by two spaces (a tab character counts as one level). Edits are ordered
+  /// last-to-first so each one's offsets stay valid when applied in sequence,
+  /// and [selection] is where the selection ends up.
+  ({List<({int start, int end, String text})> edits, EditorSelection selection})? codeIndentEdits(
+    EditorSelection selection, {
+    required bool outdent,
+  }) {
+    final paragraphs = document.paragraphs;
+    final first = paragraphs.paragraphAt(selection.start);
+    if (first == null || !isCodeBlockLevel(first.headerLevel)) return null;
+    if (selection.isCollapsed && !outdent) {
+      return (
+        edits: [(start: selection.start, end: selection.start, text: '  ')],
+        selection: EditorSelection.collapsed(selection.start + 2),
+      );
+    }
+
+    final text = document.text;
+    // A selection ending right after a line break does not include the next line.
+    var endPos = selection.end;
+    if (!selection.isCollapsed && endPos > selection.start && text.codeUnitAt(endPos - 1) == 0x0A) endPos--;
+    final records = paragraphs.records;
+    final startIndex = records.indexOf(first);
+    final endRecord = paragraphs.paragraphAt(endPos) ?? first;
+    final endIndex = records.indexOf(endRecord);
+    if (startIndex == -1 || endIndex == -1) return null;
+
+    final edits = <({int start, int end, String text})>[];
+    for (var i = startIndex; i <= endIndex; i++) {
+      final r = records[i];
+      if (!isCodeBlockLevel(r.headerLevel) || r.start == r.end) continue;
+      if (!outdent) {
+        edits.add((start: r.start, end: r.start, text: '  '));
+      } else {
+        var n = 0;
+        if (text.codeUnitAt(r.start) == 0x09) {
+          n = 1;
+        } else {
+          while (n < 2 && r.start + n < r.end && text.codeUnitAt(r.start + n) == 0x20) {
+            n++;
+          }
+        }
+        if (n > 0) edits.add((start: r.start, end: r.start + n, text: ''));
+      }
+    }
+    if (edits.isEmpty) return null;
+
+    int shift(int pos) {
+      var out = pos;
+      for (final e in edits) {
+        if (e.start >= pos) continue;
+        out += e.text.length - (e.end < pos ? e.end - e.start : pos - e.start);
+      }
+      return out;
+    }
+
+    return (
+      edits: edits.reversed.toList(),
+      selection: EditorSelection(baseOffset: shift(selection.baseOffset), extentOffset: shift(selection.extentOffset)),
+    );
+  }
+
   /// Pure query, no mutation. Answers "if a space were inserted right
   /// now at `spaceInsertPos`, would this be a markdown-style header
   /// shortcut (`'# '`/`'## '`/.../`'###### '`)?" — `null` if not.
@@ -453,8 +518,10 @@ class EditingEngine {
 
     // Inside a code block Enter is a plain newline: the new line stays in the
     // block (ParagraphIndex) and a leading '- '/'1. ' is code, not a list.
+    // The new line keeps the indentation typed so far on this one.
     if (isCodeBlockLevel(document.paragraphs.paragraphAt(caret)?.headerLevel)) {
-      return (start: caret, end: caret, text: '\n');
+      final indent = RegExp(r'^[ \t]*').stringMatch(text.substring(paragraphStart, caret)) ?? '';
+      return (start: caret, end: caret, text: '\n$indent');
     }
 
     final beforeCaret = text.substring(paragraphStart, caret);

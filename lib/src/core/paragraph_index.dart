@@ -152,7 +152,8 @@ class ParagraphIndex {
   /// Unlike an attribute span, a paragraph record can never simply
   /// vanish — paragraphs partition the whole document with no gaps — so
   /// every record whose separating `'\n'` falls inside the deleted range
-  /// merges into one, keeping the *leftmost* record's block metadata.
+  /// merges into one, keeping the *leftmost* record's block metadata (or the
+  /// last one's when the whole first paragraph is deleted; see below).
   void applyDeletion(int start, int end) {
     if (end <= start) return;
     final deletedLength = end - start;
@@ -164,12 +165,20 @@ class ParagraphIndex {
 
     final first = _records[firstAffected];
     final last = _records[lastAffected];
+    // Deleting a whole paragraph — from its first character through its line
+    // break — leaves what follows as it was (a heading or code line that
+    // follows is not turned into the deleted paragraph's kind). Otherwise the
+    // leftmost paragraph wins, as when a line break is deleted between two
+    // paragraphs. Deleting through the very end of the last paragraph keeps the
+    // leftmost one too: nothing of the last paragraph is left to inherit from.
+    final consumesFirst = start == first.start && end > first.end && end < last.end;
+    final base = consumesFirst ? last : first;
     final merged = ParagraphRecord(
       start: first.start,
       end: last.end - deletedLength,
-      headerLevel: first.headerLevel,
-      alignment: first.alignment,
-      textDirection: first.textDirection,
+      headerLevel: base.headerLevel,
+      alignment: base.alignment,
+      textDirection: base.textDirection,
     );
 
     final tail = _records

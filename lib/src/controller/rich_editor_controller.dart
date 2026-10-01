@@ -659,6 +659,11 @@ class RichEditorController extends TextEditingController {
   void indentList() => _syncSelection(commands.indentList(_currentSelection));
   void outdentList() => _syncSelection(commands.outdentList(_currentSelection));
 
+  /// Tab / Shift+Tab in a code block: two-space indent / outdent of the caret
+  /// line or the selected lines. No-op outside a code block.
+  void indentCode() => _syncSelection(commands.indentCode(_currentSelection));
+  void outdentCode() => _syncSelection(commands.indentCode(_currentSelection, outdent: true));
+
   /// Whether the paragraph containing the current selection starts with
   /// a literal prefix of `type` — drives the list toolbar buttons'
   /// active state.
@@ -787,29 +792,44 @@ class RichEditorController extends TextEditingController {
 
   /// Turns the selected paragraphs into a code block (optionally labelled),
   /// or back into ordinary paragraphs if they already are one.
+  ///
+  /// Turning it off applies to the whole block the caret or selection is in,
+  /// not just the line the caret happens to be on.
   void toggleCodeBlock({String? language}) {
-    commands.setHeader(_currentSelection, isCodeBlockActive ? null : codeBlockLevelFor(language));
+    if (!isCodeBlockActive) {
+      commands.setHeader(_currentSelection, codeBlockLevelFor(language));
+      return;
+    }
+    final sel = _currentSelection;
+    final run = _codeBlockRun(sel.start, sel.end);
+    commands.setHeader(run == null ? sel : EditorSelection(baseOffset: run.start, extentOffset: run.end), null);
   }
 
-  /// Sets (or clears, with `null`) the language label of the whole code
-  /// block containing the caret.
-  void setCodeBlockLanguage(String? language) {
-    final sel = _currentSelection;
+  // The whole code block(s) touched by `[start, end]`: from the first line of
+  // the block containing `start` to the last line of the one containing `end`.
+  ({int start, int end})? _codeBlockRun(int start, int end) {
     final records = document.paragraphs.records;
-    final at = records.indexWhere((r) => r.contains(sel.start));
-    if (at == -1 || !isCodeBlockLevel(records[at].headerLevel)) return;
-    var first = at;
-    var last = at;
+    final a = records.indexWhere((r) => r.contains(start));
+    final b = records.indexWhere((r) => r.contains(end));
+    if (a == -1 || b == -1 || !isCodeBlockLevel(records[a].headerLevel)) return null;
+    var first = a;
+    var last = b;
     while (first > 0 && isCodeBlockLevel(records[first - 1].headerLevel)) {
       first--;
     }
     while (last < records.length - 1 && isCodeBlockLevel(records[last + 1].headerLevel)) {
       last++;
     }
-    commands.setHeader(
-      EditorSelection(baseOffset: records[first].start, extentOffset: records[last].end),
-      codeBlockLevelFor(language),
-    );
+    return (start: records[first].start, end: records[last].end);
+  }
+
+  /// Sets (or clears, with `null`) the language label of the whole code
+  /// block containing the caret.
+  void setCodeBlockLanguage(String? language) {
+    final sel = _currentSelection;
+    final run = _codeBlockRun(sel.start, sel.start);
+    if (run == null) return;
+    commands.setHeader(EditorSelection(baseOffset: run.start, extentOffset: run.end), codeBlockLevelFor(language));
   }
 
   /// The exact text of the code block spanning `[start, end)` (a

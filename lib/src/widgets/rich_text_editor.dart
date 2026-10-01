@@ -70,12 +70,14 @@ class _IndentListAction extends Action<IndentListIntent> {
 
   @override
   bool get isActionEnabled =>
+      controller.isCodeBlockActive ||
       controller.isListActive(ParagraphListType.bullet) ||
       controller.isListActive(ParagraphListType.numbered);
 
   @override
   Object? invoke(IndentListIntent intent) {
-    controller.indentList();
+    // In code Tab is an indent, not a list operation (and never moves focus).
+    controller.isCodeBlockActive ? controller.indentCode() : controller.indentList();
     return null;
   }
 }
@@ -86,12 +88,13 @@ class _OutdentListAction extends Action<OutdentListIntent> {
 
   @override
   bool get isActionEnabled =>
+      controller.isCodeBlockActive ||
       controller.isListActive(ParagraphListType.bullet) ||
       controller.isListActive(ParagraphListType.numbered);
 
   @override
   Object? invoke(OutdentListIntent intent) {
-    controller.outdentList();
+    controller.isCodeBlockActive ? controller.outdentCode() : controller.outdentList();
     return null;
   }
 }
