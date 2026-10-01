@@ -1,3 +1,5 @@
+import 'dart:ui' as ui show BoxHeightStyle;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
@@ -273,6 +275,10 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   List<double>? _cachedLineBottoms;
   List<CodeBlockRegion> _cachedCodeBlocks = const [];
   List<BlankLineRegion> _cachedBlankLines = const [];
+  List<Rect> _cachedInlineCode = const [];
+
+  /// Inline-code boxes (cached with [codeBlocks]).
+  List<Rect> get inlineCodeRects => _cachedInlineCode;
 
   /// The code blocks of the document as of the last [lineBottomOffsets] call
   /// (cached under the same key, so it is as fresh as the bottoms it came with).
@@ -399,6 +405,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
     _cachedLineBottoms = bottoms;
     _cachedCodeBlocks = _codeRegions(document, painter, bottoms);
+    _cachedInlineCode = _inlineCodeRects(document, painter);
     _cachedBlankLines = _blankLineRegions(document, painter, bottoms);
     _cachedLineBottomsText = text;
     _cachedLineBottomsRevision = revision;
@@ -412,6 +419,29 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedLineBottomsDpr = devicePixelRatio;
     _cachedLineBottomsTheme = theme;
     return bottoms;
+  }
+
+  // Inline `code` runs as one tight box per visual line (glyph height, not row
+  // height), in the same coordinates as the text. The paper layer paints them as
+  // rounded pills behind the text; a text background could only be a flat
+  // full-row rectangle. Code inside a code-block paragraph is skipped (the block
+  // is its own surface).
+  List<Rect> _inlineCodeRects(EditorDocument document, TextPainter painter) {
+    final out = <Rect>[];
+    for (final span in document.attributes) {
+      if (span.type != AttributeType.code || span.end <= span.start) continue;
+      if (out.length >= 4000) break;
+      final para = document.paragraphs.paragraphAt(span.start);
+      if (para != null && isCodeBlockLevel(para.headerLevel)) continue;
+      out.addAll([
+        for (final box in painter.getBoxesForSelection(
+          TextSelection(baseOffset: span.start, extentOffset: span.end),
+          boxHeightStyle: ui.BoxHeightStyle.tight,
+        ))
+          if (box.right > box.left) box.toRect(),
+      ]);
+    }
+    return out;
   }
 
   // Every empty paragraph that has a line break of its own (so not the last
@@ -1148,9 +1178,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
                       ? theme.otherMatchesHighlightColor
                       : (isActive(AttributeType.highlight)
                             ? theme.highlightColor
-                            : (isCode
-                                  ? theme.codeBackgroundColor
-                                  : baseStyle?.backgroundColor)))),
+                            // Inline code is a rounded pill painted by the paper
+                            // layer (see inlineCodeRects), not a flat text background.
+                            : baseStyle?.backgroundColor))),
       decoration: decorations.isEmpty
           ? TextDecoration.none
           : TextDecoration.combine(decorations),

@@ -805,6 +805,10 @@ class RichTextEditor extends StatelessWidget {
                                         lineBottoms: lineBottoms,
                                         codeBlocks: controller.renderer.codeBlocks,
                                         codeBlockColor: editorStyle.codeBlockColor,
+                                        codeBorderColor: editorStyle.codeBlockLabelColor.withValues(alpha: 0.22),
+                                        inlineCode: controller.renderer.inlineCodeRects,
+                                        inlineCodeLeft: leftPad,
+                                        inlineCodeColor: editorStyle.codeBlockColor,
                                         codeLeft: leftPad - 8,
                                         codeRight: totalWidth - editorStyle.paddingRight + 8,
                                         fallbackLineHeight: metrics.pitch,
@@ -1008,7 +1012,7 @@ class _CodeBlockActions extends StatelessWidget {
               final inside = !aboveIsClear && firstRowIsClear;
               children.add(
                 Positioned(
-                  top: inside ? top + 2 : (top - 21).clamp(style.paddingTop, double.infinity),
+                  top: inside ? top + 7 : (top - 16).clamp(style.paddingTop, double.infinity),
                   right: rightInset - 4,
                   child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
                 ),

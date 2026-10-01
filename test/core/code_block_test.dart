@@ -261,7 +261,7 @@ void main() {
   });
 
   group('ruled-paper layer', () {
-    test('paints a rounded background, and no paper rule runs through the block', () {
+    test('paints an inset rounded card (fill and border), and the paper rules run on through it', () {
       final l = lay('one\ntwo\nthree\nfour\nfive', attrs: [codeSpan(4, 13)], dpr: 1.0);
       final canvas = _Canvas();
       RuledLinesPainter(
@@ -276,19 +276,18 @@ void main() {
         lineStyle: RuledLineStyle.solid,
         marginLineX: 44,
       ).paint(canvas, const Size(400, 400));
-      expect(canvas.rrects.length, 1);
-      final rr = canvas.rrects.single;
+      expect(canvas.rrects.length, 2, reason: 'fill and hairline border');
+      final rr = canvas.rrects.first;
       final block = l.renderer.codeBlocks.single;
-      expect(rr.top, closeTo(12 + block.top + 1, 0.01));
-      expect(rr.bottom, closeTo(12 + block.bottom - 1, 0.01));
+      expect(rr.top, closeTo(12 + block.top + RuledLinesPainter.codeBlockInsetTop, 0.01));
+      expect(rr.bottom, closeTo(12 + block.bottom - RuledLinesPainter.codeBlockInsetBottom, 0.01));
       expect(rr.left, 10);
       expect(rr.tlRadius.x, greaterThan(0));
       final top = 12 + block.top;
       final bottom = 12 + block.bottom;
-      for (final y in canvas.lineYs) {
-        expect(y > top + 0.5 && y <= bottom + 0.5, isFalse, reason: 'rule at $y inside the code block [$top,$bottom]');
-      }
-      // rules above and below are still there
+      // the ruling is not cut out of the block: a rule at every row inside it
+      expect(canvas.lineYs.where((y) => y > top + 0.5 && y <= bottom + 0.5).length, 2);
+      // and above and below it as before
       expect(canvas.lineYs.any((y) => y <= top + 0.5), isTrue);
       expect(canvas.lineYs.any((y) => y > bottom + 0.5), isTrue);
     });
@@ -306,8 +305,8 @@ void main() {
         lineStyle: RuledLineStyle.none,
         marginLineX: 44,
       ).paint(canvas, const Size(400, 600));
-      expect(canvas.rrects, hasLength(1));
-      expect(canvas.rrects.single.top, lessThan(120), reason: 'the rect itself starts above the text area');
+      expect(canvas.rrects, hasLength(2));
+      expect(canvas.rrects.first.top, lessThan(120), reason: 'the rect itself starts above the text area');
       expect(canvas.clips, isNotEmpty);
       expect(canvas.clips.first.top, 120, reason: 'but the layer is clipped at the text area top');
     });
