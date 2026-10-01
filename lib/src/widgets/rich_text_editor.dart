@@ -916,6 +916,7 @@ class RichTextEditor extends StatelessWidget {
                         scrollController: scrollController,
                         style: editorStyle,
                         rightInset: editorStyle.paddingRight,
+                        textLeft: leftPad,
                         // Same call (same cache key) as the painter's, so the
                         // regions are current even if this layer rebuilds
                         // before the painter's does.
@@ -965,6 +966,7 @@ class _CodeBlockActions extends StatelessWidget {
     required this.scrollController,
     required this.style,
     required this.rightInset,
+    required this.textLeft,
     required this.regions,
   });
 
@@ -972,6 +974,7 @@ class _CodeBlockActions extends StatelessWidget {
   final ScrollController scrollController;
   final RichEditorStyle style;
   final double rightInset;
+  final double textLeft;
   final List<CodeBlockRegion> Function() regions;
 
   @override
@@ -993,11 +996,19 @@ class _CodeBlockActions extends StatelessWidget {
               // Hidden once the block's top edge has scrolled under the text
               // area's top (the header above the editor is not part of it).
               if (top < style.paddingTop - 1 || top > constraints.maxHeight) continue;
+              // Where the chip goes, by what is actually there: hanging on the
+              // block's top edge (over the row above) when that row's text stops
+              // short of the chip; otherwise inside the block's first row when
+              // that text does; otherwise on the edge anyway.
+              final label = block.language ?? 'code';
+              final chipWidth = 36 + label.length * 6.6;
+              final chipLeft = constraints.maxWidth - (rightInset - 4) - chipWidth - 6;
+              final aboveIsClear = textLeft + block.previousLineRight < chipLeft;
+              final firstRowIsClear = textLeft + block.firstLineRight < chipLeft;
+              final inside = !aboveIsClear && firstRowIsClear;
               children.add(
                 Positioned(
-                  // Hangs on the block's top edge, over the gap above it, so a long
-                  // first line is never covered; a block at the very top keeps it inside.
-                  top: (top - 21).clamp(style.paddingTop, double.infinity),
+                  top: inside ? top + 2 : (top - 21).clamp(style.paddingTop, double.infinity),
                   right: rightInset - 4,
                   child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
                 ),

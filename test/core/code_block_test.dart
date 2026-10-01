@@ -312,6 +312,26 @@ void main() {
       expect(canvas.clips.first.top, 120, reason: 'but the layer is clipped at the text area top');
     });
 
+    test('regions report the text extent of their first row and of the row above', () {
+      // blank row above, short first line
+      var l = lay('intro\n\nvoid f() {}\nafter', attrs: [codeSpan(7, 18)], dpr: 1.0, width: 400);
+      var r = l.renderer.codeBlocks.single;
+      expect(r.previousLineRight, 0, reason: 'a blank row above has no text to collide with');
+      expect(r.firstLineRight, greaterThan(40));
+      expect(r.firstLineRight, lessThan(200));
+
+      // a long line directly above (it wraps; its last row reaches into the margin)
+      final long = List.filled(14, 'wordy').join(' ');
+      l = lay('$long\ncode', attrs: [codeSpan(long.length + 1, long.length + 5)], dpr: 1.0, width: 400);
+      r = l.renderer.codeBlocks.single;
+      expect(r.previousLineRight, greaterThan(0));
+
+      // first block line wider than the row: right edge near the wrap width
+      final wide = List.filled(60, 'x').join();
+      l = lay(wide, attrs: [codeSpan(0, wide.length)], dpr: 1.0, width: 400);
+      expect(l.renderer.codeBlocks.single.firstLineRight, greaterThan(300));
+    });
+
     test('a block scrolled out of view paints nothing', () {
       final l = lay('a\nb', attrs: [codeSpan(0, 1)]);
       final canvas = _Canvas();
@@ -458,6 +478,26 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.document.paragraphs.records.first.headerLevel, 'code');
       expect(c.document.text, 'x\ny');
+    });
+
+    testWidgets('the chip does not sit on text: above a block when the row above is clear, inside when it is not', (tester) async {
+      Future<(double chipY, double codeY)> place(String text, int codeStart, int codeEnd) async {
+        final c = make(text, [codeSpan(codeStart, codeEnd)]);
+        addTearDown(c.dispose);
+        await pump(tester, c);
+        final chipY = tester.getTopLeft(find.text('code')).dy;
+        final codeY = tester.getTopLeft(find.byType(EditableText)).dy + c.renderer.codeBlocks.single.top;
+        return (chipY, codeY);
+      }
+
+      // a blank row above: the chip hangs over it
+      final clear = await place('intro\n\nx = 1', 7, 12);
+      expect(clear.$1, lessThan(clear.$2), reason: 'chip ${clear.$1} should hang above the block at ${clear.$2}');
+
+      // a long line directly above whose last row runs under the chip's corner
+      final long = '${List.filled(11, 'wordy').join(' ')} ${'z' * 28}';
+      final blocked = await place('$long\nx = 1', long.length + 1, long.length + 6);
+      expect(blocked.$1, greaterThanOrEqualTo(blocked.$2), reason: 'chip ${blocked.$1} should be inside the block at ${blocked.$2}');
     });
 
     testWidgets('no chip without code blocks', (tester) async {

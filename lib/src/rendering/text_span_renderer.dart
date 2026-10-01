@@ -452,6 +452,17 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       return lo;
     }
 
+    // Right edge of the visual line containing [offset]; 0 for an empty line.
+    double lineRight(int offset) {
+      final range = painter.getLineBoundary(TextPosition(offset: offset));
+      if (range.isCollapsed) return 0.0;
+      var right = 0.0;
+      for (final box in painter.getBoxesForSelection(TextSelection(baseOffset: range.start, extentOffset: range.end))) {
+        if (box.right > right) right = box.right;
+      }
+      return right;
+    }
+
     void emit(ParagraphRecord first, ParagraphRecord last) {
       final a = lineIndexAt(first.start);
       final b = lineIndexAt(last.end);
@@ -461,6 +472,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         start: first.start,
         end: last.end,
         language: codeBlockLanguage(first.headerLevel),
+        firstLineRight: lineRight(first.start),
+        previousLineRight: first.start == 0 ? 0.0 : lineRight(first.start - 1),
       ));
     }
 
