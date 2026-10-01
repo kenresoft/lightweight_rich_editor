@@ -1071,6 +1071,29 @@ class _CodeLanguageDialog extends StatefulWidget {
   State<_CodeLanguageDialog> createState() => _CodeLanguageDialogState();
 }
 
+// Offered as one-tap choices; anything else can be typed.
+const _commonLanguages = <(String, String)>[
+  ('Dart', 'dart'),
+  ('JavaScript', 'javascript'),
+  ('TypeScript', 'typescript'),
+  ('Python', 'python'),
+  ('Java', 'java'),
+  ('Kotlin', 'kotlin'),
+  ('Swift', 'swift'),
+  ('C', 'c'),
+  ('C++', 'cpp'),
+  ('C#', 'csharp'),
+  ('Go', 'go'),
+  ('Rust', 'rust'),
+  ('HTML', 'html'),
+  ('CSS', 'css'),
+  ('JSON', 'json'),
+  ('YAML', 'yaml'),
+  ('SQL', 'sql'),
+  ('Shell', 'shell'),
+  ('Markdown', 'markdown'),
+];
+
 class _CodeLanguageDialogState extends State<_CodeLanguageDialog> {
   late final TextEditingController _field = TextEditingController(text: widget.initial);
 
@@ -1084,11 +1107,28 @@ class _CodeLanguageDialogState extends State<_CodeLanguageDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Code language'),
-      content: TextField(
-        controller: _field,
-        autofocus: true,
-        decoration: const InputDecoration(hintText: 'e.g. dart (leave empty for none)'),
-        onSubmitted: (v) => Navigator.pop(context, v),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _field,
+              decoration: const InputDecoration(hintText: 'e.g. dart (leave empty for none)'),
+              onSubmitted: (v) => Navigator.pop(context, v),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 0,
+              children: [
+                ActionChip(label: const Text('Plain text'), onPressed: () => Navigator.pop(context, '')),
+                for (final (label, value) in _commonLanguages)
+                  ActionChip(label: Text(label), onPressed: () => Navigator.pop(context, value)),
+              ],
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),

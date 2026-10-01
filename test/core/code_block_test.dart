@@ -443,6 +443,23 @@ void main() {
       expect(find.text('kotlin'), findsOneWidget);
     });
 
+    testWidgets('the language dialog offers one-tap common languages and Plain text', (tester) async {
+      final c = make('x\ny', [codeSpan(0, 1)]);
+      addTearDown(c.dispose);
+      await pump(tester, c);
+      await tester.tap(find.text('code'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ActionChip, 'Python'));
+      await tester.pumpAndSettle();
+      expect(c.document.paragraphs.records.first.headerLevel, 'code:python');
+      await tester.tap(find.text('python'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ActionChip, 'Plain text'));
+      await tester.pumpAndSettle();
+      expect(c.document.paragraphs.records.first.headerLevel, 'code');
+      expect(c.document.text, 'x\ny');
+    });
+
     testWidgets('no chip without code blocks', (tester) async {
       final c = make('just text');
       addTearDown(c.dispose);
