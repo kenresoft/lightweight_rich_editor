@@ -79,8 +79,15 @@ extension RichEditorImages on RichEditorController {
       discardImage(run);
       return;
     }
+    _swapPicture(run, id, prepared);
+  }
+
+  // Shows the stored picture [id] in the block [run] (same place, same instance
+  // tag), with as many rows as the new picture's shape asks for, as one undo
+  // step. The caret keeps its place in the text around the block.
+  void _swapPicture(ImageRun run, String id, PreparedImage prepared) {
     final target = rowsForImage(prepared.width, prepared.height);
-    final instance = item.level.substring(item.level.lastIndexOf(':') + 1);
+    final instance = run.level.substring(run.level.lastIndexOf(':') + 1);
     final level = imageLevelFor(id, instance);
     final delta = target - run.rows;
     final cmds = <EditorCommand>[
@@ -94,6 +101,36 @@ extension RichEditorImages on RichEditorController {
       int map(int o) => o >= run.end ? o + delta : (o > run.start + target ? run.start + target : o);
       selection = TextSelection(baseOffset: map(old.baseOffset), extentOffset: map(old.extentOffset));
     }
+  }
+
+  /// Replaces the picture of the block [run] with [bytes]: same place in the note,
+  /// one undo step. Returns `false` (and changes nothing) if there is no
+  /// [imageStore], [bytes] is not a picture, or the block is gone.
+  Future<bool> replaceImageBytes(ImageRun run, Uint8List bytes) async {
+    final store = imageStore;
+    if (store == null) return false;
+    final prepared = await prepareImage(bytes);
+    if (prepared == null) return false;
+    final String id;
+    try {
+      id = await store.save(prepared.bytes);
+    } catch (_) {
+      return false;
+    }
+    if (disposed || !isValidImageId(id)) return false;
+    final current = imageRunByLevel(run.level); // it may have moved while the bytes were read
+    if (current == null) return false;
+    _swapPicture(current, id, prepared);
+    return true;
+  }
+
+  /// Like [replaceImageBytes], with the new picture fetched from a web address or
+  /// a `data:image/...` URI.
+  Future<bool> replaceImageFromSource(ImageRun run, String source) async {
+    if (imageStore == null) return false;
+    final bytes = await loadImageSource(source);
+    if (bytes == null || disposed) return false;
+    return replaceImageBytes(run, bytes);
   }
 
   /// Inserts the picture [id] (already in the store) as a block of [rows] rows at

@@ -156,6 +156,31 @@ void main() {
       expect(await c.insertImageFromSource('https://127.0.0.1/x.png'), isFalse);
       expect(await RichEditorController(text: '').insertImageFromSource(_dataUri), isFalse, reason: 'no store');
     });
+    test('replaceImageBytes swaps the picture in place, keeps the text around it, and is one undo step', () async {
+      final store = _Store();
+      final c = RichEditorController(text: 'above', theme: notebookTheme)..imageStore = store;
+      addTearDown(c.dispose);
+      c.selection = const TextSelection.collapsed(offset: 5);
+      await c.insertImageBytes(base64Decode(_pngBase64));
+      c.insertText('below');
+      final before = c.imageRunAt(6)!;
+      expect(before.id, 'img1');
+
+      expect(await c.replaceImageBytes(before, base64Decode(_pngBase64)), isTrue);
+      final after = c.imageRunAt(6)!;
+      expect(after.id, 'img2', reason: 'the new picture is shown');
+      expect(after.start, before.start);
+      expect(after.level.split(':').last, before.level.split(':').last, reason: 'still the same block');
+      expect(c.text.startsWith('above'), isTrue);
+      expect(c.text.endsWith('below'), isTrue);
+
+      c.commands.undo();
+      expect(c.imageRunAt(6)!.id, 'img1', reason: 'one undo restores the old picture');
+      expect(await c.replaceImageBytes(before, Uint8List.fromList([1, 2, 3])), isFalse, reason: 'not a picture: nothing changes');
+      expect(c.imageRunAt(6)!.id, 'img1');
+      expect(await c.replaceImageFromSource(c.imageRunAt(6)!, _dataUri), isTrue);
+      expect(c.imageRunAt(6)!.id, 'img3');
+    });
   });
 }
 

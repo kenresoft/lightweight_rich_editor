@@ -39,7 +39,7 @@ Future<Uint8List?> loadImageSource(
 Future<Uint8List?> _fetch(HttpClient client, Uri uri, int maxBytes) async {
   final request = await client.getUrl(uri);
   request.headers.set(HttpHeaders.acceptHeader, 'image/*,*/*;q=0.5');
-  request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (compatible; NotebookImageFetch)');
+  request.headers.set(HttpHeaders.userAgentHeader, 'ENotebook/1.0 (note app; fetching a picture the user added)');
   request.followRedirects = true;
   request.maxRedirects = 5;
   final response = await request.close();

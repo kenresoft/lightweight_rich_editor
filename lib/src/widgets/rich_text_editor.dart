@@ -309,6 +309,18 @@ class RichTextEditor extends StatelessWidget {
   /// recognizers, which Flutter does not support inside an editable field.
   final bool openLinksOnTap;
 
+  /// Called when the user taps "Replace picture" on the selected picture. The
+  /// editor does not know where pictures come from (gallery, camera, a web
+  /// address): the host asks, then calls `replaceImageBytes` /
+  /// `replaceImageFromSource` on the controller. With `null` (the default) the
+  /// button is not shown.
+  final void Function(ImageRun run)? onReplaceImage;
+
+  /// Called when the user taps "Save picture" on the selected picture; the host
+  /// reads the bytes (`imageStore.load(run.id)`) and writes them where the user
+  /// chooses. With `null` the button is not shown.
+  final void Function(ImageRun run)? onSaveImage;
+
   const RichTextEditor({
     super.key,
     required this.controller,
@@ -325,6 +337,8 @@ class RichTextEditor extends StatelessWidget {
     this.autofocus = true,
     this.placeholder,
     this.openLinksOnTap = false,
+    this.onReplaceImage,
+    this.onSaveImage,
   });
 
   // The bar's Open is an explicit action: it opens at once, with no "Open link?"
@@ -1034,6 +1048,8 @@ class RichTextEditor extends StatelessWidget {
                     Positioned.fill(
                       child: _ImageActions(
                         controller: controller,
+                        onReplace: onReplaceImage,
+                        onSave: onSaveImage,
                         scrollController: scrollController,
                         style: editorStyle,
                         leftInset: leftPad,
@@ -1082,6 +1098,8 @@ String _chipLabel(CodeBlockRegion block) {
 class _ImageActions extends StatelessWidget {
   const _ImageActions({
     required this.controller,
+    required this.onReplace,
+    required this.onSave,
     required this.scrollController,
     required this.style,
     required this.leftInset,
@@ -1090,6 +1108,8 @@ class _ImageActions extends StatelessWidget {
   });
 
   final RichEditorController controller;
+  final void Function(ImageRun run)? onReplace;
+  final void Function(ImageRun run)? onSave;
   final ScrollController scrollController;
   final RichEditorStyle style;
   final double leftInset;
@@ -1161,7 +1181,7 @@ class _ImageActions extends StatelessWidget {
             // The controls sit in the picture's top-right corner; on a small picture
             // (they would cover most of it, or hang off its left edge) they go
             // beside it instead, in the free room to its right.
-            const pillWidth = _ImageButtons.width;
+            final pillWidth = _ImageButtons.widthFor((onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0));
             final beside = drawn != null && drawn.width < pillWidth * 2.4 && area.right - drawn.right >= pillWidth + 12;
             return Stack(
               children: [
@@ -1169,7 +1189,7 @@ class _ImageActions extends StatelessWidget {
                   top: top + 8,
                   left: beside ? drawn.right + 10 : null,
                   right: beside ? null : constraints.maxWidth - right + 8,
-                  child: _ImageButtons(controller: controller, onSmaller: stepTo(-1), onLarger: stepTo(1)),
+                  child: _ImageButtons(controller: controller, onSmaller: stepTo(-1), onLarger: stepTo(1), onReplace: onReplace, onSave: onSave),
                 ),
               ],
             );
@@ -1181,10 +1201,13 @@ class _ImageActions extends StatelessWidget {
 }
 
 class _ImageButtons extends StatelessWidget {
-  const _ImageButtons({required this.controller, required this.onSmaller, required this.onLarger});
+  const _ImageButtons({required this.controller, required this.onSmaller, required this.onLarger, this.onReplace, this.onSave});
 
-  /// Three 36-wide buttons.
-  static const double width = 108;
+  /// 36-wide buttons: Smaller, Larger, Remove, and Replace when the host offers it.
+  static double widthFor(int extras) => 108.0 + 36 * extras;
+
+  final void Function(ImageRun run)? onReplace;
+  final void Function(ImageRun run)? onSave;
 
   final RichEditorController controller;
 
@@ -1218,6 +1241,8 @@ class _ImageButtons extends StatelessWidget {
           // has rebuilt from the previous one).
           button(Icons.photo_size_select_small_rounded, 'Smaller', onSmaller),
           button(Icons.photo_size_select_large_rounded, 'Larger', onLarger),
+          if (onSave != null) button(Icons.download_rounded, 'Save picture', () => _act(onSave!)),
+          if (onReplace != null) button(Icons.swap_horiz_rounded, 'Replace picture', () => _act(onReplace!)),
           button(Icons.delete_outline_rounded, 'Remove picture', () => _act(controller.deleteImage)),
         ],
       ),
