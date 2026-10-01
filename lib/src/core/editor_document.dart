@@ -2,6 +2,7 @@ import 'attribute_store.dart';
 import 'paragraph_block.dart';
 import 'paragraph_index.dart';
 import '../models/attribute_type.dart';
+import '../models/code_block.dart';
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../models/text_buffer.dart';
@@ -88,9 +89,12 @@ class EditorDocument {
     final inline = _attributes.spans.where(
       (a) => a.type != AttributeType.header && a.type != AttributeType.align && a.type != AttributeType.textDirection,
     );
-    final headers = _paragraphs.records.where((r) => r.headerLevel != null && r.end > r.start).map(
-          (r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.header, value: r.headerLevel),
-    );
+    final headers = [
+      ..._paragraphs.records
+          .where((r) => r.headerLevel != null && !isCodeBlockLevel(r.headerLevel) && r.end > r.start)
+          .map((r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.header, value: r.headerLevel)),
+      ..._codeBlockSpans(),
+    ];
     final alignments = _paragraphs.records.where((r) => r.alignment != null && r.end > r.start).map(
           (r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.align, value: r.alignment!.name),
     );
@@ -98,6 +102,40 @@ class EditorDocument {
           (r) => TextAttribute(start: r.start, end: r.end, type: AttributeType.textDirection, value: r.textDirection!.name),
     );
     return [...inline, ...headers, ...alignments, ...textDirections];
+  }
+
+  // One span per run of consecutive code lines (same level), covering the
+  // whole run — blank lines inside a block included, which a per-paragraph
+  // span could not represent (empty paragraphs never contribute a span).
+  List<TextAttribute> _codeBlockSpans() {
+    final spans = <TextAttribute>[];
+    String? runLevel;
+    var runStart = 0;
+    var runEnd = 0;
+    void flush() {
+      if (runLevel != null && runEnd > runStart) {
+        spans.add(TextAttribute(start: runStart, end: runEnd, type: AttributeType.header, value: runLevel));
+      }
+      runLevel = null;
+    }
+
+    for (final r in _paragraphs.records) {
+      final level = r.headerLevel;
+      if (!isCodeBlockLevel(level)) {
+        flush();
+        continue;
+      }
+      if (runLevel == level) {
+        runEnd = r.end;
+      } else {
+        flush();
+        runLevel = level;
+        runStart = r.start;
+        runEnd = r.end;
+      }
+    }
+    flush();
+    return spans;
   }
 
   /// Replaces the entire document in one step — used for loading a note
@@ -121,8 +159,19 @@ class EditorDocument {
   // fromText/fromJson would sit inertly in attributeStore, which nothing
   // reads for those types once loaded.
   void _seedParagraphBlockMetadata() {
+    // Code blocks first: a span covers every record inside it, blank ones too.
+    for (final span in _attributes.spans.where(
+      (a) => a.type == AttributeType.header && isCodeBlockLevel(a.value as String?),
+    )) {
+      for (final record in _paragraphs.records) {
+        if (record.start >= span.start && record.end <= span.end) {
+          _paragraphs.setHeaderLevel(record.start, record.end, span.value as String?);
+        }
+      }
+    }
     for (final record in _paragraphs.records) {
       if (record.start >= record.end) continue;
+      if (isCodeBlockLevel(record.headerLevel)) continue;
       final headerSpans = _attributes.findAt(record.start, type: AttributeType.header);
       if (headerSpans.isNotEmpty) {
         _paragraphs.setHeaderLevel(record.start, record.end, headerSpans.first.value as String?);

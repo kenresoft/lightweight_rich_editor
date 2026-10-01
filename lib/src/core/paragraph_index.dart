@@ -1,5 +1,6 @@
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
+import '../models/code_block.dart';
 import 'paragraph_record.dart';
 
 /// Maintains one [ParagraphRecord] per paragraph in a document — the
@@ -57,6 +58,8 @@ class ParagraphIndex {
 
   /// Whether any paragraph in this index has a header level set. Used
   /// by the renderer to decide whether it can skip structural styling.
+  bool get hasAnyCodeBlock => _records.any((r) => isCodeBlockLevel(r.headerLevel));
+
   bool get hasAnyHeader => _records.any((r) => r.headerLevel != null);
 
   /// The record containing `offset`, or `null` if `offset` is out of
@@ -124,7 +127,9 @@ class ParagraphIndex {
         textDirection: textDirection,
       ));
       fragmentStart = newlineAbsolute + 1;
-      headerLevel = null; // only the first fragment keeps block metadata
+      // Only the first fragment keeps block metadata — except a code line,
+      // whose new lines stay inside the code block.
+      if (!isCodeBlockLevel(headerLevel)) headerLevel = null;
       alignment = null;
       textDirection = null;
       searchOffset = relative + 1;

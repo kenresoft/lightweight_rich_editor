@@ -25,6 +25,7 @@ import '../rendering/ruled_row_metrics.dart';
 import '../rendering/text_span_renderer.dart';
 import '../search/search_index.dart';
 import '../utils/clamp_int.dart';
+import '../models/code_block.dart';
 import '../utils/link_launcher.dart';
 import '../utils/list_prefix.dart';
 import '../utils/text_diff.dart';
@@ -740,7 +741,7 @@ class RichEditorController extends TextEditingController {
 
   /// Whether an inline size can be changed here: never inside a header
   /// paragraph, whose size is structural (and which ignores inline sizes).
-  bool get canChangeFontSize => !_isHeaderActive;
+  bool get canChangeFontSize => !_isHeaderActive && !isCodeBlockActive;
   bool get canIncreaseFontSize =>
       canChangeFontSize && effectiveFontSize + 0.5 < maxInlineFontSize;
   bool get canDecreaseFontSize =>
@@ -763,6 +764,57 @@ class RichEditorController extends TextEditingController {
     );
     setSize(next);
   }
+
+  // ---------------------------------------------------------------------
+  // Code blocks
+  // ---------------------------------------------------------------------
+
+  /// The raw block level (`h1`..`h3`, `code`, `code:<lang>` or `null`) every
+  /// paragraph of the selection agrees on; `null` if they differ.
+  String? get activeBlockLevel {
+    final sel = _currentSelection;
+    final records = document.paragraphs.recordsOverlapping(sel.start, sel.end);
+    if (records.isEmpty) return null;
+    final level = records.first.headerLevel;
+    return records.every((r) => r.headerLevel == level) ? level : null;
+  }
+
+  /// Whether the whole selection (or caret line) is inside a code block.
+  bool get isCodeBlockActive => isCodeBlockLevel(activeBlockLevel);
+
+  /// Language label of the code block at the selection, or `null`.
+  String? get activeCodeLanguage => codeBlockLanguage(activeBlockLevel);
+
+  /// Turns the selected paragraphs into a code block (optionally labelled),
+  /// or back into ordinary paragraphs if they already are one.
+  void toggleCodeBlock({String? language}) {
+    commands.setHeader(_currentSelection, isCodeBlockActive ? null : codeBlockLevelFor(language));
+  }
+
+  /// Sets (or clears, with `null`) the language label of the whole code
+  /// block containing the caret.
+  void setCodeBlockLanguage(String? language) {
+    final sel = _currentSelection;
+    final records = document.paragraphs.records;
+    final at = records.indexWhere((r) => r.contains(sel.start));
+    if (at == -1 || !isCodeBlockLevel(records[at].headerLevel)) return;
+    var first = at;
+    var last = at;
+    while (first > 0 && isCodeBlockLevel(records[first - 1].headerLevel)) {
+      first--;
+    }
+    while (last < records.length - 1 && isCodeBlockLevel(records[last + 1].headerLevel)) {
+      last++;
+    }
+    commands.setHeader(
+      EditorSelection(baseOffset: records[first].start, extentOffset: records[last].end),
+      codeBlockLevelFor(language),
+    );
+  }
+
+  /// The exact text of the code block spanning `[start, end)` (a
+  /// `CodeBlockRegion`'s extent), for a Copy action.
+  String codeBlockText(int start, int end) => document.text.substring(start, end);
 
   void setLink(String? url) => commands.setLink(_currentSelection, url);
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
@@ -821,7 +873,9 @@ class RichEditorController extends TextEditingController {
       final sel = _currentSelection;
       final startRecord = document.paragraphs.paragraphAt(sel.start);
       if (startRecord == null) return null;
-      if (sel.isCollapsed) return startRecord.headerLevel;
+      // A code line's block level is not a heading: see [activeBlockLevel].
+      String? headingOnly(String? level) => isCodeBlockLevel(level) ? null : level;
+      if (sel.isCollapsed) return headingOnly(startRecord.headerLevel);
       final overlapping = document.paragraphs.recordsOverlapping(
         sel.start,
         sel.end,
@@ -829,7 +883,7 @@ class RichEditorController extends TextEditingController {
       if (overlapping.isEmpty) return null;
       final level = overlapping.first.headerLevel;
       final allAgree = overlapping.every((r) => r.headerLevel == level);
-      return allAgree ? level : null;
+      return allAgree ? headingOnly(level) : null;
     }
     if (type == AttributeType.align) {
       final sel = _currentSelection;

@@ -6,6 +6,7 @@ import '../utils/clamp_int.dart';
 import '../utils/list_prefix.dart';
 import 'editor_document.dart';
 import 'editor_selection.dart';
+import '../models/code_block.dart';
 import 'paragraph_record.dart';
 import 'transaction_manager.dart';
 
@@ -418,7 +419,7 @@ class EditingEngine {
   /// models three header levels.
   String? autoFormatHeaderLevel(int spaceInsertPos) {
     final record = document.paragraphs.paragraphAt(spaceInsertPos);
-    if (record == null) return null;
+    if (record == null || isCodeBlockLevel(record.headerLevel)) return null;
     final prefix = document.text.substring(record.start, spaceInsertPos);
     if (!RegExp(r'^#{1,6}$').hasMatch(prefix)) return null;
     if (prefix.length == 1) return 'h1';
@@ -449,6 +450,12 @@ class EditingEngine {
     final paragraphStart = prevNewline == -1 ? 0 : prevNewline + 1;
     final nextNewline = text.indexOf('\n', caret);
     final paragraphEnd = nextNewline == -1 ? text.length : nextNewline;
+
+    // Inside a code block Enter is a plain newline: the new line stays in the
+    // block (ParagraphIndex) and a leading '- '/'1. ' is code, not a list.
+    if (isCodeBlockLevel(document.paragraphs.paragraphAt(caret)?.headerLevel)) {
+      return (start: caret, end: caret, text: '\n');
+    }
 
     final beforeCaret = text.substring(paragraphStart, caret);
     final match = listPrefixPattern.matchAsPrefix(beforeCaret);

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../controller/rich_editor_controller.dart';
 import '../painters/ruled_lines_painter.dart';
+import '../rendering/code_block_region.dart';
 import '../rendering/editor_style.dart';
 import '../search/search_index.dart';
 import '../utils/link_launcher.dart';
@@ -528,6 +529,20 @@ class RichTextEditor extends StatelessWidget {
       leading: 0.0,
     );
 
+    // The one measurement of the document's lines (cached by the renderer):
+    // the ruled-lines painter and the code-block actions both read from it.
+    List<double> layoutBottoms(double maxTextWidth) =>
+        controller.renderer.lineBottomOffsets(
+          controller.document,
+          maxWidth: maxTextWidth,
+          style: measuredStyle,
+          strutStyle: strutStyle,
+          textHeightBehavior: _kTextHeightBehavior,
+          textDirection: resolvedTextDirection,
+          textScaler: textScaler,
+          devicePixelRatio: devicePixelRatio,
+        );
+
     // Assigned directly (not chained onto whatever was there before) —
     // this widget is stateless and build() can run many times, so
     // capturing "the previous handler" each time would nest an
@@ -750,23 +765,17 @@ class RichTextEditor extends StatelessWidget {
                               // itself changes, not on every selection move.
                               listenable: controller.documentMutationNotifier,
                               builder: (context, child) {
-                                final lineBottoms = controller.renderer
-                                    .lineBottomOffsets(
-                                      controller.document,
-                                      maxWidth: maxTextWidth,
-                                      style: measuredStyle,
-                                      strutStyle: strutStyle,
-                                      textHeightBehavior: _kTextHeightBehavior,
-                                      textDirection: resolvedTextDirection,
-                                      textScaler: textScaler,
-                                      devicePixelRatio: devicePixelRatio,
-                                    );
+                                final lineBottoms = layoutBottoms(maxTextWidth);
                                 return ListenableBuilder(
                                   listenable: scrollController,
                                   builder: (context, child) {
                                     return CustomPaint(
                                       painter: RuledLinesPainter(
                                         lineBottoms: lineBottoms,
+                                        codeBlocks: controller.renderer.codeBlocks,
+                                        codeBlockColor: editorStyle.codeBlockColor,
+                                        codeLeft: leftPad - 8,
+                                        codeRight: totalWidth - editorStyle.paddingRight + 8,
                                         fallbackLineHeight: metrics.pitch,
                                         devicePixelRatio: devicePixelRatio,
                                         topPadding: editorStyle.paddingTop,
@@ -854,6 +863,24 @@ class RichTextEditor extends StatelessWidget {
                         ),
                       ),
                     ),
+                    // Copy / language actions of each visible code block. Only the
+                    // buttons themselves take pointer events; the rest of this
+                    // layer lets taps through to the text field.
+                    Positioned.fill(
+                      child: _CodeBlockActions(
+                        controller: controller,
+                        scrollController: scrollController,
+                        style: editorStyle,
+                        rightInset: editorStyle.paddingRight,
+                        // Same call (same cache key) as the painter's, so the
+                        // regions are current even if this layer rebuilds
+                        // before the painter's does.
+                        regions: () {
+                          layoutBottoms(maxTextWidth);
+                          return controller.renderer.codeBlocks;
+                        },
+                      ),
+                    ),
                     Positioned(
                       left: 8,
                       right: 8,
@@ -880,6 +907,141 @@ class RichTextEditor extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+}
+
+/// A small "language · copy" chip in the top-right corner of every code block
+/// currently in view. Positions come from the same cached layout the ruled
+/// lines use (`TextSpanRenderer.codeBlocks`), re-read on every document change
+/// or scroll, so no extra text layout happens here.
+class _CodeBlockActions extends StatelessWidget {
+  const _CodeBlockActions({
+    required this.controller,
+    required this.scrollController,
+    required this.style,
+    required this.rightInset,
+    required this.regions,
+  });
+
+  final RichEditorController controller;
+  final ScrollController scrollController;
+  final RichEditorStyle style;
+  final double rightInset;
+  final List<CodeBlockRegion> Function() regions;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([controller.documentMutationNotifier, scrollController]),
+      builder: (context, _) {
+        final blocks = regions();
+        if (blocks.isEmpty) return const SizedBox.shrink();
+        final scroll = scrollController.hasClients ? scrollController.offset : 0.0;
+        final viewport = scrollController.hasClients && scrollController.position.hasViewportDimension
+            ? scrollController.position.viewportDimension
+            : double.infinity;
+        final children = <Widget>[];
+        for (final block in blocks) {
+          final top = style.paddingTop + block.top - scroll;
+          if (top + 4 < -24 || top > viewport) continue;
+          children.add(
+            Positioned(
+              top: top + 2,
+              right: rightInset - 4,
+              child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
+            ),
+          );
+        }
+        return Stack(children: children);
+      },
+    );
+  }
+}
+
+class _CodeBlockChip extends StatelessWidget {
+  const _CodeBlockChip({required this.controller, required this.block, required this.color});
+
+  final RichEditorController controller;
+  final CodeBlockRegion block;
+  final Color color;
+
+  Future<void> _editLanguage(BuildContext context) async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => _CodeLanguageDialog(initial: block.language ?? ''),
+    );
+    if (result == null) return;
+    controller.selection = TextSelection.collapsed(offset: block.start);
+    controller.setCodeBlockLanguage(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label = block.language ?? 'code';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () => _editLanguage(context),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            child: Text(label, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+          ),
+        ),
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: controller.codeBlockText(block.start, block.end)));
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(content: Text('Code copied'), duration: Duration(seconds: 1)),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: Icon(Icons.copy_rounded, size: 15, color: color),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// Owns its TextEditingController, so it is disposed only once the dialog's
+// exit animation has finished with it.
+class _CodeLanguageDialog extends StatefulWidget {
+  const _CodeLanguageDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_CodeLanguageDialog> createState() => _CodeLanguageDialogState();
+}
+
+class _CodeLanguageDialogState extends State<_CodeLanguageDialog> {
+  late final TextEditingController _field = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Code language'),
+      content: TextField(
+        controller: _field,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: 'e.g. dart (leave empty for none)'),
+        onSubmitted: (v) => Navigator.pop(context, v),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context, _field.text), child: const Text('Set')),
+      ],
     );
   }
 }

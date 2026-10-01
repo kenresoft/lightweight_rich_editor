@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 import '../core/attribute_store.dart';
 import '../core/editor_document.dart';
 import '../models/attribute_type.dart';
+import '../models/code_block.dart';
+import '../core/paragraph_record.dart';
 import '../models/text_attribute.dart';
 import '../utils/clamp_int.dart';
 import '../utils/horizontal_rule.dart';
 import '../utils/list_prefix.dart';
+import 'code_block_region.dart';
 import 'document_renderer.dart';
 import 'render_theme.dart';
 import 'ruled_row_metrics.dart';
@@ -260,6 +263,11 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   void invalidateCache() => _cachedSpan = null;
 
   List<double>? _cachedLineBottoms;
+  List<CodeBlockRegion> _cachedCodeBlocks = const [];
+
+  /// The code blocks of the document as of the last [lineBottomOffsets] call
+  /// (cached under the same key, so it is as fresh as the bottoms it came with).
+  List<CodeBlockRegion> get codeBlocks => _cachedCodeBlocks;
   double? _cachedLineBottomsWidth;
   StrutStyle? _cachedLineBottomsStrut;
   String? _cachedLineBottomsText;
@@ -358,6 +366,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     }
 
     _cachedLineBottoms = bottoms;
+    _cachedCodeBlocks = _codeRegions(document, painter, bottoms);
     _cachedLineBottomsText = text;
     _cachedLineBottomsRevision = revision;
     _cachedLineBottomsParagraphRevision = paragraphRevision;
@@ -370,6 +379,57 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedLineBottomsDpr = devicePixelRatio;
     _cachedLineBottomsTheme = theme;
     return bottoms;
+  }
+
+  // Each run of consecutive code lines of one language -> its Y extent, from
+  // the same laid-out paragraph the line bottoms came from.
+  List<CodeBlockRegion> _codeRegions(EditorDocument document, TextPainter painter, List<double> bottoms) {
+    if (bottoms.isEmpty || !document.paragraphs.hasAnyCodeBlock) return const [];
+    final regions = <CodeBlockRegion>[];
+    int lineIndexAt(int offset) {
+      final dy = painter.getOffsetForCaret(TextPosition(offset: offset), Rect.zero).dy;
+      var lo = 0;
+      var hi = bottoms.length - 1;
+      while (lo < hi) {
+        final mid = (lo + hi) >> 1;
+        if (bottoms[mid] > dy + 0.5) {
+          hi = mid;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      return lo;
+    }
+
+    void emit(ParagraphRecord first, ParagraphRecord last) {
+      final a = lineIndexAt(first.start);
+      final b = lineIndexAt(last.end);
+      regions.add(CodeBlockRegion(
+        top: a == 0 ? 0.0 : bottoms[a - 1],
+        bottom: bottoms[b],
+        start: first.start,
+        end: last.end,
+        language: codeBlockLanguage(first.headerLevel),
+      ));
+    }
+
+    ParagraphRecord? first;
+    ParagraphRecord? last;
+    for (final r in document.paragraphs.records) {
+      if (!isCodeBlockLevel(r.headerLevel)) {
+        if (first != null) emit(first, last!);
+        first = null;
+        continue;
+      }
+      if (first != null && first.headerLevel != r.headerLevel) {
+        emit(first, last!);
+        first = null;
+      }
+      first ??= r;
+      last = r;
+    }
+    if (first != null) emit(first, last!);
+    return regions;
   }
 
   /// The document-space (unscrolled) Y offset of `charOffset`'s glyph —
@@ -568,7 +628,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     var previousIsHorizontalRule = false;
     for (final record in document.paragraphs.records) {
       final isHr = isHorizontalRuleLine(text, record.start, record.end);
-      final hasOwnPrefix = !isHr && listPrefixLength(text, record.start) > 0;
+      final hasOwnPrefix = !isHr && !isCodeBlockLevel(record.headerLevel) && listPrefixLength(text, record.start) > 0;
       final needsBoundary = record.start > 0 &&
           (record.headerLevel != previousHeaderLevel ||
               isHr != previousIsHorizontalRule ||
@@ -711,6 +771,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     String? currentHeaderLevel;
     bool? currentChecked;
     bool currentIsHorizontalRule = false;
+    var currentIsCode = false;
 
     while (currentPos < text.length) {
       while (eventIndex < events.length &&
@@ -748,11 +809,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         if (isParagraphStart) {
           final record = document.paragraphs.paragraphAt(currentPos);
           currentHeaderLevel = record?.headerLevel;
+          currentIsCode = isCodeBlockLevel(currentHeaderLevel);
           currentIsHorizontalRule =
               record != null &&
+              !currentIsCode &&
               isHorizontalRuleLine(text, record.start, record.end);
         }
-        final prefixLen = isParagraphStart && !currentIsHorizontalRule
+        final prefixLen = isParagraphStart && !currentIsHorizontalRule && !currentIsCode
             ? listPrefixLength(text, currentPos)
             : 0;
         final prefixEnd = clampInt(currentPos + prefixLen, currentPos, nextPos);
@@ -852,6 +915,16 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       return stack.isEmpty ? null : stack.last;
     }
 
+    if (isCodeBlockLevel(headerLevel)) {
+      return _codeBlockStyle(
+        baseStyle,
+        metrics,
+        isCurrentMatch,
+        isSelectionHighlight,
+        isOtherMatch,
+      );
+    }
+
     final colorArgb = topValue(AttributeType.color) as int?;
     final sizeValue = topValue(AttributeType.size) as num?;
     final linkUrl = topValue(AttributeType.link) as String?;
@@ -934,6 +1007,39 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
           ? TextDecoration.none
           : TextDecoration.combine(decorations),
       fontFamily: isCode ? theme.codeFontFamily : baseStyle?.fontFamily,
+    );
+  }
+
+  // A code line: monospace, one row, uniform — inline formatting stored on the
+  // text is preserved in the document but not rendered inside a code block.
+  // The size is fitted like any inline run, in the code family, so a fallback
+  // glyph can not escape the row.
+  TextStyle _codeBlockStyle(
+    TextStyle? baseStyle,
+    RuledRowMetrics metrics,
+    bool isCurrentMatch,
+    bool isSelectionHighlight,
+    bool isOtherMatch,
+  ) {
+    final size = metrics.fitInlineFontSize(
+      theme.baseFontSize * 0.92,
+      FontWeight.normal,
+      false,
+      family: theme.codeFontFamily,
+    );
+    return (baseStyle ?? const TextStyle()).copyWith(
+      fontSize: size,
+      fontWeight: FontWeight.normal,
+      fontStyle: FontStyle.normal,
+      height: metrics.heightMultiplier(size),
+      leadingDistribution: TextLeadingDistribution.proportional,
+      fontFamily: theme.codeFontFamily,
+      decoration: TextDecoration.none,
+      backgroundColor: isCurrentMatch
+          ? theme.matchHighlightColor
+          : (isSelectionHighlight
+                ? theme.linkColor.withValues(alpha: 0.3)
+                : (isOtherMatch ? theme.otherMatchesHighlightColor : null)),
     );
   }
 

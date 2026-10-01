@@ -38,7 +38,8 @@ void main() {
 
     test('block elements and newlines', () {
       final result = importer.parse('<h1>Header</h1><p>Paragraph</p><div>Div</div>');
-      expect(result.text, 'Header\nParagraph\nDiv');
+      // A heading hugs what it introduces; a paragraph is followed by a gap.
+      expect(result.text, 'Header\nParagraph\n\nDiv');
       expect(result.attributes.any((a) => a.type == AttributeType.header), isTrue);
     });
 
@@ -156,10 +157,12 @@ void main() {
       expect(result.text, '  - First\nSecond');
     });
 
-    test('pretty-printed paragraphs have no blank line inserted between them', () {
+    test('pretty-printed whitespace adds no breaks beyond the one paragraph gap', () {
       const html = '<div>\n  <p>First paragraph</p>\n  <p>Second paragraph</p>\n</div>';
       final result = importer.parse(html);
-      expect(result.text, 'First paragraph\nSecond paragraph');
+      expect(result.text, 'First paragraph\n\nSecond paragraph');
+      // Identical to the compact source: the pretty-printing contributed nothing.
+      expect(importer.parse('<div><p>First paragraph</p><p>Second paragraph</p></div>').text, result.text);
     });
 
     test('whitespace between genuine inline content is still preserved', () {

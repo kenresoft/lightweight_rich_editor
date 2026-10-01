@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import '../rendering/code_block_region.dart';
+
 /// The style of ruled lines to draw in the background.
 enum RuledLineStyle {
   /// No lines are drawn.
@@ -33,6 +35,10 @@ class RuledLinesPainter extends CustomPainter {
     required this.lineStyle,
     required this.marginLineX,
     this.devicePixelRatio = 1.0,
+    this.codeBlocks = const [],
+    this.codeBlockColor = const Color(0x1F78909C),
+    this.codeLeft = 0.0,
+    this.codeRight = 0.0,
     this.lineColor = const Color(0x66607D8B),
     this.marginColor = const Color(0xCCFFCDD2),
   }) {
@@ -66,6 +72,14 @@ class RuledLinesPainter extends CustomPainter {
   /// un-antialiased 1px lines never land unevenly between rows.
   final double devicePixelRatio;
 
+  /// Code blocks to paint a rounded background for (document coordinates), and
+  /// the horizontal extent to paint it over. Ruled lines inside a block are
+  /// not drawn, so paper rules never run through code.
+  final List<CodeBlockRegion> codeBlocks;
+  final Color codeBlockColor;
+  final double codeLeft;
+  final double codeRight;
+
   /// The top padding of the text area.
   final double topPadding;
 
@@ -92,12 +106,40 @@ class RuledLinesPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    _drawCodeBlocks(canvas, size);
     if (lineStyle != RuledLineStyle.none) {
       _drawRuledLines(canvas, size);
     }
     if (marginOpacity > 0.0) {
       _drawMarginLine(canvas, size);
     }
+  }
+
+  void _drawCodeBlocks(Canvas canvas, Size size) {
+    if (codeBlocks.isEmpty) return;
+    final paint = Paint()..color = codeBlockColor;
+    for (final block in codeBlocks) {
+      final top = topPadding + block.top - scrollOffset;
+      final bottom = topPadding + block.bottom - scrollOffset;
+      if (bottom < 0 || top > size.height) continue;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTRB(codeLeft, top + 1, codeRight > codeLeft ? codeRight : size.width, bottom - 1),
+          const Radius.circular(8),
+        ),
+        paint,
+      );
+    }
+  }
+
+  // Whether a rule at document-space `docY` lies inside a code block (its top
+  // edge excluded: that rule belongs to the line above the block).
+  bool _insideCodeBlock(double docY) {
+    for (final block in codeBlocks) {
+      if (block.top > docY) return false;
+      if (docY > block.top + 0.5 && docY <= block.bottom + 0.5) return true;
+    }
+    return false;
   }
 
   /// Index of the first entry in [lineBottoms] whose painted Y could
@@ -134,7 +176,9 @@ class RuledLinesPainter extends CustomPainter {
       for (var j = rows - 1; j >= 0; j--) {
         final y = _snap(topPadding + bottom - j * fallbackLineHeight - scrollOffset);
         if (y > size.height + 1.0) return;
-        if (y >= topPadding) _drawOneLine(canvas, y, size.width);
+        if (y >= topPadding && !_insideCodeBlock(y - topPadding + scrollOffset)) {
+          _drawOneLine(canvas, y, size.width);
+        }
       }
       index++;
     }
@@ -148,7 +192,9 @@ class RuledLinesPainter extends CustomPainter {
     if (lineBottoms.isNotEmpty) y += fallbackLineHeight;
     while (y <= size.height + 1.0) {
       final snapped = _snap(y);
-      if (snapped >= topPadding) _drawOneLine(canvas, snapped, size.width);
+      if (snapped >= topPadding && !_insideCodeBlock(snapped - topPadding + scrollOffset)) {
+        _drawOneLine(canvas, snapped, size.width);
+      }
       y += fallbackLineHeight;
     }
   }
@@ -190,6 +236,10 @@ class RuledLinesPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant RuledLinesPainter oldDelegate) =>
       !identical(oldDelegate.lineBottoms, lineBottoms) ||
+      !identical(oldDelegate.codeBlocks, codeBlocks) ||
+      oldDelegate.codeBlockColor != codeBlockColor ||
+      oldDelegate.codeLeft != codeLeft ||
+      oldDelegate.codeRight != codeRight ||
       oldDelegate.fallbackLineHeight != fallbackLineHeight ||
       oldDelegate.devicePixelRatio != devicePixelRatio ||
       oldDelegate.topPadding != topPadding ||

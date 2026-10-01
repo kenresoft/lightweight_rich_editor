@@ -49,7 +49,7 @@ class ClipboardManager {
 
     delegate?.store(text, attributes);
 
-    final html = const HtmlExporter().export(text, attributes);
+    final html = const HtmlExporter(marker: true).export(text, attributes);
     await RichClipboardPlatform.setData(text: text, html: html);
   }
 

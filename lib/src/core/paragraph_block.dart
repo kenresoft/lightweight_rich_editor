@@ -1,3 +1,4 @@
+import '../models/code_block.dart';
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../utils/list_prefix.dart';
@@ -35,7 +36,8 @@ class ParagraphBlock {
   ParagraphTextDirection? get textDirection => record.textDirection;
 
   factory ParagraphBlock.derive(ParagraphRecord record, String text) {
-    final prefixLen = listPrefixLength(text, record.start);
+    // A code line is never a list item, whatever it happens to start with.
+    final prefixLen = isCodeBlockLevel(record.headerLevel) ? 0 : listPrefixLength(text, record.start);
     ParagraphListType? listType;
     bool? checked;
     if (prefixLen > 0) {

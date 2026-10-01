@@ -1,4 +1,5 @@
 import '../models/attribute_type.dart';
+import '../models/code_block.dart';
 import '../models/text_attribute.dart';
 import '../utils/url_detector.dart';
 
@@ -15,21 +16,102 @@ import '../utils/url_detector.dart';
 class MarkdownImporter {
   const MarkdownImporter();
 
+  // An opening code fence on a line of its own: three or more backticks or
+  // tildes, optionally followed by an info string whose first word is the
+  // language. A line like "```text```" (WhatsApp monospace) does not match.
+  static final RegExp _fenceOpen = RegExp(r'^ {0,3}(`{3,}|~{3,})[ \t]*([^`\s]*)[^`]*$');
+
   /// Parses `markdown`, returning plain text and attributes relative to it.
+  ///
+  /// Block structure: fenced code becomes a block-level code block (its text
+  /// kept exactly, no inline parsing), headings become headers, a run of blank
+  /// lines becomes one blank line, and leading/trailing blank lines are
+  /// dropped. Everything else is a line per paragraph, with list markers and
+  /// `> ` quote markers kept as literal text.
   ({String text, List<TextAttribute> attributes}) parse(String markdown) {
-    final isWhatsApp = _detectWhatsAppFlavor(markdown);
-    final lines = markdown.split('\n');
+    final source = markdown.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final lines = source.split('\n');
+
+    // First pass: find fenced blocks, so they can neither confuse flavor
+    // detection nor be inline-parsed.
+    final blocks = <({int open, int close, String? lang})>[];
+    for (var i = 0; i < lines.length; i++) {
+      final m = _fenceOpen.firstMatch(lines[i]);
+      if (m == null) continue;
+      final fence = m.group(1)!;
+      var close = -1;
+      for (var j = i + 1; j < lines.length; j++) {
+        final t = lines[j].trimRight().trimLeft();
+        if (t.length >= fence.length && t[0] == fence[0] && t.split('').every((c) => c == fence[0])) {
+          close = j;
+          break;
+        }
+      }
+      blocks.add((open: i, close: close == -1 ? lines.length : close, lang: normalizeCodeLanguage(m.group(2))));
+      i = close == -1 ? lines.length : close;
+    }
+    final inBlock = <int, int>{}; // line -> index into blocks
+    for (var k = 0; k < blocks.length; k++) {
+      for (var i = blocks[k].open; i <= blocks[k].close && i < lines.length; i++) {
+        inBlock[i] = k;
+      }
+    }
+
+    final prose = [for (var i = 0; i < lines.length; i++) if (!inBlock.containsKey(i)) lines[i]].join('\n');
+    final isWhatsApp = _detectWhatsAppFlavor(prose);
+
     final buffer = StringBuffer();
     final attributes = <TextAttribute>[];
+    var wroteAny = false;
+    var pendingBlank = false;
 
-    for (var i = 0; i < lines.length; i++) {
-      final stripped = _stripPrefix(lines[i]);
+    void startLine() {
+      if (wroteAny) buffer.write('\n');
+      if (pendingBlank && wroteAny) buffer.write('\n');
+      pendingBlank = false;
+      wroteAny = true;
+    }
+
+    var i = 0;
+    while (i < lines.length) {
+      final blockIndex = inBlock[i];
+      if (blockIndex != null) {
+        final block = blocks[blockIndex];
+        final bodyStart = block.open + 1;
+        final bodyEnd = block.close; // exclusive
+        final body = bodyStart < bodyEnd ? lines.sublist(bodyStart, bodyEnd) : <String>[];
+        if (body.isEmpty) {
+          // An empty fence still yields one (empty) code line.
+          startLine();
+          // No text to carry a span: an empty code block is dropped.
+        } else {
+          startLine();
+          final start = buffer.length;
+          buffer.write(body.join('\n'));
+          attributes.add(TextAttribute(
+            start: start,
+            end: buffer.length,
+            type: AttributeType.header,
+            value: codeBlockLevelFor(block.lang),
+          ));
+        }
+        i = block.close + 1;
+        continue;
+      }
+
+      final line = lines[i];
+      if (line.trim().isEmpty) {
+        if (wroteAny) pendingBlank = true;
+        i++;
+        continue;
+      }
+
+      final stripped = _stripPrefix(line);
       final inline = _parseInline(stripped.rest, isWhatsApp);
-
+      startLine();
       final lineStart = buffer.length;
       buffer.write(inline.text);
       final lineEnd = buffer.length;
-
       for (final attr in inline.attributes) {
         attributes.add(attr.copyWith(start: attr.start + lineStart, end: attr.end + lineStart));
       }
@@ -41,8 +123,7 @@ class MarkdownImporter {
           value: stripped.headerLevel,
         ));
       }
-
-      if (i < lines.length - 1) buffer.write('\n');
+      i++;
     }
 
     return (text: buffer.toString(), attributes: attributes);

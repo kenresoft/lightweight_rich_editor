@@ -1,4 +1,5 @@
 import '../models/attribute_type.dart';
+import '../models/code_block.dart';
 import '../models/text_attribute.dart';
 
 /// Converts plain text and [TextAttribute]s into a Markdown string.
@@ -12,7 +13,10 @@ class MarkdownExporter {
     if (text.isEmpty) return '';
     if (attributes.isEmpty) return text;
 
-    final sorted = List<TextAttribute>.from(attributes)
+    bool isCodeSpan(TextAttribute a) =>
+        a.type == AttributeType.header && isCodeBlockLevel(a.value as String?);
+    final codeSpans = attributes.where(isCodeSpan).toList();
+    final sorted = attributes.where((a) => !isCodeSpan(a)).toList()
       ..sort((a, b) {
         if (a.start != b.start) return a.start.compareTo(b.start);
         return b.end.compareTo(a.end);
@@ -25,6 +29,30 @@ class MarkdownExporter {
     while (true) {
       final nextNewline = text.indexOf('\n', pos);
       final paragraphEnd = nextNewline == -1 ? text.length : nextNewline;
+
+      TextAttribute? code;
+      for (final a in codeSpans) {
+        if (a.start <= pos && a.end >= pos && a.end > a.start) {
+          code = a;
+          break;
+        }
+      }
+      if (code != null) {
+        // Fenced block: the fence is longer than any backtick run inside it.
+        final codeEnd = code.end > text.length ? text.length : code.end;
+        final body = text.substring(pos, codeEnd);
+        var fenceLen = 3;
+        for (final m in RegExp('`+').allMatches(body)) {
+          if (m.group(0)!.length >= fenceLen) fenceLen = m.group(0)!.length + 1;
+        }
+        final fence = '`' * fenceLen;
+        if (!isFirstParagraph) buffer.write('\n');
+        buffer.write('$fence${codeBlockLanguage(code.value as String?) ?? ''}\n$body\n$fence');
+        isFirstParagraph = false;
+        if (codeEnd >= text.length) break;
+        pos = codeEnd + 1;
+        continue;
+      }
 
       if (!isFirstParagraph) buffer.write('\n');
       buffer.write(_renderInline(text, pos, paragraphEnd, sorted));
