@@ -98,6 +98,41 @@ void main() {
     });
   });
 
+  group('language guess (unlabelled blocks)', () {
+    test('recognises common snippets', () {
+      expect(guessLanguage("import 'package:flutter/material.dart';\nvoid main() {}"), 'dart');
+      expect(guessLanguage('const a = 1;\nconsole.log(a);'), 'javascript');
+      expect(guessLanguage('def f(x):\n  return None'), 'python');
+      expect(guessLanguage('#include <stdio.h>\nint main() { printf("x"); }'), 'cpp');
+      expect(guessLanguage('package main\nfunc main() { fmt.Println("x") }'), 'go');
+      expect(guessLanguage('fn main() { let mut x = 1; println!("{}", x); }'), 'rust');
+      expect(guessLanguage('SELECT id FROM users WHERE id = 1'), 'sql');
+      expect(guessLanguage('{"a": [1, 2], "b": null}'), 'json');
+      expect(guessLanguage('<div class="a">hi</div>'), 'html');
+      expect(guessLanguage('npm create @kenresoft-cms@latest my-site'), 'shell');
+      expect(guessLanguage('pnpm run setup'), 'shell');
+      expect(guessLanguage('name: app\nversion: 1.0.0\nmode: debug'), 'yaml');
+    });
+
+    test('prose, a lone keyword and plain text are left alone', () {
+      expect(guessLanguage('The quick brown fox jumps over the lazy dog.'), isNull);
+      expect(guessLanguage('final answer'), isNull);
+      expect(guessLanguage('x'), isNull);
+      expect(guessLanguage(''), isNull);
+      expect(guessLanguage('Go to the store and buy milk'), isNull);
+    });
+
+    test('an unlabelled block is coloured by the guess; the stored label stays empty', () {
+      const t = 'const a = 1;\nconsole.log(a);';
+      final c = RichEditorController(text: t, theme: notebookTheme, initialAttributes: [codeSpan(0, t.length, 'code')]);
+      addTearDown(c.dispose);
+      final runs = c.renderer.renderSpan(c.document, style: const TextStyle(fontSize: 16)).children!.cast<TextSpan>();
+      expect(runs.map((r) => r.text).join(), t);
+      expect(runs.firstWhere((r) => r.text == 'const').style!.color, notebookTheme.codeSyntax.keyword);
+      expect(c.document.paragraphs.records.first.headerLevel, 'code');
+    });
+  });
+
   group('renderer', () {
     const dartText = "final a = 1; // c\nvoid f() {}";
 

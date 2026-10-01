@@ -479,24 +479,45 @@ void main() {
       expect(c.document.text, 'x\ny');
     });
 
-    testWidgets('the chip does not sit on text: above a block when the row above is clear, inside when it is not', (tester) async {
-      Future<(double chipY, double codeY)> place(String text, int codeStart, int codeEnd) async {
+    testWidgets('the chip is inside the card and never on code: first row, else last row, else a compact strip', (tester) async {
+      Future<(double chipY, double codeY, double bottom, double rowH)> place(String text, int codeStart, int codeEnd) async {
         final c = make(text, [codeSpan(codeStart, codeEnd)]);
         addTearDown(c.dispose);
         await pump(tester, c);
         final chipY = tester.getTopLeft(find.text('code')).dy;
-        final codeY = tester.getTopLeft(find.byType(EditableText)).dy + c.renderer.codeBlocks.single.top;
-        return (chipY, codeY);
+        final field = tester.getTopLeft(find.byType(EditableText)).dy;
+        final r = c.renderer.codeBlocks.single;
+        return (chipY, field + r.top, field + r.bottom, r.firstRowBottom - r.top);
       }
 
-      // a blank row above: the chip hangs over it
-      final clear = await place('intro\n\nx = 1', 7, 12);
-      expect(clear.$1, lessThan(clear.$2), reason: 'chip ${clear.$1} should hang above the block at ${clear.$2}');
+      // short code: on the first row, inside the card
+      final short = await place('intro\n\nx = 1', 7, 12);
+      expect(short.$1, greaterThan(short.$2), reason: 'inside the card, not hanging above it');
+      expect(short.$1, lessThan(short.$2 + short.$4));
 
-      // a long line directly above whose last row runs under the chip's corner
       final long = '${List.filled(11, 'wordy').join(' ')} ${'z' * 28}';
-      final blocked = await place('$long\nx = 1', long.length + 1, long.length + 6);
-      expect(blocked.$1, greaterThanOrEqualTo(blocked.$2), reason: 'chip ${blocked.$1} should be inside the block at ${blocked.$2}');
+      // a long first line, a short second one: on the last row
+      final lastRow = await place('$long\nok', 0, long.length + 3);
+      expect(lastRow.$1, greaterThan(lastRow.$2 + lastRow.$4), reason: 'below the long first row');
+      expect(lastRow.$1, lessThan(lastRow.$3));
+
+      // both the first and the last row long: the compact chip rides in the top
+      // padding strip, above the glyphs. (Find a line length whose wrapped last row
+      // also runs under the chip's corner.)
+      for (var n = 60; n < 400; n++) {
+        final line = 'q' * n;
+        final c = make('$line\n$line', [codeSpan(0, line.length * 2 + 1)]);
+        addTearDown(c.dispose);
+        await pump(tester, c);
+        final r = c.renderer.codeBlocks.single;
+        if (r.lastLineRight < 770 || r.firstLineRight < 770) continue;
+        final chipY = tester.getTopLeft(find.text('code')).dy;
+        final codeY = tester.getTopLeft(find.byType(EditableText)).dy + r.top;
+        expect(chipY, greaterThan(codeY));
+        expect(chipY, lessThan(codeY + 8), reason: 'in the strip above the first row of code');
+        return;
+      }
+      fail('no line length produced two long rows');
     });
 
     testWidgets('no chip without code blocks', (tester) async {

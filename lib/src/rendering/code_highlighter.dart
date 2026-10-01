@@ -392,3 +392,64 @@ List<CodeToken> tokenizeCode(String code, String? language) {
   }
   return out;
 }
+
+/// A best guess at the language of [code] for colouring a block that has no
+/// label, or `null` when nothing is clear enough (then the block stays plain).
+/// Presentation only: the guess is never stored in the document. It looks for
+/// signature syntax of each language and needs a score of at least 2 and a
+/// clear lead over the runner-up, so prose and ambiguous snippets are left alone.
+String? guessLanguage(String code) {
+  final t = (code.length > 4000 ? code.substring(0, 4000) : code).trimLeft();
+  if (t.trim().length < 3) return null;
+  final firstLine = t.split('\n').first;
+
+  int s(String needle, [int weight = 1]) => t.contains(needle) ? weight : 0;
+  // a line that starts with the given command word
+  int cmd(List<String> words, [int weight = 2]) {
+    for (final w in words) {
+      if (firstLine.startsWith('$w ') || t.contains('\n$w ')) return weight;
+    }
+    return 0;
+  }
+
+  final scores = <String, int>{
+    'dart': s("import 'package:", 3) + s('void main(', 2) + s('Widget build(', 3) + s('@override', 2) + s('setState(', 2) + s(' extends State', 3) + s('Future<', 2) + s('final ', 1) + s('late ', 1) + s('print(', 1),
+    'javascript': s('console.log', 3) + s('const ', 1) + s('=> ', 1) + s('function ', 2) + s('require(', 2) + s('document.', 2) + s('export default', 3) + s(' from \'', 1) + s('let ', 1) + s('===', 2),
+    'python': s('def ', 2) + s('elif ', 3) + s('import ', 1) + s('print(', 1) + s('self.', 2) + s('None', 1) + s('__name__', 3) + s('):\n', 2) + s('lambda ', 2),
+    'java': s('public static void main', 4) + s('System.out', 3) + s('public class', 3) + s('private ', 1) + s('@Override', 2) + s('import java.', 3),
+    'kotlin': s('fun ', 2) + s('val ', 1) + s('println(', 1) + s('data class', 3) + s('import kotlin', 3),
+    'cpp': s('#include', 4) + s('std::', 3) + s('int main(', 3) + s('cout', 2) + s('printf(', 2),
+    'go': s('package main', 4) + s('func ', 2) + s(':= ', 2) + s('fmt.', 3),
+    'rust': s('fn ', 2) + s('let mut', 3) + s('println!', 3) + s('use std', 3) + s('impl ', 2) + s('-> ', 1),
+    'swift': s('import SwiftUI', 4) + s('import UIKit', 4) + s('func ', 1) + s('guard let', 3) + s('var body: some View', 4),
+    'sql': s('SELECT ', 2) + s(' FROM ', 2) + s('INSERT INTO', 3) + s('CREATE TABLE', 3) + s('WHERE ', 1) + s('UPDATE ', 1) + s('JOIN ', 1),
+    'shell': cmd(['npm', 'npx', 'pnpm', 'yarn', 'git', 'cd', 'sudo', 'apt', 'apt-get', 'brew', 'pip', 'pip3', 'flutter', 'dart', 'docker', 'curl', 'wget', 'echo', 'export', 'mkdir', 'ls', 'chmod', 'node', 'cargo', 'go']) + s('#!/bin/', 4) + (t.startsWith('\$ ') ? 3 : 0),
+    'css': s('{\n', 1) + s('margin', 1) + s('padding', 1) + s('display:', 2) + s('color:', 2) + s('font-size', 2) + s('background', 1),
+  };
+  // Structured data: judged on shape, not keywords.
+  final head = t.trimRight();
+  if ((head.startsWith('{') && head.endsWith('}')) || (head.startsWith('[') && head.endsWith(']'))) {
+    if (t.contains('":')) scores['json'] = 5;
+  }
+  if (head.startsWith('<') && (head.contains('</') || head.contains('/>') || head.startsWith('<!DOCTYPE') || head.startsWith('<?xml'))) {
+    scores['html'] = 4;
+  }
+  if (t.startsWith('---\n') || RegExp(r'^[A-Za-z_][\w-]*: .+(\n|$)', multiLine: true).allMatches(t).length >= 3 && !t.contains('{') && !t.contains(';')) {
+    scores['yaml'] = 3;
+  }
+
+  String? best;
+  var top = 0;
+  var second = 0;
+  scores.forEach((lang, score) {
+    if (score > top) {
+      second = top;
+      top = score;
+      best = lang;
+    } else if (score > second) {
+      second = score;
+    }
+  });
+  if (top < 2 || top - second < 1) return null;
+  return best;
+}

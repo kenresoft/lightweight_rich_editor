@@ -512,6 +512,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         language: codeBlockLanguage(first.headerLevel),
         firstLineRight: lineRight(first.start),
         previousLineRight: first.start == 0 ? 0.0 : lineRight(first.start - 1),
+        firstRowBottom: bottoms[a],
+        lastRowTop: b == 0 ? 0.0 : bottoms[b - 1],
+        lastLineRight: lineRight(last.end),
       ));
     }
 
@@ -1036,6 +1039,15 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   // different block does not re-scan a code block that did not change.
   final Map<String, List<CodeToken>> _tokenCache = {};
 
+  final Map<String, String?> _guessCache = {};
+
+  String? _guessedLanguage(String code) {
+    if (_guessCache.containsKey(code)) return _guessCache[code];
+    final guess = guessLanguage(code);
+    if (_guessCache.length >= 24) _guessCache.remove(_guessCache.keys.first);
+    return _guessCache[code] = guess;
+  }
+
   List<CodeToken> _tokensFor(String language, String code) {
     final key = '$language\u0000$code';
     final hit = _tokenCache[key];
@@ -1051,9 +1063,12 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final text = document.text;
     final runs = <_ColorRun>[];
     void block(ParagraphRecord first, ParagraphRecord last) {
-      final language = codeBlockLanguage(first.headerLevel);
+      final code = text.substring(first.start, last.end);
+      // A labelled block uses its label; an unlabelled one is coloured by a
+      // best-effort guess (never stored), or stays plain when unclear.
+      final language = codeBlockLanguage(first.headerLevel) ?? _guessedLanguage(code);
       if (!canHighlight(language)) return;
-      for (final t in _tokensFor(language!, text.substring(first.start, last.end))) {
+      for (final t in _tokensFor(language!, code)) {
         runs.add(_ColorRun(first.start + t.start, first.start + t.end, theme.codeSyntax.colorOf(t.kind)));
       }
     }

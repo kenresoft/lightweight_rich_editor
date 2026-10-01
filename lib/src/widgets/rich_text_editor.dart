@@ -1000,21 +1000,35 @@ class _CodeBlockActions extends StatelessWidget {
               // Hidden once the block's top edge has scrolled under the text
               // area's top (the header above the editor is not part of it).
               if (top < style.paddingTop - 1 || top > constraints.maxHeight) continue;
-              // Where the chip goes, by what is actually there: hanging on the
-              // block's top edge (over the row above) when that row's text stops
-              // short of the chip; otherwise inside the block's first row when
-              // that text does; otherwise on the edge anyway.
+              // The chip lives inside the card, never over code. By what is
+              // actually there: on the first row when its text stops short of the
+              // chip; else on the last row (of a multi-row block); else, when both
+              // rows run long, a compact chip in the card's top padding strip,
+              // above the glyphs.
               final label = block.language ?? 'code';
               final chipWidth = 36 + label.length * 6.6;
-              final chipLeft = constraints.maxWidth - (rightInset - 4) - chipWidth - 6;
-              final aboveIsClear = textLeft + block.previousLineRight < chipLeft;
-              final firstRowIsClear = textLeft + block.firstLineRight < chipLeft;
-              final inside = !aboveIsClear && firstRowIsClear;
+              final chipLeft = constraints.maxWidth - (rightInset - 6) - chipWidth - 6;
+              const chipHeight = 24.0;
+              final cardTop = top + RuledLinesPainter.codeBlockInsetTop;
+              final multiRow = block.lastRowTop > block.top + 0.5;
+              final firstClear = textLeft + block.firstLineRight < chipLeft;
+              final lastClear = multiRow && textLeft + block.lastLineRight < chipLeft;
+              final double chipTop;
+              var compact = false;
+              if (firstClear) {
+                chipTop = cardTop + (block.firstRowBottom - block.top - RuledLinesPainter.codeBlockInsetTop - chipHeight) / 2 + 2;
+              } else if (lastClear) {
+                final rowTop = style.paddingTop + block.lastRowTop - scroll;
+                chipTop = rowTop + (block.bottom - block.lastRowTop - chipHeight) / 2 + 2;
+              } else {
+                compact = true;
+                chipTop = cardTop;
+              }
               children.add(
                 Positioned(
-                  top: inside ? top + 7 : (top - 16).clamp(style.paddingTop, double.infinity),
-                  right: rightInset - 4,
-                  child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
+                  top: chipTop,
+                  right: rightInset - 6,
+                  child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor, compact: compact),
                 ),
               );
             }
@@ -1027,7 +1041,10 @@ class _CodeBlockActions extends StatelessWidget {
 }
 
 class _CodeBlockChip extends StatelessWidget {
-  const _CodeBlockChip({required this.controller, required this.block, required this.color});
+  const _CodeBlockChip({required this.controller, required this.block, required this.color, this.compact = false});
+
+  /// A smaller chip that fits in the card's top padding strip.
+  final bool compact;
 
   final RichEditorController controller;
   final CodeBlockRegion block;
@@ -1053,8 +1070,8 @@ class _CodeBlockChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           onTap: () => _editLanguage(context),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            child: Text(label, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+            padding: EdgeInsets.symmetric(horizontal: 6, vertical: compact ? 0 : 2),
+            child: Text(label, style: TextStyle(fontSize: compact ? 10 : 11, height: compact ? 1.2 : null, color: color, fontWeight: FontWeight.w600)),
           ),
         ),
         InkWell(
@@ -1066,8 +1083,8 @@ class _CodeBlockChip extends StatelessWidget {
             );
           },
           child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: Icon(Icons.copy_rounded, size: 15, color: color),
+            padding: EdgeInsets.all(compact ? 1 : 4),
+            child: Icon(Icons.copy_rounded, size: compact ? 12 : 15, color: color),
           ),
         ),
       ],

@@ -10,6 +10,9 @@ class CodeBlockRegion {
     this.language,
     this.firstLineRight = 0.0,
     this.previousLineRight = 0.0,
+    this.firstRowBottom = 0.0,
+    this.lastRowTop = 0.0,
+    this.lastLineRight = 0.0,
   });
 
   /// Y of the block's first line top / last line bottom.
@@ -30,6 +33,13 @@ class CodeBlockRegion {
   final double firstLineRight;
   final double previousLineRight;
 
+  /// Y of the bottom of the block's first row and the top of its last row, and
+  /// the right edge of the text on the last row: where the chip can sit inside
+  /// the card without covering code.
+  final double firstRowBottom;
+  final double lastRowTop;
+  final double lastLineRight;
+
   @override
   bool operator ==(Object other) =>
       other is CodeBlockRegion &&
@@ -39,10 +49,13 @@ class CodeBlockRegion {
       other.end == end &&
       other.language == language &&
       other.firstLineRight == firstLineRight &&
-      other.previousLineRight == previousLineRight;
+      other.previousLineRight == previousLineRight &&
+      other.firstRowBottom == firstRowBottom &&
+      other.lastRowTop == lastRowTop &&
+      other.lastLineRight == lastLineRight;
 
   @override
-  int get hashCode => Object.hash(top, bottom, start, end, language, firstLineRight, previousLineRight);
+  int get hashCode => Object.hash(top, bottom, start, end, language, firstLineRight, previousLineRight, firstRowBottom, lastRowTop, lastLineRight);
 }
 
 /// An empty paragraph (a blank line) and where it sits, so the ruled-paper layer
