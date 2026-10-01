@@ -538,6 +538,45 @@ void main() {
       expect(opened, ['pic', 'pic'], reason: 'a tap on the selected picture opens it');
     });
 
+    testWidgets('selecting a picture far down scrolls it into view; a drag that starts on it still scrolls the note', (tester) async {
+      final store = FakeStore()..files['pic'] = _png;
+      final c = make('${List.generate(30, (i) => 'line $i').join('\n')}\n')..imageStore = store;
+      addTearDown(c.dispose);
+      final scroll = ScrollController();
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = const Size(400, 500);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        theme: ThemeData(fontFamily: 'Roboto'),
+        home: Scaffold(body: RichTextEditor(controller: c, scrollController: scroll, autofocus: false, onOpenImage: (_) {})),
+      ));
+      c.selection = TextSelection.collapsed(offset: c.text.length);
+      c.insertImageBlock('pic', rows: 6);
+      await tester.pump();
+      await tester.runAsync(() => _until(() => c.imageCache!.peek('pic') != null));
+      scroll.jumpTo(0);
+      await tester.pump();
+      expect(scroll.offset, 0);
+
+      c.focusNode.requestFocus();
+      c.selection = TextSelection.collapsed(offset: c.imageRunAt(c.text.length - 1)!.start);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 500));
+      final region = c.renderer.imageBlocks.single;
+      final top = 12 + region.top - scroll.offset;
+      expect(scroll.offset, greaterThan(0), reason: 'scrolled down to the picture');
+      expect(top, greaterThanOrEqualTo(0));
+      expect(top + region.height, lessThanOrEqualTo(500), reason: 'the whole picture is on screen');
+
+      // A drag that starts on the selected picture scrolls the note (the picture
+      // does not take the touch away from the scrollable).
+      final before = scroll.offset;
+      await tester.dragFrom(Offset(150, top + region.height / 2), const Offset(0, 150));
+      await tester.pump();
+      expect(scroll.offset, lessThan(before), reason: 'dragging down on the picture scrolled up');
+    });
+
     testWidgets('the grid stays whole: every line is one row high with a picture in the note', (tester) async {
       final (c, _) = await pumpEditor(tester);
       c.selection = const TextSelection.collapsed(offset: 5);

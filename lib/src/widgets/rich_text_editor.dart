@@ -1072,6 +1072,19 @@ class RichTextEditor extends StatelessWidget {
                       },
                     ),
                     ),
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      child: _ImageScrollGuard(
+                        controller: controller,
+                        scrollController: scrollController,
+                        topPadding: editorStyle.paddingTop,
+                        regions: () {
+                          layoutBottoms(maxTextWidth);
+                          return controller.renderer.imageBlocks;
+                        },
+                      ),
+                    ),
                     Positioned.fill(
                       child: _ImageActions(
                         controller: controller,
@@ -1124,6 +1137,136 @@ String _chipLabel(CodeBlockRegion block) {
 /// Controls of the selected picture: smaller, larger and remove, floating at its
 /// top-right corner. Only the one selected picture has them, so a note full of
 /// pictures builds nothing extra.
+/// A tap on the area it covers, detected from raw pointer events so the touches
+/// still reach the scrollable underneath: a drag that starts on a selected picture
+/// scrolls the note, and only a short, still press counts as a tap.
+class _PassThroughTap extends StatefulWidget {
+  const _PassThroughTap({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  State<_PassThroughTap> createState() => _PassThroughTapState();
+}
+
+class _PassThroughTapState extends State<_PassThroughTap> {
+  Offset? _down;
+  DateTime _downAt = DateTime.now();
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (e) {
+        _down = e.position;
+        _downAt = DateTime.now();
+      },
+      onPointerUp: (e) {
+        final down = _down;
+        _down = null;
+        if (down != null && (e.position - down).distance < kTouchSlop && DateTime.now().difference(_downAt) < const Duration(milliseconds: 350)) {
+          widget.onTap();
+        }
+      },
+      onPointerCancel: (_) => _down = null,
+    );
+  }
+}
+
+/// When a picture becomes the selection, scrolls the note so the whole picture is
+/// in view (and its bar when there is room), and does it again once the keyboard
+/// has opened or closed. The text field only scrolls the caret's row into view,
+/// which for a picture is its top row: a tall picture, or a viewport the keyboard
+/// has squeezed, was left cut off. A picture taller than the viewport is aligned
+/// at its top. Invisible.
+class _ImageScrollGuard extends StatefulWidget {
+  const _ImageScrollGuard({required this.controller, required this.scrollController, required this.topPadding, required this.regions});
+
+  final RichEditorController controller;
+  final ScrollController scrollController;
+  final double topPadding;
+  final List<ImageRegion> Function() regions;
+
+  @override
+  State<_ImageScrollGuard> createState() => _ImageScrollGuardState();
+}
+
+class _ImageScrollGuardState extends State<_ImageScrollGuard> with WidgetsBindingObserver {
+  String? _level;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onController);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didUpdateWidget(_ImageScrollGuard old) {
+    super.didUpdateWidget(old);
+    if (old.controller != widget.controller) {
+      old.controller.removeListener(_onController);
+      widget.controller.addListener(_onController);
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    widget.controller.removeListener(_onController);
+    super.dispose();
+  }
+
+  void _onController() {
+    final level = widget.controller.selectedImageRun?.level;
+    if (level == _level) return;
+    _level = level;
+    // After the field's own scroll to the caret (it runs next frame and animates).
+    if (level != null) _schedule(const Duration(milliseconds: 220));
+  }
+
+  // The keyboard animating changes the viewport many times: reveal once it settles.
+  @override
+  void didChangeMetrics() {
+    if (_level != null) _schedule(const Duration(milliseconds: 320));
+  }
+
+  void _schedule(Duration after) {
+    _timer?.cancel();
+    _timer = Timer(after, _reveal);
+  }
+
+  void _reveal() {
+    if (!mounted) return;
+    final run = widget.controller.selectedImageRun;
+    final scroll = widget.scrollController;
+    if (run == null || !scroll.hasClients) return;
+    ImageRegion? region;
+    for (final r in widget.regions()) {
+      if (r.level == run.level) region = r;
+    }
+    if (region == null) return;
+    final position = scroll.position;
+    final viewport = position.viewportDimension;
+    const margin = 8.0;
+    const barRoom = 64.0; // the bar under the picture: its height and the gap
+    final top = widget.topPadding + region.top;
+    final bottom = widget.topPadding + region.bottom;
+    var target = position.pixels;
+    if (bottom + barRoom - target > viewport) target = bottom + barRoom - viewport; // bring the bottom (and bar) in
+    if (top - margin < target) target = top - margin; // the top always wins
+    target = target.clamp(position.minScrollExtent, position.maxScrollExtent);
+    if ((target - position.pixels).abs() > 1) {
+      scroll.animateTo(target, duration: const Duration(milliseconds: 180), curve: Curves.easeOutCubic);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
 /// A picture sized "Full" fills the text column; its rows were worked out for the
 /// column's width at that moment. When the column becomes wider or narrower (the
 /// margin line switched off or on) a picture that was full-width follows it, so
@@ -1276,8 +1419,7 @@ class _ImageActions extends StatelessWidget {
                 if (tapTarget != null)
                   Positioned.fromRect(
                     rect: tapTarget,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
+                    child: _PassThroughTap(
                       onTap: () {
                         final current = controller.selectedImageRun;
                         if (current != null) onOpen!(current);
