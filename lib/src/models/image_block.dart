@@ -84,3 +84,33 @@ class ImageRun {
   @override
   String toString() => 'ImageRun($start..$end, $rows rows, $level)';
 }
+
+/// The id a picture block carries while its bytes are still being fetched (an
+/// imported `<img>` / `![](url)`); it is replaced by the stored picture's id.
+const String pendingImageId = 'pending';
+
+/// A picture found by an importer: where it came from, and the block level of
+/// the placeholder rows written for it in the imported text.
+class ImportedImage {
+  const ImportedImage({required this.level, required this.source, this.alt = ''});
+
+  /// The placeholder block's level (`img:pending:<instance>`).
+  final String level;
+
+  /// An `http(s)` address or a `data:image/...` URI.
+  final String source;
+
+  /// The alternative text, if the source gave one.
+  final String alt;
+}
+
+/// The most pictures one paste or import brings in; a whole web page can have
+/// hundreds.
+const int maxImportedImages = 12;
+
+/// Whether [source] is something an importer may fetch: a web address or an
+/// inline `data:image/...` URI.
+bool isImportableImageSource(String source) {
+  final s = source.trimLeft().toLowerCase();
+  return s.startsWith('https://') || s.startsWith('http://') || s.startsWith('data:image/');
+}

@@ -26,6 +26,20 @@ class ClipboardManager {
   /// one.
   RichClipboardDelegate? delegate;
 
+  /// Whether pictures in pasted HTML / Markdown become picture blocks (set when
+  /// the editor has an image store). Their placeholders are then listed by
+  /// [takeImports] for the caller to fetch.
+  bool acceptImages = false;
+
+  List<ImportedImage> _imports = const [];
+
+  /// The pictures the last [paste] left as placeholders; clears the list.
+  List<ImportedImage> takeImports() {
+    final out = _imports;
+    _imports = const [];
+    return out;
+  }
+
   ClipboardManager({required this.document, required this.commands, this.delegate});
 
   /// Copies `selection` to the system clipboard (plain text) and, if a
@@ -69,6 +83,7 @@ class ClipboardManager {
   /// Returns the resulting selection, or `null` if there was nothing to
   /// paste.
   Future<EditorSelection?> paste(EditorSelection selection) async {
+    _imports = const [];
     final data = await RichClipboardPlatform.getData();
     final plainText = data.text;
     final htmlText = data.html;
@@ -90,8 +105,9 @@ class ClipboardManager {
 
     // 1. HTML flavor, if the clipboard provided one.
     if (htmlText != null && htmlText.isNotEmpty) {
-      final parsed = const HtmlImporter().parse(htmlText);
+      final parsed = const HtmlImporter().parse(htmlText, images: acceptImages);
       if (parsed.attributes.isNotEmpty || (normalizedPlainText != null && parsed.text != normalizedPlainText)) {
+        _imports = parsed.images;
         // _withAutolinks still runs here: a bare URL from e.g. a
         // browser address bar can arrive as unstyled HTML with no
         // anchor tag, so parsed.attributes alone wouldn't catch it.
@@ -103,8 +119,9 @@ class ClipboardManager {
     if (normalizedPlainText != null && normalizedPlainText.isNotEmpty) {
       final text = normalizedPlainText;
       if (_looksLikeMarkdown(text)) {
-        final parsed = const MarkdownImporter().parse(text);
+        final parsed = const MarkdownImporter().parse(text, images: acceptImages);
         if (parsed.attributes.isNotEmpty) {
+          _imports = parsed.images;
           return commands.pasteRich(selection, parsed.text, _withAutolinks(parsed.text, parsed.attributes));
         }
       }
@@ -129,7 +146,7 @@ class ClipboardManager {
     final fresh = <String, String>{};
     return [
       for (final a in attributes)
-        if (a.type == AttributeType.header && isImageLevel(a.value as String?))
+        if (a.type == AttributeType.header && isImageLevel(a.value as String?) && imageIdOf(a.value as String?) != pendingImageId)
           a.copyWith(value: fresh.putIfAbsent(a.value as String, () => imageLevelFor(imageIdOf(a.value as String?) ?? '', newImageInstance())))
         else
           a,

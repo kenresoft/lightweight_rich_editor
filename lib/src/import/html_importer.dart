@@ -107,12 +107,15 @@ class HtmlImporter {
 
   final int paragraphGap;
 
-  ({String text, List<TextAttribute> attributes}) parse(String htmlString) {
+  /// Parses [htmlString]. With [images] on, each `<img>` (a web address or an
+  /// inline `data:` URI) becomes a block of blank placeholder rows and is listed
+  /// in the result's `images`, for the caller to fetch and fill in.
+  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) parse(String htmlString, {bool images = false}) {
     // Our own export (see HtmlExporter.marker) is re-imported line for line.
     final exact = htmlString.contains(_generatorMarker);
     final document = html_parser.parse(_fragmentOf(htmlString));
     final body = document.body;
-    final run = _Run(exact ? 0 : paragraphGap, tightHeadings: exact, importColors: exact);
+    final run = _Run(exact ? 0 : paragraphGap, tightHeadings: exact, importColors: exact, includeImages: images);
     if (body != null) run.walk(body, const [], null);
     return run.finish();
   }
@@ -138,7 +141,10 @@ String _fragmentOf(String html) {
 }
 
 class _Run {
-  _Run(this.paragraphGap, {this.tightHeadings = false, this.importColors = false});
+  _Run(this.paragraphGap, {this.tightHeadings = false, this.importColors = false, this.includeImages = false});
+
+  final bool includeImages;
+  final List<ImportedImage> _images = [];
 
   final int paragraphGap;
   final bool tightHeadings;
@@ -253,6 +259,10 @@ class _Run {
     }
     if (node.attributes.containsKey('data-rich-image')) {
       _imageBlock(node);
+      return;
+    }
+    if (tag == 'img') {
+      _remoteImage(node);
       return;
     }
     if (tag == 'td' || tag == 'th') {
@@ -519,6 +529,32 @@ class _Run {
     _boundary(0);
   }
 
+  // An `<img>` of a page: a block of blank rows, to be filled with the picture
+  // once its bytes are fetched. Icons, emoji and tracking pixels (tiny or marked
+  // as such) are not pictures worth a block.
+  void _remoteImage(dom.Element e) {
+    if (!includeImages || _images.length >= maxImportedImages) return;
+    var src = (e.attributes['src'] ?? e.attributes['data-src'] ?? '').trim();
+    if (src.isEmpty) {
+      final srcset = (e.attributes['srcset'] ?? '').trim();
+      if (srcset.isNotEmpty) src = srcset.split(',').first.trim().split(RegExp(r'\s+')).first;
+    }
+    if (!isImportableImageSource(src)) return;
+    final w = int.tryParse((e.attributes['width'] ?? '').replaceAll(RegExp(r'[^0-9]'), ''));
+    final h = int.tryParse((e.attributes['height'] ?? '').replaceAll(RegExp(r'[^0-9]'), ''));
+    if ((w != null && w < 48) || (h != null && h < 48)) return;
+    if (RegExp(r'emoji|emoticon|avatar|favicon|spacer|pixel', caseSensitive: false).hasMatch('${e.attributes['class'] ?? ''} $src')) return;
+    final rows = (w != null && h != null) ? rowsForImage(w, h) : 6;
+    final level = imageLevelFor(pendingImageId, newImageInstance());
+    _boundary(0);
+    _beginContent();
+    final start = _length;
+    _write('\n' * (rows - 1));
+    _codeBlocks.add(TextAttribute(start: start, end: _length, type: AttributeType.header, value: level));
+    _images.add(ImportedImage(level: level, source: src, alt: (e.attributes['alt'] ?? '').trim()));
+    _boundary(0);
+  }
+
   void _collectPre(dom.Node node, StringBuffer out) {
     if (node is dom.Text) {
       out.write(node.text);
@@ -559,11 +595,12 @@ class _Run {
     return parent == null ? null : fromClass(parent.attributes['class']);
   }
 
-  ({String text, List<TextAttribute> attributes}) finish() {
+  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) finish() {
     // Trailing owed newlines/space are simply never written.
     return (
       text: _buffer.toString(),
       attributes: [..._mergeAttributes(_attributes), ..._codeBlocks],
+      images: _images,
     );
   }
 

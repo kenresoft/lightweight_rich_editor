@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import '../models/image_block.dart' show pendingImageId;
 import 'rich_image_store.dart';
 
 /// Decoded pictures for the paper layer: a small, bounded, least-recently-used
@@ -42,13 +43,14 @@ class RichImageCache extends ChangeNotifier {
   /// Whether loading [id] was tried and failed (bytes gone, not an image).
   bool hasFailed(String id) => _failed.contains(id);
 
+
   /// Whether [id] is in memory or being loaded.
   bool isLoadedOrLoading(String id) => _entries.containsKey(id) || _loading.contains(id);
 
   /// Makes sure [id] is (being) decoded at about [targetWidth] physical pixels.
   /// Cheap when it already is: a lookup.
   void ensure(String id, int targetWidth) {
-    if (_disposed || _failed.contains(id) || _loading.contains(id)) return;
+    if (_disposed || id == pendingImageId || _failed.contains(id) || _loading.contains(id)) return;
     final entry = _entries[id];
     // Enough already (within a quarter), or the picture is smaller than asked.
     if (entry != null && (entry.width >= targetWidth * 0.75 || entry.nativeSize)) return;

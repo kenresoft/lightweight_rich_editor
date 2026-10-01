@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../images/rich_image_cache.dart';
+import '../models/image_block.dart' show pendingImageId;
 import '../rendering/code_block_region.dart';
 import '../rendering/image_region.dart';
 
@@ -249,7 +250,7 @@ class RuledLinesPainter extends CustomPainter {
         final rrect = RRect.fromRectAndRadius(drawn, const Radius.circular(10));
         canvas.drawRRect(rrect, placeholder);
         canvas.drawRRect(rrect.deflate(0.5), border);
-        if (imageCache?.hasFailed(block.id) ?? false) {
+        if (block.id != pendingImageId && (imageCache?.hasFailed(block.id) ?? false)) {
           // A picture whose bytes are gone: a cross, so it reads as missing.
           final cross = Paint()
             ..color = codeBorderColor

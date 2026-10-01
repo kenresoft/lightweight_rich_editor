@@ -80,8 +80,13 @@ class RichEditorController extends TextEditingController {
     imageCache?.dispose();
     _imageStore = store;
     imageCache = store == null ? null : RichImageCache(store);
+    clipboard.acceptImages = store != null;
     notifyListeners();
   }
+
+  /// Whether [dispose] has run (asynchronous work finishing later must not touch
+  /// a disposed controller).
+  bool disposed = false;
 
   /// Decoded pictures for the paper layer (bounded; see [RichImageCache]).
   RichImageCache? imageCache;
@@ -157,6 +162,7 @@ class RichEditorController extends TextEditingController {
 
   @override
   void dispose() {
+    disposed = true;
     focusNode.removeListener(_handleFocusChange);
     if (_ownsFocusNode) focusNode.dispose();
     documentMutationNotifier.dispose();
@@ -455,6 +461,27 @@ class RichEditorController extends TextEditingController {
     );
   }
 
+  /// The image block whose rows carry exactly [level], or null (it may have been
+  /// deleted since). Used to find an imported picture's placeholder again.
+  ImageRun? imageRunByLevel(String level) {
+    final records = document.paragraphs.records;
+    for (var i = 0; i < records.length; i++) {
+      if (records[i].headerLevel == level) return imageRunAt(records[i].start);
+    }
+    return null;
+  }
+
+  /// Removes an image block without moving the caret away from what it was on
+  /// (an imported picture that could not be fetched).
+  void discardImage(ImageRun run) {
+    final old = selection;
+    final before = document.length;
+    final a = _deleteImageRun(run).start;
+    final removed = before - document.length;
+    int map(int o) => o <= a ? o : (o >= a + removed ? o - removed : a);
+    if (old.isValid) selection = TextSelection(baseOffset: map(old.baseOffset), extentOffset: map(old.extentOffset));
+  }
+
   /// The image block the selection is inside (caret on one of its rows, or a
   /// selection within it), or null.
   ImageRun? get selectedImageRun {
@@ -743,10 +770,11 @@ class RichEditorController extends TextEditingController {
   /// Parses `markdown` (a deliberately scoped subset — see
   /// [MarkdownImporter]) and pastes the result at the current selection.
   void pasteMarkdown(String markdown) {
-    final parsed = const MarkdownImporter().parse(markdown);
+    final parsed = const MarkdownImporter().parse(markdown, images: imageStore != null);
     _repairAndSync(
       commands.pasteRich(_currentSelection, parsed.text, parsed.attributes),
     );
+    resolveImportedImages(parsed.images);
   }
 
   /// Parses `html` (see [HtmlImporter] for what's recognized) and pastes
@@ -758,10 +786,11 @@ class RichEditorController extends TextEditingController {
   /// your app has obtained an HTML string some other way (a clipboard
   /// plugin, a platform channel, drag-and-drop, a web `paste` event).
   void pasteHtml(String html) {
-    final parsed = const HtmlImporter().parse(html);
+    final parsed = const HtmlImporter().parse(html, images: imageStore != null);
     _repairAndSync(
       commands.pasteRich(_currentSelection, parsed.text, parsed.attributes),
     );
+    resolveImportedImages(parsed.images);
   }
 
   /// Copies the current selection to the system clipboard (and to
@@ -786,6 +815,7 @@ class RichEditorController extends TextEditingController {
     _leaveImageRun();
     final result = await clipboard.paste(_currentSelection);
     if (result != null) _repairAndSync(result);
+    resolveImportedImages(clipboard.takeImports());
   }
 
   // Syncs selection, then checks whether the paragraph the paste/import

@@ -1,5 +1,6 @@
 import '../models/attribute_type.dart';
 import '../models/code_block.dart';
+import '../models/image_block.dart';
 import '../models/text_attribute.dart';
 import '../utils/url_detector.dart';
 
@@ -28,7 +29,8 @@ class MarkdownImporter {
   /// lines becomes one blank line, and leading/trailing blank lines are
   /// dropped. Everything else is a line per paragraph, with list markers and
   /// `> ` quote markers kept as literal text.
-  ({String text, List<TextAttribute> attributes}) parse(String markdown) {
+  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) parse(String markdown, {bool images = false}) {
+    final imported = <ImportedImage>[];
     final source = markdown.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final lines = source.split('\n');
 
@@ -106,6 +108,21 @@ class MarkdownImporter {
         continue;
       }
 
+      // A line that is only a picture, `![alt](address)`: a block of blank rows
+      // for the picture to be filled into once it is fetched.
+      final pic = images && imported.length < maxImportedImages ? _pictureLine.firstMatch(line.trim()) : null;
+      if (pic != null && isImportableImageSource(pic.group(2)!)) {
+        final rows = 6;
+        final level = imageLevelFor(pendingImageId, newImageInstance());
+        startLine();
+        final start = buffer.length;
+        buffer.write('\n' * (rows - 1));
+        attributes.add(TextAttribute(start: start, end: buffer.length, type: AttributeType.header, value: level));
+        imported.add(ImportedImage(level: level, source: pic.group(2)!, alt: pic.group(1)!.trim()));
+        i++;
+        continue;
+      }
+
       final stripped = _stripPrefix(line);
       final inline = _parseInline(stripped.rest, isWhatsApp);
       startLine();
@@ -126,8 +143,10 @@ class MarkdownImporter {
       i++;
     }
 
-    return (text: buffer.toString(), attributes: attributes);
+    return (text: buffer.toString(), attributes: attributes, images: imported);
   }
+
+  static final RegExp _pictureLine = RegExp(r'^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)$');
 
   bool _detectWhatsAppFlavor(String markdown) {
     final hasWAExclusive = markdown.contains('```') ||
@@ -185,6 +204,9 @@ class MarkdownImporter {
         }
       }
       if (line[i] == '[' && !escaped.contains(i)) {
+        // `![alt](src)` inside a line of text: the picture itself is not shown
+        // there, so it reads as a link named by its alt text (no stray `!`).
+        if (i > 0 && line[i - 1] == '!' && !escaped.contains(i - 1)) dropped.add(i - 1);
         final closeBracket = line.indexOf(']', i + 1);
         if (closeBracket != -1 && closeBracket + 1 < line.length && line[closeBracket + 1] == '(') {
           final closeParen = line.indexOf(')', closeBracket + 2);

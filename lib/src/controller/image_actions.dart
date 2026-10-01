@@ -9,6 +9,7 @@ import '../commands/replace_range_command.dart';
 import '../commands/set_header_level_command.dart';
 import '../core/editor_selection.dart';
 import '../images/image_prepare.dart';
+import '../images/image_source.dart';
 import '../models/image_block.dart';
 import 'rich_editor_controller.dart';
 
@@ -33,6 +34,66 @@ extension RichEditorImages on RichEditorController {
     if (!isValidImageId(id)) return false;
     insertImageBlock(id, rows: rowsForImage(prepared.width, prepared.height));
     return true;
+  }
+
+  /// Fetches the picture at [source] (a web address or a `data:image/...` URI),
+  /// stores it and inserts it at the caret. Returns `false` if there is no
+  /// [imageStore], or the address cannot be fetched or is not a picture. The
+  /// picture is kept in the store, so the note shows it offline afterwards.
+  Future<bool> insertImageFromSource(String source) async {
+    if (imageStore == null) return false;
+    final bytes = await loadImageSource(source);
+    if (bytes == null || disposed) return false;
+    return insertImageBytes(bytes);
+  }
+
+  /// Fills in the placeholder blocks an import left for pictures ([items], from a
+  /// paste or `pasteHtml`/`pasteMarkdown`): each is fetched, stored and shown in
+  /// place, as one undo step per picture. A picture that cannot be had removes
+  /// its placeholder, so a failed fetch leaves no empty block behind. Fetches run
+  /// side by side and never block typing.
+  Future<void> resolveImportedImages(List<ImportedImage> items) async {
+    if (items.isEmpty) return;
+    await Future.wait([for (final item in items) _resolveImported(item)]);
+  }
+
+  Future<void> _resolveImported(ImportedImage item) async {
+    final store = imageStore;
+    String? id;
+    PreparedImage? prepared;
+    if (store != null) {
+      final bytes = await loadImageSource(item.source);
+      if (bytes != null) prepared = await prepareImage(bytes);
+      if (prepared != null) {
+        try {
+          id = await store.save(prepared.bytes);
+        } catch (_) {
+          id = null;
+        }
+      }
+    }
+    if (disposed) return;
+    final run = imageRunByLevel(item.level);
+    if (run == null) return; // deleted in the meantime
+    if (id == null || prepared == null || !isValidImageId(id)) {
+      discardImage(run);
+      return;
+    }
+    final target = rowsForImage(prepared.width, prepared.height);
+    final instance = item.level.substring(item.level.lastIndexOf(':') + 1);
+    final level = imageLevelFor(id, instance);
+    final delta = target - run.rows;
+    final cmds = <EditorCommand>[
+      if (delta > 0) ReplaceRangeCommand(start: run.end, end: run.end, text: '\n' * delta, attributesForInsertion: const {}),
+      if (delta < 0) ReplaceRangeCommand(start: run.end + delta, end: run.end, text: ''),
+      for (var i = 0; i < target; i++) SetHeaderLevelCommand(EditorSelection.collapsed(run.start + i), level),
+    ];
+    final old = selection;
+    commands.dispatch(CompositeCommand(cmds));
+    if (old.isValid) {
+      int map(int o) => o >= run.end ? o + delta : (o > run.start + target ? run.start + target : o);
+      selection = TextSelection(baseOffset: map(old.baseOffset), extentOffset: map(old.extentOffset));
+    }
   }
 
   /// Inserts the picture [id] (already in the store) as a block of [rows] rows at

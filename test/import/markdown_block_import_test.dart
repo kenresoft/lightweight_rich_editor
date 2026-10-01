@@ -10,7 +10,7 @@ import 'package:lightweight_rich_editor/src/import/markdown_importer.dart';
 const md = MarkdownImporter();
 
 String t(String s) => md.parse(s).text;
-TextAttribute? headerOf(({String text, List<TextAttribute> attributes}) r, [String? value]) =>
+TextAttribute? headerOf(({String text, List<TextAttribute> attributes, List<ImportedImage> images}) r, [String? value]) =>
     r.attributes.where((a) => a.type == AttributeType.header && (value == null || a.value == value)).firstOrNull;
 
 void main() {
