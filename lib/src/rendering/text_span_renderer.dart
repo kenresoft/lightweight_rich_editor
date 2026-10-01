@@ -1199,6 +1199,12 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       decoration: decorations.isEmpty
           ? TextDecoration.none
           : TextDecoration.combine(decorations),
+      // A link's underline is a quiet hairline in the link colour, so the
+      // coloured text carries the link and the line only supports it.
+      decorationColor: linkUrl != null && colorArgb == null && !isActive(AttributeType.underline)
+          ? theme.linkColor.withValues(alpha: 0.45)
+          : null,
+      decorationThickness: linkUrl != null && !isActive(AttributeType.underline) ? 1.0 : null,
       fontFamily: isCode ? theme.codeFontFamily : baseStyle?.fontFamily,
     );
   }
