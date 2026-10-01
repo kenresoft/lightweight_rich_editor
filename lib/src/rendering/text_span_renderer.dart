@@ -334,10 +334,27 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     )..layout(maxWidth: maxWidth <= 0 ? double.infinity : maxWidth);
 
     final bottoms = <double>[];
-    var y = 0.0;
-    for (final line in painter.computeLineMetrics()) {
-      y += line.height;
-      bottoms.add(y);
+    final lines = painter.computeLineMetrics();
+    final forced = strutStyle.forceStrutHeight == true &&
+            strutStyle.fontSize != null &&
+            strutStyle.height != null
+        ? strutStyle.height! * textScaler.scale(strutStyle.fontSize!)
+        : null;
+    if (forced != null && forced > 0) {
+      // A forced strut makes every visual line exactly that tall, whatever
+      // fonts its runs resolve to. `LineMetrics.height` is NOT reliable here:
+      // it reports each run font's own ascent+descent (measured 31px for a
+      // Latin+CJK line whose real, laid-out box is 30px), so summing it would
+      // put the rules out of step with the text the field actually paints.
+      for (var i = 1; i <= lines.length; i++) {
+        bottoms.add(i * forced);
+      }
+    } else {
+      var y = 0.0;
+      for (final line in lines) {
+        y += line.height;
+        bottoms.add(y);
+      }
     }
 
     _cachedLineBottoms = bottoms;

@@ -91,6 +91,13 @@ class _OutdentListAction extends Action<OutdentListIntent> {
   }
 }
 
+// `RenderEditable` reserves `1.0 + cursorWidth` pixels of each line for the
+// caret (`_kCaretGap` is private to the framework, hence the mirror here).
+// The field's `cursorWidth` is set explicitly from [_kCursorWidth] so the two
+// can not drift apart.
+const _kCaretGap = 1.0;
+const _kCursorWidth = 2.0;
+
 // Shared by the real `TextField` (via `DefaultTextHeightBehavior`) and
 // `TextSpanRenderer.lineBottomOffsets`'s parallel layout — both must use
 // the same value or they'll disagree about where a line's glyphs fall.
@@ -475,12 +482,22 @@ class RichTextEditor extends StatelessWidget {
     final textScaler = MediaQuery.textScalerOf(context);
     final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
 
+    // The style `TextField` merges its own onto (Material input text style),
+    // which is where a themed font family comes from. Every manual
+    // measurement below must use the same merged style, or a themed font
+    // would wrap differently in the measurement than in the real field and
+    // the ruled lines would stop matching the text.
+    final theme = Theme.of(context);
+    final inputTextStyle =
+        (theme.useMaterial3 ? theme.textTheme.bodyLarge : theme.textTheme.titleMedium) ??
+        const TextStyle();
     // The one row grid (scaled, pixel-snapped pitch) shared with the
     // renderer's span heights and the painter below — same scaler, same
     // ratio, same instance-per-inputs, so none of them can disagree.
     final metrics = controller.renderer.rowMetrics(
       textScaler: textScaler,
       devicePixelRatio: devicePixelRatio,
+      style: inputTextStyle,
     );
     final rowHeight = metrics.heightMultiplier(renderTheme.baseFontSize);
 
@@ -491,15 +508,23 @@ class RichTextEditor extends StatelessWidget {
       color: renderTheme.textColor,
       letterSpacing: 0.2,
     );
+    final measuredStyle = inputTextStyle.merge(baseTextStyle);
+    // A forced strut takes its baseline from the strut's own font, so it must
+    // resolve to the same family the field's text does or the baseline would
+    // sit at the wrong height within the row.
     final strutStyle = StrutStyle(
+      fontFamily: measuredStyle.fontFamily,
+      fontFamilyFallback: measuredStyle.fontFamilyFallback,
       fontSize: renderTheme.baseFontSize,
       height: rowHeight,
       leadingDistribution: TextLeadingDistribution.proportional,
-      // forceStrutHeight stays false: a header line is several pitches
-      // tall and must be allowed to exceed the strut. Every inline span is
-      // fitted to exactly one pitch and every header to a whole number of
-      // them, so the strut only sets the floor for a genuinely empty line,
-      // which carries no styled span of its own.
+      // When every header fits one row (the Notebook policy) the strut is
+      // forced, so no line can be anything but exactly one pitch — including
+      // a line that mixes fallback fonts (CJK, emoji), whose per-font
+      // ascent/descent split otherwise makes it a pixel taller. If a header
+      // needs several rows it must be allowed to exceed the strut, so the
+      // force is off and the strut is only the floor for an empty line.
+      forceStrutHeight: metrics.allHeadersFitOneRow,
       leading: 0.0,
     );
 
@@ -679,9 +704,18 @@ class RichTextEditor extends StatelessWidget {
               duration: const Duration(milliseconds: 260),
               curve: Curves.easeInOut,
               builder: (context, leftPad, _) {
+                // The width the real field wraps at: `RenderEditable` lays text
+                // out `_kCaretGap + cursorWidth` narrower than its box to keep
+                // room for the caret. Measuring at the full box width would let
+                // a line that fits in that last few pixels stay on one row here
+                // while the field wraps it, shifting every rule below it.
                 final maxTextWidth = math.max(
                   0.0,
-                  totalWidth - leftPad - editorStyle.paddingRight,
+                  totalWidth -
+                      leftPad -
+                      editorStyle.paddingRight -
+                      _kCaretGap -
+                      _kCursorWidth,
                 );
                 return Stack(
                   children: [
@@ -696,7 +730,7 @@ class RichTextEditor extends StatelessWidget {
                         controller: controller,
                         scrollController: scrollController,
                         maxWidth: maxTextWidth,
-                        style: baseTextStyle,
+                        style: measuredStyle,
                         strutStyle: strutStyle,
                         topPadding: editorStyle.paddingTop,
                         textDirection: resolvedTextDirection,
@@ -720,7 +754,7 @@ class RichTextEditor extends StatelessWidget {
                                     .lineBottomOffsets(
                                       controller.document,
                                       maxWidth: maxTextWidth,
-                                      style: baseTextStyle,
+                                      style: measuredStyle,
                                       strutStyle: strutStyle,
                                       textHeightBehavior: _kTextHeightBehavior,
                                       textDirection: resolvedTextDirection,
@@ -775,6 +809,7 @@ class RichTextEditor extends StatelessWidget {
                               focusNode: controller.focusNode,
                               scrollController: scrollController,
                               maxLines: null,
+                              cursorWidth: _kCursorWidth,
                               autofocus: autofocus,
                               textAlign: textAlign,
                               textDirection: textDirection,

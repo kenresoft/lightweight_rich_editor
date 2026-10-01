@@ -29,7 +29,7 @@ class RuledRowMetrics {
     this.textScaler = TextScaler.noScaling,
     this.devicePixelRatio = 1.0,
     this.baseFontFamily,
-  }) : pitch = _snapToPixels(textScaler.scale(theme.lineHeight));
+  }) : pitch = _snapToPixels(_scaledLineHeight(theme, textScaler));
 
   final RichTextRenderTheme theme;
   final TextScaler textScaler;
@@ -157,6 +157,36 @@ class RuledRowMetrics {
     if (natural == null || maxHeaderNaturalHeight <= 0) return 1;
     final rows = (natural / maxHeaderNaturalHeight).ceil();
     return rows < 1 ? 1 : rows;
+  }
+
+  /// Whether every header level (h1–h3) fits a single row at this scale, i.e.
+  /// the whole document is made of exactly-one-pitch lines (the Notebook
+  /// policy). The editor then forces the strut height so a line mixing
+  /// fallback fonts (CJK, emoji, monospace) can never grow past one row: each
+  /// font splits a forced `TextStyle.height` into ascent/descent in its own
+  /// proportion, and the line takes the max of each, which measured up to a
+  /// pixel taller than the pitch.
+  bool get allHeadersFitOneRow => _allHeadersFitOneRow ??=
+      rowsForParagraph(theme.h1FontSize, FontWeight.bold) == 1 &&
+      rowsForParagraph(theme.h2FontSize, FontWeight.bold) == 1 &&
+      rowsForParagraph(theme.h3FontSize, FontWeight.bold) == 1;
+  bool? _allHeadersFitOneRow;
+
+  /// The row height after text scaling, defined by how the BODY text scales:
+  /// `lineHeight × (scaled base size / base size)`.
+  ///
+  /// For a linear scaler that is exactly `textScaler.scale(lineHeight)`. A
+  /// non-linear one (Android 14+ system font scaling shrinks the growth of
+  /// larger sizes: at font scale 2.0 a 16sp run becomes 28 but 30sp only 38)
+  /// would make `scale(lineHeight)` too small for the text it has to hold —
+  /// measured on a device, it pushed H1/H2 onto two rows. Anchoring the pitch
+  /// to the body text keeps the row/body-text ratio constant at every scale,
+  /// and since such curves never grow a larger size faster than a smaller one,
+  /// whatever fits one row with a linear scaler still fits with them.
+  static double _scaledLineHeight(RichTextRenderTheme theme, TextScaler scaler) {
+    final base = theme.baseFontSize;
+    if (!base.isFinite || base <= 0) return scaler.scale(theme.lineHeight);
+    return theme.lineHeight * scaler.scale(base) / base;
   }
 
   // Snapped to a whole *logical* pixel, not a physical one: the engine rounds
