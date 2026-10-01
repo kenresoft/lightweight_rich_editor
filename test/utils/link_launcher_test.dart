@@ -15,10 +15,19 @@ class FakeLauncher extends UrlLauncherPlatform with MockPlatformInterfaceMixin {
   LinkDelegate? get linkDelegate => null;
 
   @override
-  Future<bool> canLaunch(String url) async => canOpen;
+  Future<bool> canLaunch(String url) async => canLaunchAnswer && canOpen;
+
+  /// Android 11+ answers false here for any scheme the app did not declare in
+  /// its manifest `<queries>` — set to emulate that, while launching still works.
+  bool canLaunchAnswer = true;
+
+  /// Every launch attempt, handled or not.
+  final attempted = <String>[];
 
   @override
   Future<bool> launchUrl(String url, LaunchOptions options) async {
+    attempted.add(url);
+    if (!canOpen) return false;
     launched.add(url);
     return true;
   }
@@ -78,6 +87,13 @@ void main() {
       fake.canOpen = false;
       expect(await launchLinkUrl('https://kenresoft.com'), isFalse);
       expect(fake.launched, isEmpty);
+    });
+
+    test('opens even when the platform will not confirm the scheme (Android 11+ without <queries>)', () async {
+      // The real-device bug: canLaunchUrl said false for https, so nothing opened.
+      fake.canLaunchAnswer = false;
+      expect(await launchLinkUrl('https://kenresoft.com/blog/x'), isTrue);
+      expect(fake.launched, ['https://kenresoft.com/blog/x']);
     });
   });
 

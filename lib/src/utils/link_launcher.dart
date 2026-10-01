@@ -45,7 +45,10 @@ Future<bool> launchLinkUrl(String url) async {
   if (uri == null) return false;
 
   try {
-    if (!await canLaunchUrl(uri)) return false;
+    // Deliberately no `canLaunchUrl` pre-check: on Android 11+ it only reports
+    // true for schemes the app declared in its manifest `<queries>`, so an app
+    // that had not declared http/https silently refused every link. `launchUrl`
+    // itself needs no declaration and returns false when nothing can handle it.
     return await launchUrl(uri, mode: LaunchMode.externalApplication);
   } catch (_) {
     return false;

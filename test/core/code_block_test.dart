@@ -39,6 +39,7 @@ class _Canvas implements Canvas {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(loadRoboto);
+  lateBlockTests();
 
   group('model', () {
     test('level helpers', () {
@@ -432,6 +433,60 @@ void main() {
       final painter = tester.widgetList<CustomPaint>(find.byType(CustomPaint)).map((p) => p.painter).whereType<RuledLinesPainter>().single;
       expect(painter.codeBlocks, isNotEmpty);
       expect(painter.codeBlockColor, RichEditorStyle.standard.codeBlockColor);
+    });
+  });
+}
+
+void lateBlockTests() {
+  group('a code block that appears after the editor is mounted', () {
+    Future<void> pump(WidgetTester tester, RichEditorController c) async {
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = const Size(900, 1200);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        theme: ThemeData(fontFamily: 'Roboto'),
+        home: Scaffold(body: RichTextEditor(controller: c, scrollController: ScrollController(), autofocus: false)),
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('toggled on with the toolbar API', (tester) async {
+      final c = make('one\ntwo');
+      addTearDown(c.dispose);
+      await pump(tester, c);
+      expect(find.byIcon(Icons.copy_rounded), findsNothing);
+      c.selection = const TextSelection.collapsed(offset: 5);
+      c.toggleCodeBlock();
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.copy_rounded), findsOneWidget);
+      c.toggleCodeBlock();
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.copy_rounded), findsNothing);
+    });
+
+    testWidgets('arriving through loadDocument and through a paste of HTML', (tester) async {
+      final c = make('');
+      addTearDown(c.dispose);
+      await pump(tester, c);
+      c.loadDocument('x\ny', [codeSpan(0, 1)]);
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.copy_rounded), findsOneWidget);
+
+      const channel = MethodChannel('com.kenresoft.lightweight_rich_editor/rich_clipboard');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'getData') {
+          return {'text': 'a b', 'html': '<p>before</p><pre><code class="language-dart">a = 1\nb = 2</code></pre><p>after</p>'};
+        }
+        return null;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+      c.loadDocument('');
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.copy_rounded), findsNothing);
+      await c.paste();
+      await tester.pumpAndSettle();
+      expect(find.text('dart'), findsOneWidget);
+      expect(find.byIcon(Icons.copy_rounded), findsOneWidget);
     });
   });
 }

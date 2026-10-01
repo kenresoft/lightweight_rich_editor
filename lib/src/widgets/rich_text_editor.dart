@@ -781,10 +781,24 @@ class RichTextEditor extends StatelessWidget {
                               builder: (context, child) {
                                 final lineBottoms = layoutBottoms(maxTextWidth);
                                 return ListenableBuilder(
-                                  listenable: scrollController,
+                                  // Scrolling, and — for the selected-blank-line
+                                  // bars only — selection/focus changes. The paper
+                                  // layer is its own repaint boundary, so a drag
+                                  // repaints just a few rules here.
+                                  listenable: Listenable.merge([scrollController, controller, controller.focusNode]),
                                   builder: (context, child) {
+                                    final sel = controller.selection;
+                                    final selectedBlank = sel.isValid && !sel.isCollapsed && controller.focusNode.hasFocus
+                                        ? controller.renderer.blankLinesSelected(sel.start, sel.end)
+                                        : const <BlankLineRegion>[];
                                     return CustomPaint(
                                       painter: RuledLinesPainter(
+                                        selectedBlankLines: selectedBlank,
+                                        selectionColor:
+                                            DefaultSelectionStyle.of(context).selectionColor ??
+                                            Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+                                        selectionBarLeft: leftPad,
+                                        selectionBarWidth: 10,
                                         lineBottoms: lineBottoms,
                                         codeBlocks: controller.renderer.codeBlocks,
                                         codeBlockColor: editorStyle.codeBlockColor,
@@ -842,12 +856,16 @@ class RichTextEditor extends StatelessWidget {
                               textDirection: textDirection,
                               textCapitalization: TextCapitalization.sentences,
                               keyboardType: TextInputType.multiline,
-                              // Whole-row highlight: `max` boxes span the full ruled row
-                              // (not just the glyphs), so a multi-line selection is one
-                              // continuous band on the paper, a selected blank line shows
-                              // as a full-width bar, and the selected line break is visible.
+                              // Whole-row height: `max` boxes span the full ruled row, not
+                              // just the glyph band, so a multi-line selection is one
+                              // continuous band on the paper with no unselected sliver
+                              // between rows. Width stays `tight` — it follows the
+                              // selected text (spaces included) exactly. (`max` width was
+                              // tried on a device: selecting the last word of a line
+                              // painted the whole rest of the row, which reads as a bigger
+                              // selection than was made.)
                               selectionHeightStyle: BoxHeightStyle.max,
-                              selectionWidthStyle: BoxWidthStyle.max,
+                              selectionWidthStyle: BoxWidthStyle.tight,
                               style: baseTextStyle,
                               strutStyle: strutStyle,
                               inputFormatters: inputFormatters,
@@ -961,22 +979,26 @@ class _CodeBlockActions extends StatelessWidget {
         final blocks = regions();
         if (blocks.isEmpty) return const SizedBox.shrink();
         final scroll = scrollController.hasClients ? scrollController.offset : 0.0;
-        final viewport = scrollController.hasClients && scrollController.position.hasViewportDimension
-            ? scrollController.position.viewportDimension
-            : double.infinity;
-        final children = <Widget>[];
-        for (final block in blocks) {
-          final top = style.paddingTop + block.top - scroll;
-          if (top + 4 < -24 || top > viewport) continue;
-          children.add(
-            Positioned(
-              top: top + 2,
-              right: rightInset - 4,
-              child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
-            ),
-          );
-        }
-        return Stack(children: children);
+        // The height of this editor's own area. (Not the scroll position's
+        // viewport: the field grows with its content, and that dimension lags a
+        // frame behind a paste or an import, which would hide a new block's chip.)
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final children = <Widget>[];
+            for (final block in blocks) {
+              final top = style.paddingTop + block.top - scroll;
+              if (top + 4 < -24 || top > constraints.maxHeight) continue;
+              children.add(
+                Positioned(
+                  top: top + 2,
+                  right: rightInset - 4,
+                  child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
+                ),
+              );
+            }
+            return Stack(children: children);
+          },
+        );
       },
     );
   }

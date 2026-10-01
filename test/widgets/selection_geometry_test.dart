@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 
+import '../rendering/notebook_policy_test.dart' show lay;
 import '../support/notebook_test_support.dart';
 
 const text = 'hello big world and a long wrapping line that goes on\nsecond para   with  gaps  \n\nfourth';
@@ -34,14 +35,14 @@ TextPainter paragraph({double width = 200, double pitch = 30}) {
 List<TextBox> boxes(TextPainter p, TextSelection s, {required bool whole}) => p.getBoxesForSelection(
   s,
   boxHeightStyle: whole ? ui.BoxHeightStyle.max : ui.BoxHeightStyle.tight,
-  boxWidthStyle: whole ? ui.BoxWidthStyle.max : ui.BoxWidthStyle.tight,
+  boxWidthStyle: ui.BoxWidthStyle.tight,
 );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(loadRoboto);
 
-  group('what the field paints with the styles the editor uses (max/max) vs the old tight/tight', () {
+  group('what the field paints with the styles the editor uses (max height, tight width) vs the old tight/tight', () {
     late TextPainter p;
     setUp(() => p = paragraph());
 
@@ -81,17 +82,69 @@ void main() {
       }
     });
 
-    test('a selected blank paragraph shows as a full-width bar; the selected line break is visible', () {
-      final bs = boxes(p, const TextSelection(baseOffset: 76, extentOffset: 82), whole: true);
-      expect(bs.any((b) => b.left == 0 && b.right > 150), isTrue, reason: 'blank line selected as a bar');
-      // Selecting through a line break: the highlight carries on past the last glyph
-      // (to the widest line), where tight boxes would stop at the glyphs.
-      final nl = text.indexOf(String.fromCharCode(10));
-      const pad = 10;
-      final sel = TextSelection(baseOffset: nl - pad, extentOffset: nl + 3);
-      double reach(List<TextBox> b) => b.map((x) => x.right).reduce((a, c) => a > c ? a : c);
-      expect(reach(boxes(p, sel, whole: true)), greaterThanOrEqualTo(reach(boxes(p, sel, whole: false))));
-      expect(boxes(p, sel, whole: true).length, greaterThanOrEqualTo(boxes(p, sel, whole: false).length));
+    test('selecting the last word of a line stays on the word (no band to the right edge)', () {
+      // "goes on" ends the first paragraph; the highlight ends with the glyphs.
+      final end = text.indexOf(String.fromCharCode(10));
+      final bs = boxes(p, TextSelection(baseOffset: end - 4, extentOffset: end), whole: true);
+      expect(bs.single.right, lessThan(p.width), reason: 'tight width: stops at the text, not at the layout edge');
+      expect(bs.single.right - bs.single.left, lessThan(60));
+    });
+  });
+
+  group('selected blank lines (a field paints nothing for a line break with no glyphs)', () {
+    test('the renderer reports the blank lines a selection runs across, with their rows', () {
+      final l = lay('a\n\nb\n\n\nc');
+      final r = l.renderer;
+      expect(r.blankLinesSelected(0, 8).map((b) => b.offset), [2, 5, 6]);
+      expect(r.blankLinesSelected(0, 4).map((b) => b.offset), [2]);
+      expect(r.blankLinesSelected(3, 6).map((b) => b.offset), [5], reason: 'chars 3..5 include the line break at 5');
+      expect(r.blankLinesSelected(3, 5).map((b) => b.offset), isEmpty, reason: 'the line break at 5 is not selected');
+      expect(r.blankLinesSelected(2, 3).map((b) => b.offset), [2]);
+      expect(r.blankLinesSelected(4, 4), isEmpty);
+      final first = r.blankLinesSelected(0, 8).first;
+      expect([first.top, first.bottom], [l.pitch, 2 * l.pitch]);
+    });
+
+    test('the last paragraph has no line break to select; a document without blank lines reports none', () {
+      expect(lay('a\n').renderer.blankLinesSelected(0, 2), isEmpty);
+      expect(lay('a\nb').renderer.blankLinesSelected(0, 3), isEmpty);
+    });
+
+    test('the painter marks each with a short bar in the selection colour, under the text', () {
+      final l = lay('a\n\nb');
+      final canvas = _RectCanvas();
+      RuledLinesPainter(
+        lineBottoms: l.bottoms,
+        selectedBlankLines: l.renderer.blankLinesSelected(0, 4),
+        selectionColor: const Color(0x66123456),
+        selectionBarLeft: 58,
+        selectionBarWidth: 10,
+        fallbackLineHeight: l.pitch,
+        topPadding: 12,
+        scrollOffset: 0,
+        marginOpacity: 0,
+        lineStyle: RuledLineStyle.solid,
+        marginLineX: 44,
+      ).paint(canvas, const Size(400, 300));
+      expect(canvas.rects.length, 1);
+      expect(canvas.rects.single, Rect.fromLTRB(58, 12 + l.pitch, 68, 12 + 2 * l.pitch));
+    });
+
+    test('painter repaint rules: a changed selection repaints, an identical one does not', () {
+      final l = lay('a\n\nb');
+      RuledLinesPainter make(List<BlankLineRegion> lines) => RuledLinesPainter(
+        lineBottoms: l.bottoms,
+        selectedBlankLines: lines,
+        fallbackLineHeight: l.pitch,
+        topPadding: 12,
+        scrollOffset: 0,
+        marginOpacity: 0,
+        lineStyle: RuledLineStyle.solid,
+        marginLineX: 44,
+      );
+      final a = make(l.renderer.blankLinesSelected(0, 4));
+      expect(make(l.renderer.blankLinesSelected(0, 4)).shouldRepaint(a), isFalse);
+      expect(make(const []).shouldRepaint(a), isTrue);
     });
   });
 
@@ -112,11 +165,31 @@ void main() {
       return (c, scroll);
     }
 
-    testWidgets('the field requests whole-row, max-width selection boxes', (tester) async {
+    testWidgets('only a focused, non-collapsed selection across a blank line gets a bar', (tester) async {
+      final (c, _) = await pump(tester, body: 'one\n\ntwo');
+      RuledLinesPainter painter() =>
+          tester.widgetList<CustomPaint>(find.byType(CustomPaint)).map((p) => p.painter).whereType<RuledLinesPainter>().single;
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 8);
+      await tester.pump();
+      expect(c.focusNode.hasFocus, isTrue);
+      expect(painter().selectedBlankLines.map((b) => b.offset), [4]);
+      c.selection = const TextSelection.collapsed(offset: 2);
+      await tester.pump();
+      expect(painter().selectedBlankLines, isEmpty);
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 3);
+      await tester.pump();
+      expect(painter().selectedBlankLines, isEmpty, reason: 'the blank line is not inside this selection');
+      c.focusNode.unfocus();
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 8);
+      await tester.pump();
+      expect(painter().selectedBlankLines, isEmpty, reason: 'no focus: the field hides its selection, so do we');
+    });
+
+    testWidgets('the field requests whole-row height, tight width selection boxes', (tester) async {
       await pump(tester);
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.selectionHeightStyle, ui.BoxHeightStyle.max);
-      expect(field.selectionWidthStyle, ui.BoxWidthStyle.max);
+      expect(field.selectionWidthStyle, ui.BoxWidthStyle.tight);
     });
 
     testWidgets('Shift+Arrow extends the selection one character at a time, including over spaces and line breaks', (tester) async {
@@ -170,4 +243,13 @@ void main() {
       expect(c.document.text.substring(c.selection.start, c.selection.end), 'line 40 with');
     });
   });
+}
+
+class _RectCanvas implements Canvas {
+  final rects = <Rect>[];
+  @override
+  void drawRect(Rect rect, Paint paint) => rects.add(rect);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {}
 }

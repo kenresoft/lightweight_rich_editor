@@ -33,3 +33,16 @@ class CodeBlockRegion {
   @override
   int get hashCode => Object.hash(top, bottom, start, end, language);
 }
+
+/// An empty paragraph (a blank line) and where it sits, so the ruled-paper layer
+/// can mark it when a selection runs across it: a text field paints nothing for
+/// a selected line break that has no glyphs.
+class BlankLineRegion {
+  const BlankLineRegion({required this.offset, required this.top, required this.bottom});
+
+  /// Document offset of the blank paragraph (its own line break is the
+  /// character at this offset).
+  final int offset;
+  final double top;
+  final double bottom;
+}

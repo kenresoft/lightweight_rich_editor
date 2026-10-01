@@ -39,6 +39,10 @@ class RuledLinesPainter extends CustomPainter {
     this.codeBlockColor = const Color(0x1F78909C),
     this.codeLeft = 0.0,
     this.codeRight = 0.0,
+    this.selectedBlankLines = const [],
+    this.selectionColor = const Color(0x663F51B5),
+    this.selectionBarLeft = 0.0,
+    this.selectionBarWidth = 0.0,
     this.lineColor = const Color(0x66607D8B),
     this.marginColor = const Color(0xCCFFCDD2),
   }) {
@@ -80,6 +84,14 @@ class RuledLinesPainter extends CustomPainter {
   final double codeLeft;
   final double codeRight;
 
+  /// Blank lines a selection runs across, marked with a short bar in
+  /// [selectionColor] at [selectionBarLeft] (the field paints nothing for a
+  /// selected line break that has no glyphs).
+  final List<BlankLineRegion> selectedBlankLines;
+  final Color selectionColor;
+  final double selectionBarLeft;
+  final double selectionBarWidth;
+
   /// The top padding of the text area.
   final double topPadding;
 
@@ -107,6 +119,7 @@ class RuledLinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _drawCodeBlocks(canvas, size);
+    _drawSelectedBlankLines(canvas, size);
     if (lineStyle != RuledLineStyle.none) {
       _drawRuledLines(canvas, size);
     }
@@ -129,6 +142,17 @@ class RuledLinesPainter extends CustomPainter {
         ),
         paint,
       );
+    }
+  }
+
+  void _drawSelectedBlankLines(Canvas canvas, Size size) {
+    if (selectedBlankLines.isEmpty || selectionBarWidth <= 0) return;
+    final paint = Paint()..color = selectionColor;
+    for (final line in selectedBlankLines) {
+      final top = topPadding + line.top - scrollOffset;
+      final bottom = topPadding + line.bottom - scrollOffset;
+      if (bottom < 0 || top > size.height) continue;
+      canvas.drawRect(Rect.fromLTRB(selectionBarLeft, top, selectionBarLeft + selectionBarWidth, bottom), paint);
     }
   }
 
@@ -237,6 +261,10 @@ class RuledLinesPainter extends CustomPainter {
   bool shouldRepaint(covariant RuledLinesPainter oldDelegate) =>
       !identical(oldDelegate.lineBottoms, lineBottoms) ||
       !identical(oldDelegate.codeBlocks, codeBlocks) ||
+      !_sameBlankLines(oldDelegate.selectedBlankLines, selectedBlankLines) ||
+      oldDelegate.selectionColor != selectionColor ||
+      oldDelegate.selectionBarLeft != selectionBarLeft ||
+      oldDelegate.selectionBarWidth != selectionBarWidth ||
       oldDelegate.codeBlockColor != codeBlockColor ||
       oldDelegate.codeLeft != codeLeft ||
       oldDelegate.codeRight != codeRight ||
@@ -249,6 +277,15 @@ class RuledLinesPainter extends CustomPainter {
       oldDelegate.marginLineX != marginLineX ||
       oldDelegate.lineColor != lineColor ||
       oldDelegate.marginColor != marginColor;
+
+  static bool _sameBlankLines(List<BlankLineRegion> a, List<BlankLineRegion> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].offset != b[i].offset || a[i].top != b[i].top || a[i].bottom != b[i].bottom) return false;
+    }
+    return true;
+  }
 
   @override
   bool? hitTest(Offset position) => false;

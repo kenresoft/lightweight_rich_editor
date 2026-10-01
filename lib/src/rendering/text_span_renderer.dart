@@ -264,10 +264,34 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
   List<double>? _cachedLineBottoms;
   List<CodeBlockRegion> _cachedCodeBlocks = const [];
+  List<BlankLineRegion> _cachedBlankLines = const [];
 
   /// The code blocks of the document as of the last [lineBottomOffsets] call
   /// (cached under the same key, so it is as fresh as the bottoms it came with).
   List<CodeBlockRegion> get codeBlocks => _cachedCodeBlocks;
+
+  /// The blank lines of the document (same cache as [codeBlocks]) that a
+  /// selection of `[start, end)` selects the line break of — the ones a text
+  /// field leaves unpainted. Sorted by offset.
+  List<BlankLineRegion> blankLinesSelected(int start, int end) {
+    final all = _cachedBlankLines;
+    if (all.isEmpty || end <= start) return const [];
+    var lo = 0;
+    var hi = all.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (all[mid].offset < start) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    final out = <BlankLineRegion>[];
+    for (var i = lo; i < all.length && all[i].offset < end; i++) {
+      out.add(all[i]);
+    }
+    return out;
+  }
   double? _cachedLineBottomsWidth;
   StrutStyle? _cachedLineBottomsStrut;
   String? _cachedLineBottomsText;
@@ -367,6 +391,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
 
     _cachedLineBottoms = bottoms;
     _cachedCodeBlocks = _codeRegions(document, painter, bottoms);
+    _cachedBlankLines = _blankLineRegions(document, painter, bottoms);
     _cachedLineBottomsText = text;
     _cachedLineBottomsRevision = revision;
     _cachedLineBottomsParagraphRevision = paragraphRevision;
@@ -379,6 +404,32 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedLineBottomsDpr = devicePixelRatio;
     _cachedLineBottomsTheme = theme;
     return bottoms;
+  }
+
+  // Every empty paragraph that has a line break of its own (so not the last
+  // paragraph), with its row. Only blank lines are queried, so this stays cheap
+  // however long the document is.
+  List<BlankLineRegion> _blankLineRegions(EditorDocument document, TextPainter painter, List<double> bottoms) {
+    if (bottoms.isEmpty) return const [];
+    final records = document.paragraphs.records;
+    final out = <BlankLineRegion>[];
+    for (var i = 0; i < records.length - 1; i++) {
+      final r = records[i];
+      if (r.start != r.end) continue;
+      final dy = painter.getOffsetForCaret(TextPosition(offset: r.start), Rect.zero).dy;
+      var lo = 0;
+      var hi = bottoms.length - 1;
+      while (lo < hi) {
+        final mid = (lo + hi) >> 1;
+        if (bottoms[mid] > dy + 0.5) {
+          hi = mid;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      out.add(BlankLineRegion(offset: r.start, top: lo == 0 ? 0.0 : bottoms[lo - 1], bottom: bottoms[lo]));
+    }
+    return out;
   }
 
   // Each run of consecutive code lines of one language -> its Y extent, from
