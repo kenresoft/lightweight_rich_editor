@@ -174,6 +174,11 @@ class HtmlExporter {
       case AttributeType.header:
         final tag = value == 'h1' ? 'h1' : (value == 'h2' ? 'h2' : 'h3');
         return isOpen ? '<$tag>' : '</$tag>';
+      case AttributeType.color:
+        // `value` (the ARGB int) is only supplied on open; the close needs none.
+        if (!isOpen) return '</span>';
+        final rgb = ((value as int?) ?? 0) & 0xFFFFFF;
+        return '<span style="color:#${rgb.toRadixString(16).padLeft(6, '0')}">';
       case AttributeType.align:
         // value is ParagraphAlignment.name ('left'/'center'/'right').
         return isOpen ? '<div style="text-align:$value">' : '</div>';

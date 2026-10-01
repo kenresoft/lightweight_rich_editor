@@ -365,7 +365,7 @@ void main() {
       final html = const HtmlExporter(marker: true).export(doc.text, doc.exportAttributes());
       final back = const HtmlImporter().parse(html);
       expect(back.text, doc.text);
-      final span = back.attributes.firstWhere((a) => (a.value as Object?).toString().startsWith('code'));
+      final span = back.attributes.firstWhere((a) => a.value.toString().startsWith('code'));
       expect([span.start, span.end], [7, 7 + dartCode.length]);
     });
   });

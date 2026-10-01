@@ -111,7 +111,7 @@ class HtmlImporter {
     final exact = htmlString.contains(_generatorMarker);
     final document = html_parser.parse(_fragmentOf(htmlString));
     final body = document.body;
-    final run = _Run(exact ? 0 : paragraphGap, tightHeadings: exact);
+    final run = _Run(exact ? 0 : paragraphGap, tightHeadings: exact, importColors: exact);
     if (body != null) run.walk(body, const [], null);
     return run.finish();
   }
@@ -137,10 +137,15 @@ String _fragmentOf(String html) {
 }
 
 class _Run {
-  _Run(this.paragraphGap, {this.tightHeadings = false});
+  _Run(this.paragraphGap, {this.tightHeadings = false, this.importColors = false});
 
   final int paragraphGap;
   final bool tightHeadings;
+
+  // Text colour is imported only from our own export. A copied web page puts
+  // its body text colour on nearly every element, and importing that would
+  // paint pasted articles in a fixed grey that vanishes in a dark theme.
+  final bool importColors;
   int _liDepth = 0;
   final StringBuffer _buffer = StringBuffer();
   final List<TextAttribute> _attributes = [];
@@ -440,6 +445,9 @@ class _Run {
         if (value.contains('line-through')) {
           frames.add(const _StyleFrame(AttributeType.strikethrough, null));
         }
+      } else if (property == 'color' && importColors) {
+        final argb = _parseCssColor(value);
+        if (argb != null) frames.add(_StyleFrame(AttributeType.color, argb));
       } else if (property == 'text-align' && (value == 'left' || value == 'center' || value == 'right')) {
         // value must match ParagraphAlignment.name; 'justify' has no
         // counterpart and is left unrecognized.
@@ -447,6 +455,15 @@ class _Run {
       }
     }
     return frames;
+  }
+
+  // #rgb / #rrggbb only: the one form our own export writes.
+  int? _parseCssColor(String v) {
+    final m = RegExp(r'^#([0-9a-f]{6}|[0-9a-f]{3})$').firstMatch(v);
+    if (m == null) return null;
+    var hex = m.group(1)!;
+    if (hex.length == 3) hex = hex.split('').map((c) => '$c$c').join();
+    return 0xFF000000 | int.parse(hex, radix: 16);
   }
 
   List<TextAttribute> _mergeAttributes(List<TextAttribute> raw) {

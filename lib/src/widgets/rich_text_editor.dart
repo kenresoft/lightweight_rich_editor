@@ -1,5 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
+
+import 'package:flutter/gestures.dart' show kTouchSlop;
+import 'package:flutter/rendering.dart' show RenderEditable;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -288,6 +292,15 @@ class RichTextEditor extends StatelessWidget {
   /// shows no hint, matching plain `TextField` behavior.
   final String? placeholder;
 
+  /// Whether a plain tap on a link opens it (through the controller's
+  /// `onTapLink` if it has one, otherwise the "Open link?" confirmation and
+  /// the platform launcher), in addition to placing the caret there.
+  ///
+  /// Off by default: a tap in editable text is also how the caret is moved.
+  /// It is detected from raw pointer events rather than span gesture
+  /// recognizers, which Flutter does not support inside an editable field.
+  final bool openLinksOnTap;
+
   const RichTextEditor({
     super.key,
     required this.controller,
@@ -303,6 +316,7 @@ class RichTextEditor extends StatelessWidget {
     this.inputFormatters,
     this.autofocus = true,
     this.placeholder,
+    this.openLinksOnTap = false,
   });
 
   void _openLink(BuildContext context, String url) {
@@ -800,7 +814,11 @@ class RichTextEditor extends StatelessWidget {
                     ),
                     Positioned.fill(
                       child: RepaintBoundary(
-                        child: Padding(
+                        child: _LinkTapListener(
+                          enabled: openLinksOnTap,
+                          controller: controller,
+                          onOpen: (url) => _openLink(context, url),
+                          child: Padding(
                           padding: EdgeInsets.only(
                             top: editorStyle.paddingTop,
                             left: leftPad,
@@ -824,8 +842,12 @@ class RichTextEditor extends StatelessWidget {
                               textDirection: textDirection,
                               textCapitalization: TextCapitalization.sentences,
                               keyboardType: TextInputType.multiline,
-                              selectionHeightStyle: BoxHeightStyle.tight,
-                              selectionWidthStyle: BoxWidthStyle.tight,
+                              // Whole-row highlight: `max` boxes span the full ruled row
+                              // (not just the glyphs), so a multi-line selection is one
+                              // continuous band on the paper, a selected blank line shows
+                              // as a full-width bar, and the selected line break is visible.
+                              selectionHeightStyle: BoxHeightStyle.max,
+                              selectionWidthStyle: BoxWidthStyle.max,
                               style: baseTextStyle,
                               strutStyle: strutStyle,
                               inputFormatters: inputFormatters,
@@ -860,6 +882,7 @@ class RichTextEditor extends StatelessWidget {
                                   _defaultContextMenuBuilder,
                             ),
                           ),
+                        ),
                         ),
                       ),
                     ),
@@ -1042,6 +1065,143 @@ class _CodeLanguageDialogState extends State<_CodeLanguageDialog> {
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         TextButton(onPressed: () => Navigator.pop(context, _field.text), child: const Text('Set')),
       ],
+    );
+  }
+}
+
+
+/// Opens a link on a plain tap, from raw pointer events.
+///
+/// Span gesture recognizers cannot be used for this: Flutter's editable text
+/// asserts against recognizers in anything but a read-only field. A [Listener]
+/// does not take part in the gesture arena, so the field still handles the same
+/// tap (caret placement) untouched; this only watches for a quick, still
+/// press-and-release, resolves it to a text position, and — if that position is
+/// on a link glyph — calls [onOpen].
+class _LinkTapListener extends StatefulWidget {
+  const _LinkTapListener({
+    required this.enabled,
+    required this.controller,
+    required this.onOpen,
+    required this.child,
+  });
+
+  final bool enabled;
+  final RichEditorController controller;
+  final void Function(String url) onOpen;
+  final Widget child;
+
+  @override
+  State<_LinkTapListener> createState() => _LinkTapListenerState();
+}
+
+class _LinkTapListenerState extends State<_LinkTapListener> {
+  static const _maxTapDuration = Duration(milliseconds: 350);
+
+  Offset? _downPosition;
+  Timer? _expiry; // a press held longer than a tap
+  bool _expired = false;
+  bool _multiTouch = false;
+  int _pointers = 0;
+
+  void _down(PointerDownEvent e) {
+    _pointers++;
+    if (_pointers > 1) {
+      _multiTouch = true;
+      return;
+    }
+    _multiTouch = false;
+    _downPosition = e.position;
+    _expired = false;
+    _expiry?.cancel();
+    _expiry = Timer(_maxTapDuration, () => _expired = true);
+  }
+
+  void _up(PointerUpEvent e) {
+    _pointers = _pointers > 0 ? _pointers - 1 : 0;
+    final down = _downPosition;
+    final held = _expired;
+    _expiry?.cancel();
+    _downPosition = null;
+    if (!widget.enabled || _multiTouch || down == null || held) return;
+    if ((e.position - down).distance > kTouchSlop) return;
+    _openLinkAt(e.position);
+  }
+
+  void _cancel(PointerCancelEvent e) {
+    _pointers = _pointers > 0 ? _pointers - 1 : 0;
+    _expiry?.cancel();
+    _downPosition = null;
+  }
+
+  @override
+  void dispose() {
+    _expiry?.cancel();
+    super.dispose();
+  }
+
+  RenderEditable? _findRenderEditable() {
+    RenderEditable? found;
+    void visit(RenderObject o) {
+      if (found != null) return;
+      if (o is RenderEditable) {
+        found = o;
+        return;
+      }
+      o.visitChildren(visit);
+    }
+
+    final root = context.findRenderObject();
+    if (root != null) visit(root);
+    return found;
+  }
+
+  void _openLinkAt(Offset global) {
+    final render = _findRenderEditable();
+    if (render == null || !render.hasSize) return;
+    final position = render.getPositionForPoint(global);
+    final offset = position.offset;
+    final controller = widget.controller;
+    if (offset < 0 || offset > controller.document.text.length) return;
+
+    // getPositionForPoint snaps a tap in the empty space after a line's text
+    // to that line's end; only a tap on the link's own glyphs counts.
+    final range = controller.linkRangeAt(offset) ?? (offset > 0 ? controller.linkRangeAt(offset - 1) : null);
+    final url = controller.linkUrlAt(offset) ?? (offset > 0 ? controller.linkUrlAt(offset - 1) : null);
+    if (range == null || url == null) return;
+
+    final local = render.globalToLocal(global);
+    final inside = _pointIsOnText(render, range.start, range.end, local, offset);
+    if (inside) widget.onOpen(url);
+  }
+
+  // Whether [local] falls on the glyph of a link character next to the resolved
+  // text offset: between that character's caret positions on its own line, and
+  // within its row.
+  bool _pointIsOnText(RenderEditable render, int start, int end, Offset local, int offset) {
+    for (final c in [offset - 1, offset]) {
+      if (c < start || c >= end) continue;
+      final a = render.getLocalRectForCaret(TextPosition(offset: c));
+      final b = render.getLocalRectForCaret(TextPosition(offset: c + 1));
+      final sameLine = (a.top - b.top).abs() < 1;
+      final left = a.left - 1;
+      final right = sameLine ? b.left + 1 : a.left + 24; // last glyph of a wrapped line
+      final rowTop = a.top - 4;
+      final rowBottom = a.bottom + 4;
+      if (local.dx >= left && local.dx <= right && local.dy >= rowTop && local.dy <= rowBottom) return true;
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.child;
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _down,
+      onPointerUp: _up,
+      onPointerCancel: _cancel,
+      child: widget.child,
     );
   }
 }
