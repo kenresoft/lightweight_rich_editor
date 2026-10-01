@@ -245,7 +245,15 @@ class _Run {
       return;
     }
 
-    final margins = _marginsFor(tag);
+    final display = _displayOf(node);
+    if (display == 'none') return; // hidden on the page (menus, duplicates) is hidden in the note
+    var margins = _marginsFor(tag);
+    // Layout display is the one piece of CSS that decides where lines break:
+    // Chrome serialises computed styles into the clipboard, and the children of
+    // a flex/grid container are blocks (its plain-text copy puts each on its own
+    // line), as is an element that is itself `display:block`. Everything else
+    // about the page's styling is still ignored.
+    if (margins == null && (_isBlockDisplay(display) || _isFlexItem(node))) margins = _plainBlock;
     var childList = list;
     if (tag == 'ul') {
       childList = _ListContext(false, (list?.depth ?? 0) + 1);
@@ -296,6 +304,27 @@ class _Run {
       final nestedList = (tag == 'ul' || tag == 'ol') && list != null;
       _boundary(nestedList ? 0 : margins.after);
     }
+  }
+
+  static const _blockDisplays = {'block', 'flex', 'grid', 'list-item', 'table', 'flow-root'};
+
+  static String? _displayOf(dom.Element e) {
+    final style = e.attributes['style'];
+    if (style == null || !style.contains('display')) return null;
+    String? last;
+    for (final m in RegExp(r'(?:^|;)\s*display\s*:\s*([a-z-]+)', caseSensitive: false).allMatches(style)) {
+      last = m.group(1)!.toLowerCase();
+    }
+    return last;
+  }
+
+  static bool _isBlockDisplay(String? d) => d != null && _blockDisplays.contains(d);
+
+  static bool _isFlexItem(dom.Element e) {
+    final parent = e.parent;
+    if (parent == null) return false;
+    final d = _displayOf(parent);
+    return d == 'flex' || d == 'grid'; // inline-flex boxes sit in the line, their children with them
   }
 
   // Margins for [tag]: paragraph-like blocks use [paragraphGap], and inside a
@@ -434,7 +463,7 @@ class _Run {
       final property = parts[0].toLowerCase();
       final value = parts[1].toLowerCase();
 
-      if (property == 'font-weight' && (value == 'bold' || value == '700' || value == '800' || value == '900')) {
+      if (property == 'font-weight' && _isBoldWeight(value)) {
         frames.add(const _StyleFrame(AttributeType.bold, null));
       } else if (property == 'font-style' && value == 'italic') {
         frames.add(const _StyleFrame(AttributeType.italic, null));
@@ -455,6 +484,13 @@ class _Run {
       }
     }
     return frames;
+  }
+
+  // CSS treats 600 and up (and `bolder`) as bold.
+  bool _isBoldWeight(String v) {
+    if (v == 'bold' || v == 'bolder') return true;
+    final n = int.tryParse(v);
+    return n != null && n >= 600;
   }
 
   // #rgb / #rrggbb only: the one form our own export writes.
