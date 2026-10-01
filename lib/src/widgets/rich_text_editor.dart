@@ -325,6 +325,11 @@ class RichTextEditor extends StatelessWidget {
   /// host can offer "Undo" (the removal is a single undo step).
   final VoidCallback? onImageRemoved;
 
+  /// Called when the user opens the selected picture (a tap on it while it is
+  /// selected, or the bar's View button): the host shows it full screen.
+  /// With `null` the picture just stays selected.
+  final void Function(ImageRun run)? onOpenImage;
+
   const RichTextEditor({
     super.key,
     required this.controller,
@@ -344,6 +349,7 @@ class RichTextEditor extends StatelessWidget {
     this.onReplaceImage,
     this.onSaveImage,
     this.onImageRemoved,
+    this.onOpenImage,
   });
 
   // The bar's Open is an explicit action: it opens at once, with no "Open link?"
@@ -1050,12 +1056,29 @@ class RichTextEditor extends StatelessWidget {
                         },
                       ),
                     ),
+                    // Keeps full-width pictures full-width when the text column changes
+                    // width (the margin switched on or off).
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      child: _ImageRefit(
+                      controller: controller,
+                      fitWidth: totalWidth -
+                          (showMargin ? editorStyle.paddingLeftMarginOn : editorStyle.paddingLeftMarginOff) -
+                          editorStyle.paddingRight,
+                      regions: () {
+                        layoutBottoms(maxTextWidth);
+                        return controller.renderer.imageBlocks;
+                      },
+                    ),
+                    ),
                     Positioned.fill(
                       child: _ImageActions(
                         controller: controller,
                         onReplace: onReplaceImage,
                         onSave: onSaveImage,
                         onRemoved: onImageRemoved,
+                        onOpen: onOpenImage,
                         scrollController: scrollController,
                         style: editorStyle,
                         leftInset: leftPad,
@@ -1101,12 +1124,68 @@ String _chipLabel(CodeBlockRegion block) {
 /// Controls of the selected picture: smaller, larger and remove, floating at its
 /// top-right corner. Only the one selected picture has them, so a note full of
 /// pictures builds nothing extra.
+/// A picture sized "Full" fills the text column; its rows were worked out for the
+/// column's width at that moment. When the column becomes wider or narrower (the
+/// margin line switched off or on) a picture that was full-width follows it, so
+/// "Full" stays full; pictures sized smaller are left alone. Invisible.
+class _ImageRefit extends StatefulWidget {
+  const _ImageRefit({required this.controller, required this.fitWidth, required this.regions});
+
+  final RichEditorController controller;
+  final double fitWidth;
+  final List<ImageRegion> Function() regions;
+
+  @override
+  State<_ImageRefit> createState() => _ImageRefitState();
+}
+
+class _ImageRefitState extends State<_ImageRefit> {
+  double? _width;
+
+  @override
+  Widget build(BuildContext context) {
+    final old = _width;
+    final now = widget.fitWidth;
+    _width = now;
+    if (old != null && (old - now).abs() > 0.5 && widget.controller.document.paragraphs.hasAnyImage) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _refit(old, now);
+      });
+    }
+    return const SizedBox.shrink();
+  }
+
+  void _refit(double oldWidth, double newWidth) {
+    final controller = widget.controller;
+    final cache = controller.imageCache;
+    if (cache == null) return;
+    int needed(double width, double pitch, int imageWidth, int imageHeight) =>
+        ((width * imageHeight / imageWidth + 2 * RuledLinesPainter.imageInset) / pitch).ceil().clamp(minImageRows, maxImageRows);
+
+    final changes = <String, int>{};
+    for (final region in widget.regions()) {
+      final image = cache.peek(region.id);
+      if (image == null || region.rows <= 0) continue;
+      final pitch = region.height / region.rows;
+      if (pitch <= 0) continue;
+      if (region.rows < needed(oldWidth, pitch, image.width, image.height)) continue; // sized smaller on purpose
+      final target = needed(newWidth, pitch, image.width, image.height);
+      if (target != region.rows) changes[region.level] = target;
+    }
+    for (final entry in changes.entries) {
+      final run = controller.imageRunByLevel(entry.key);
+      if (run != null) controller.resizeImage(run, entry.value - run.rows, moveCaret: false);
+    }
+  }
+}
+
 class _ImageActions extends StatelessWidget {
   const _ImageActions({
     required this.controller,
     required this.onReplace,
     required this.onSave,
     required this.onRemoved,
+    required this.onOpen,
     required this.scrollController,
     required this.style,
     required this.leftInset,
@@ -1118,6 +1197,7 @@ class _ImageActions extends StatelessWidget {
   final void Function(ImageRun run)? onReplace;
   final void Function(ImageRun run)? onSave;
   final VoidCallback? onRemoved;
+  final void Function(ImageRun run)? onOpen;
   final ScrollController scrollController;
   final RichEditorStyle style;
   final double leftInset;
@@ -1175,7 +1255,7 @@ class _ImageActions extends StatelessWidget {
               activeRows = math.min(run.rows, full);
             }
 
-            final barWidth = _ImageBar.widthFor(presets.length, (onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0) + 1);
+            final barWidth = _ImageBar.widthFor(presets.length, (onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0) + (onOpen != null ? 1 : 0) + 1);
             final shownHeight = drawn?.height ?? (region.height - 2 * RuledLinesPainter.imageInset);
             const gap = 8.0;
             // Below the picture, so it is not covered; above it when the screen ends
@@ -1187,18 +1267,42 @@ class _ImageActions extends StatelessWidget {
             }
             final maxLeft = math.max(area.left, constraints.maxWidth - rightInset - barWidth);
             final barLeft = (drawn?.left ?? area.left).clamp(area.left, maxLeft).toDouble();
+            // Tapping the selected picture again opens it (the host's viewer).
+            final tapTarget = onOpen == null || drawn == null
+                ? null
+                : Rect.fromLTWH(drawn.left, top, drawn.width, drawn.height);
             return Stack(
               children: [
+                if (tapTarget != null)
+                  Positioned.fromRect(
+                    rect: tapTarget,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        final current = controller.selectedImageRun;
+                        if (current != null) onOpen!(current);
+                      },
+                    ),
+                  ),
                 Positioned(
                   top: barTop,
                   left: barLeft,
-                  child: _ImageBar(
+                  // A narrow phone scales the bar down rather than letting it overflow.
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: math.max(0.0, constraints.maxWidth - barLeft - 8)),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: _ImageBar(
                     controller: controller,
                     presets: presets,
                     activeRows: activeRows,
                     onReplace: onReplace,
                     onSave: onSave,
                     onRemoved: onRemoved,
+                    onOpen: onOpen,
+                  ),
+                    ),
                   ),
                 ),
               ],
@@ -1228,6 +1332,7 @@ class _ImageBar extends StatelessWidget {
     required this.onReplace,
     required this.onSave,
     required this.onRemoved,
+    required this.onOpen,
   });
 
   static const double height = 48;
@@ -1241,6 +1346,7 @@ class _ImageBar extends StatelessWidget {
   final void Function(ImageRun run)? onReplace;
   final void Function(ImageRun run)? onSave;
   final VoidCallback? onRemoved;
+  final void Function(ImageRun run)? onOpen;
 
   // Acts on the picture selected *now*: a tap may land before this bar has
   // rebuilt from the previous action.
@@ -1307,6 +1413,7 @@ class _ImageBar extends StatelessWidget {
               for (final p in presets) size(p),
               if (presets.isNotEmpty)
                 Container(width: 1, height: 22, margin: const EdgeInsets.symmetric(horizontal: 4), color: Colors.white24),
+              if (onOpen != null) action(Icons.open_in_full_rounded, 'View picture', () => _act(onOpen!)),
               if (onSave != null) action(Icons.download_rounded, 'Save picture', () => _act(onSave!)),
               if (onReplace != null) action(Icons.swap_horiz_rounded, 'Replace picture', () => _act(onReplace!)),
               action(Icons.delete_outline_rounded, 'Remove picture', () {

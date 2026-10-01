@@ -174,9 +174,14 @@ extension RichEditorImages on RichEditorController {
 
   /// Makes the picture [delta] rows taller (or shorter), within
   /// [minImageRows]..[maxImageRows]. The caret stays on the picture.
-  void resizeImage(ImageRun run, int delta) {
+  ///
+  /// With [moveCaret] off (a resize the user did not ask for with the picture
+  /// selected, such as following a change of the text width) the caret stays on
+  /// the text it was on.
+  void resizeImage(ImageRun run, int delta, {bool moveCaret = true}) {
     final target = (run.rows + delta).clamp(minImageRows, maxImageRows);
     if (target == run.rows) return;
+    final old = selection;
     if (target > run.rows) {
       final add = target - run.rows;
       final t = run.end;
@@ -190,7 +195,13 @@ extension RichEditorImages on RichEditorController {
       // The last rows go: the line breaks just before the last row's start.
       commands.dispatch(ReplaceRangeCommand(start: run.end - remove, end: run.end, text: ''));
     }
-    selection = TextSelection.collapsed(offset: run.start);
+    if (moveCaret || !old.isValid) {
+      selection = TextSelection.collapsed(offset: run.start);
+    } else {
+      final change = target - run.rows;
+      int map(int o) => o >= run.end ? o + change : (o > run.end + change ? run.end + change : o);
+      selection = TextSelection(baseOffset: map(old.baseOffset), extentOffset: map(old.extentOffset));
+    }
   }
 
   /// If the system clipboard holds a picture, inserts it and returns `true`;

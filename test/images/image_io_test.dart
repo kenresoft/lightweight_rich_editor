@@ -459,6 +459,85 @@ void main() {
       expect(bar.top >= pictureBottom - 1 || bar.bottom <= pictureTop + 1, isTrue, reason: 'bar $bar vs picture $pictureTop..$pictureBottom');
     });
 
+    testWidgets('a full-width picture stays full when the margin goes off (the column widens); a smaller one is left alone', (tester) async {
+      final store = FakeStore()..files['pic'] = _png;
+      final c = make('hello')..imageStore = store;
+      addTearDown(c.dispose);
+      final scroll = ScrollController();
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = const Size(400, 800);
+      addTearDown(tester.view.reset);
+      Widget editor(bool margin) => MaterialApp(
+            theme: ThemeData(fontFamily: 'Roboto'),
+            home: Scaffold(body: RichTextEditor(controller: c, scrollController: scroll, autofocus: false, showMargin: margin)),
+          );
+      await tester.pumpWidget(editor(true));
+      c.selection = const TextSelection.collapsed(offset: 5);
+      c.insertImageBlock('pic', rows: 14);
+      await tester.pump();
+      await tester.runAsync(() => _until(() => c.imageCache!.peek('pic') != null));
+      c.focusNode.requestFocus();
+      c.selection = TextSelection.collapsed(offset: c.imageRunAt(6)!.start);
+      await tester.pump();
+      await tester.pump();
+      int rows() => c.imageRunAt(6)!.rows;
+
+      await tester.tap(find.text('Full'));
+      await tester.pump();
+      await tester.pump();
+      final fullWithMargin = rows();
+
+      await tester.pumpWidget(editor(false));
+      await tester.pumpAndSettle();
+      expect(rows(), greaterThan(fullWithMargin), reason: 'the wider column needs a taller (still full-width) picture');
+      // And back: narrower column, shorter picture, no spare rows.
+      await tester.pumpWidget(editor(true));
+      await tester.pumpAndSettle();
+      expect(rows(), fullWithMargin);
+
+      // A picture sized smaller on purpose is not touched.
+      await tester.tap(find.text('S'));
+      await tester.pump();
+      await tester.pump();
+      final small = rows();
+      await tester.pumpWidget(editor(false));
+      await tester.pumpAndSettle();
+      expect(rows(), small);
+      expect(c.selection.isValid, isTrue);
+    });
+
+    testWidgets('a selected picture opens in the host viewer: by a tap on it, or the View button', (tester) async {
+      final store = FakeStore()..files['pic'] = _png;
+      final c = make('hello')..imageStore = store;
+      addTearDown(c.dispose);
+      final opened = <String>[];
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = const Size(400, 800);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        theme: ThemeData(fontFamily: 'Roboto'),
+        home: Scaffold(body: RichTextEditor(controller: c, scrollController: ScrollController(), autofocus: false, onOpenImage: (run) => opened.add(run.id))),
+      ));
+      c.selection = const TextSelection.collapsed(offset: 5);
+      c.insertImageBlock('pic', rows: 8);
+      await tester.pump();
+      await tester.runAsync(() => _until(() => c.imageCache!.peek('pic') != null));
+      c.focusNode.requestFocus();
+      c.selection = TextSelection.collapsed(offset: c.imageRunAt(6)!.start);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byTooltip('View picture'), findsOneWidget);
+      await tester.tap(find.byTooltip('View picture'));
+      expect(opened, ['pic']);
+
+      final region = c.renderer.imageBlocks.single;
+      final editable = tester.getTopLeft(find.byType(EditableText));
+      await tester.tapAt(editable + Offset(60, region.top + 40));
+      await tester.pump();
+      expect(opened, ['pic', 'pic'], reason: 'a tap on the selected picture opens it');
+    });
+
     testWidgets('the grid stays whole: every line is one row high with a picture in the note', (tester) async {
       final (c, _) = await pumpEditor(tester);
       c.selection = const TextSelection.collapsed(offset: 5);

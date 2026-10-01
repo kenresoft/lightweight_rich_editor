@@ -461,6 +461,25 @@ class RichEditorController extends TextEditingController {
     );
   }
 
+  /// Every image block of the document, in order (a viewer pages through them).
+  List<ImageRun> get imageRuns {
+    final records = document.paragraphs.records;
+    final runs = <ImageRun>[];
+    var i = 0;
+    while (i < records.length) {
+      if (isImageLevel(records[i].headerLevel)) {
+        final run = imageRunAt(records[i].start);
+        if (run != null) {
+          runs.add(run);
+          i += run.rows;
+          continue;
+        }
+      }
+      i++;
+    }
+    return runs;
+  }
+
   /// The image block whose rows carry exactly [level], or null (it may have been
   /// deleted since). Used to find an imported picture's placeholder again.
   ImageRun? imageRunByLevel(String level) {
