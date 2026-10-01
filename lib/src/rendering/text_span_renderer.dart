@@ -11,6 +11,7 @@ import '../utils/clamp_int.dart';
 import '../utils/horizontal_rule.dart';
 import '../utils/list_prefix.dart';
 import 'code_block_region.dart';
+import 'code_highlighter.dart';
 import 'document_renderer.dart';
 import 'render_theme.dart';
 import 'ruled_row_metrics.dart';
@@ -31,6 +32,13 @@ enum _MarkerKind {
 /// current search-match highlight starting/ending. Sorting these and
 /// sweeping left to right is what turns O(spans × length)
 /// character-by-character style resolution into O(spans log spans).
+class _ColorRun {
+  const _ColorRun(this.start, this.end, this.color);
+  final int start;
+  final int end;
+  final Color color;
+}
+
 class _StyleEvent {
   final int offset;
   final AttributeType? type;
@@ -836,6 +844,8 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     bool? currentChecked;
     bool currentIsHorizontalRule = false;
     var currentIsCode = false;
+    final codeRuns = _codeColorRuns(document);
+    var runCursor = 0;
 
     while (currentPos < text.length) {
       while (eventIndex < events.length &&
@@ -948,19 +958,93 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
                   ]),
                 )
               : resolvedStyle;
-          children.add(
-            TextSpan(
-              text: text.substring(prefixEnd, nextPos),
-              style: contentStyle,
-              recognizer: _recognizerFor(linkUrl),
-            ),
-          );
+          if (currentIsCode && codeRuns.isNotEmpty) {
+            // Syntax colours: the same text split into runs, each differing from
+            // the code style only in colour.
+            var p = prefixEnd;
+            while (runCursor < codeRuns.length && codeRuns[runCursor].end <= p) {
+              runCursor++;
+            }
+            var k = runCursor;
+            while (p < nextPos) {
+              while (k < codeRuns.length && codeRuns[k].end <= p) {
+                k++;
+              }
+              if (k < codeRuns.length && codeRuns[k].start < nextPos) {
+                final run = codeRuns[k];
+                if (run.start > p) {
+                  children.add(TextSpan(text: text.substring(p, run.start), style: contentStyle));
+                  p = run.start;
+                }
+                final e = run.end < nextPos ? run.end : nextPos;
+                children.add(TextSpan(text: text.substring(p, e), style: contentStyle.copyWith(color: run.color)));
+                p = e;
+              } else {
+                children.add(TextSpan(text: text.substring(p, nextPos), style: contentStyle));
+                p = nextPos;
+              }
+            }
+            runCursor = k;
+          } else {
+            children.add(
+              TextSpan(
+                text: text.substring(prefixEnd, nextPos),
+                style: contentStyle,
+                recognizer: _recognizerFor(linkUrl),
+              ),
+            );
+          }
         }
       }
       currentPos = nextPos;
     }
 
     return children;
+  }
+
+  // Tokenisation is cached per (language, block text), so editing prose or a
+  // different block does not re-scan a code block that did not change.
+  final Map<String, List<CodeToken>> _tokenCache = {};
+
+  List<CodeToken> _tokensFor(String language, String code) {
+    final key = '$language\u0000$code';
+    final hit = _tokenCache[key];
+    if (hit != null) return hit;
+    final tokens = tokenizeCode(code, language);
+    if (_tokenCache.length >= 24) _tokenCache.remove(_tokenCache.keys.first);
+    return _tokenCache[key] = tokens;
+  }
+
+  // Colour runs (document offsets, sorted) of every highlightable code block.
+  List<_ColorRun> _codeColorRuns(EditorDocument document) {
+    if (!document.paragraphs.hasAnyCodeBlock) return const [];
+    final text = document.text;
+    final runs = <_ColorRun>[];
+    void block(ParagraphRecord first, ParagraphRecord last) {
+      final language = codeBlockLanguage(first.headerLevel);
+      if (!canHighlight(language)) return;
+      for (final t in _tokensFor(language!, text.substring(first.start, last.end))) {
+        runs.add(_ColorRun(first.start + t.start, first.start + t.end, theme.codeSyntax.colorOf(t.kind)));
+      }
+    }
+
+    ParagraphRecord? first;
+    ParagraphRecord? last;
+    for (final r in document.paragraphs.records) {
+      if (!isCodeBlockLevel(r.headerLevel)) {
+        if (first != null) block(first, last!);
+        first = null;
+        continue;
+      }
+      if (first != null && first.headerLevel != r.headerLevel) {
+        block(first, last!);
+        first = null;
+      }
+      first ??= r;
+      last = r;
+    }
+    if (first != null) block(first, last!);
+    return runs;
   }
 
   TextStyle _resolveStyle(

@@ -13,6 +13,7 @@ export 'src/widgets/lightweight_rich_editor.dart';
 export 'src/painters/ruled_lines_painter.dart';
 export 'src/rendering/render_theme.dart';
 export 'src/rendering/code_block_region.dart';
+export 'src/rendering/code_highlighter.dart' show CodeSyntaxColors;
 export 'src/models/code_block.dart';
 export 'src/rendering/ruled_row_metrics.dart';
 export 'src/rendering/text_span_renderer.dart' show TextSpanRenderer;

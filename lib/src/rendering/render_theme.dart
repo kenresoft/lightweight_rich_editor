@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'code_highlighter.dart' show CodeSyntaxColors;
+
 /// Visual parameters [TextSpanRenderer] resolves attributes into: fonts,
 /// sizes, colors.
 ///
@@ -49,6 +51,10 @@ class RichTextRenderTheme {
   final Color linkColor;
   final String codeFontFamily;
 
+  /// Token colours for code blocks that carry a language label this package can
+  /// highlight. Pass [CodeSyntaxColors.dark] on a dark code background.
+  final CodeSyntaxColors codeSyntax;
+
   /// Background color for the current find-and-replace match.
   /// Deliberately a different hue from [highlightColor], not just a
   /// different opacity, so it stays unmistakable on already-highlighted
@@ -77,6 +83,7 @@ class RichTextRenderTheme {
     this.codeBackgroundColor = const Color(0x1F000000),
     this.linkColor = const Color(0xFF1A73E8),
     this.codeFontFamily = 'monospace',
+    this.codeSyntax = CodeSyntaxColors.light,
     this.matchHighlightColor = const Color(0xFFFFA726),
     this.otherMatchesHighlightColor = const Color(0x66FFA726),
     this.listMarkerColor = const Color(0xFF757575),
@@ -97,6 +104,7 @@ class RichTextRenderTheme {
     Color? codeBackgroundColor,
     Color? linkColor,
     String? codeFontFamily,
+    CodeSyntaxColors? codeSyntax,
     Color? matchHighlightColor,
     Color? otherMatchesHighlightColor,
     Color? listMarkerColor,
@@ -114,6 +122,7 @@ class RichTextRenderTheme {
       codeBackgroundColor: codeBackgroundColor ?? this.codeBackgroundColor,
       linkColor: linkColor ?? this.linkColor,
       codeFontFamily: codeFontFamily ?? this.codeFontFamily,
+      codeSyntax: codeSyntax ?? this.codeSyntax,
       matchHighlightColor: matchHighlightColor ?? this.matchHighlightColor,
       otherMatchesHighlightColor: otherMatchesHighlightColor ?? this.otherMatchesHighlightColor,
       listMarkerColor: listMarkerColor ?? this.listMarkerColor,
@@ -136,6 +145,7 @@ class RichTextRenderTheme {
         other.codeBackgroundColor == codeBackgroundColor &&
         other.linkColor == linkColor &&
         other.codeFontFamily == codeFontFamily &&
+        other.codeSyntax == codeSyntax &&
         other.matchHighlightColor == matchHighlightColor &&
         other.otherMatchesHighlightColor == otherMatchesHighlightColor &&
         other.listMarkerColor == listMarkerColor;
@@ -155,6 +165,7 @@ class RichTextRenderTheme {
     codeBackgroundColor,
     linkColor,
     codeFontFamily,
+    codeSyntax,
     matchHighlightColor,
     otherMatchesHighlightColor,
     listMarkerColor,
