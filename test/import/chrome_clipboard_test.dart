@@ -48,9 +48,32 @@ void main() {
           '<span class="line"></span>\n'
           '<span class="line"><span>}</span></span></code></pre></div><p>After.</p>';
       final r = const HtmlImporter().parse(html);
-      expect(r.text, 'Dart\nvoid main() {\n  print(1);\n\n}\nAfter.');
+      expect(r.text, 'void main() {\n  print(1);\n\n}\nAfter.', reason: 'the Dart caption is the label, not a line');
       final code = r.attributes.where((a) => a.type == AttributeType.header).single;
       expect(r.text.substring(code.start, code.end), 'void main() {\n  print(1);\n\n}');
+    });
+
+    test('a site\'s code caption bar becomes the block language, not a stray line of text', () {
+      const html = '<p>Run:</p><div class="code-block"><div class="code-block__bar"><span class="code-block__lang">Shell</span>'
+          '<button type="button" class="code-block__copy">Copy</button></div>'
+          '<pre><code><span class="line">flutter run --profile</span></code></pre></div><p>Then wait.</p>';
+      final r = const HtmlImporter().parse(html);
+      expect(r.text, 'Run:\n\nflutter run --profile\nThen wait.');
+      final code = r.attributes.singleWhere((a) => a.type == AttributeType.header);
+      expect(code.value, 'code:shell');
+      expect(r.text.substring(code.start, code.end), 'flutter run --profile');
+    });
+
+    test('an explicit language-x class wins over the caption; a bar with no word leaves nothing behind', () {
+      final a = const HtmlImporter().parse('<div class="code-block"><div class="code-block__bar"><span>Shell</span></div><pre><code class="language-dart">x</code></pre></div>');
+      expect(a.attributes.single.value, 'code:dart');
+      final b = const HtmlImporter().parse('<div class="code-block"><div class="code-block__bar"><span></span><button>Copy</button></div><pre>y</pre></div>');
+      expect(b.text, 'y');
+      expect(b.attributes.single.value, 'code');
+    });
+
+    test('ordinary text that merely sits in a div is untouched', () {
+      expect(const HtmlImporter().parse('<div class="header"><span>Intro</span></div><p>x</p>').text, 'Intro\nx');
     });
 
     test('a full copied page region: header furniture, article meta, h1, paragraphs, inline code', () {

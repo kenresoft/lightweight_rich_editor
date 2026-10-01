@@ -261,6 +261,14 @@ class _Run {
       return;
     }
 
+    // The caption bar sites put above a code block ("Dart", "Shell" + a Copy
+    // button) is the block's label, not a line of the note: it becomes the
+    // block's language instead of being pasted as stray text.
+    final barLang = _codeBarLanguage(node);
+    if (barLang != null) {
+      _pendingCodeLanguage = barLang;
+      return;
+    }
     final display = _displayOf(node);
     if (display == 'none') return; // hidden on the page (menus, duplicates) is hidden in the note
     var margins = _marginsFor(tag);
@@ -320,6 +328,30 @@ class _Run {
       final nestedList = (tag == 'ul' || tag == 'ol') && list != null;
       _boundary(nestedList ? 0 : margins.after);
     }
+  }
+
+  String? _pendingCodeLanguage;
+
+  static final RegExp _codeBarClass = RegExp(r'code|highlight|snippet', caseSensitive: false);
+  static final RegExp _barWord = RegExp(r'bar|header|toolbar|title|label|lang|caption', caseSensitive: false);
+
+  // An element classed like a code block's caption bar whose visible text is one
+  // short language-like word; returns that word normalised, else null.
+  static String? _codeBarLanguage(dom.Element e) {
+    final cls = e.attributes['class'];
+    if (cls == null || !_codeBarClass.hasMatch(cls) || !_barWord.hasMatch(cls)) return null;
+    final buf = StringBuffer();
+    void collect(dom.Node n) {
+      if (n is dom.Text) {
+        buf.write(n.text);
+      } else if (n is dom.Element && !_skippedTags.contains(n.localName)) {
+        n.nodes.forEach(collect);
+      }
+    }
+    collect(e);
+    final text = buf.toString().trim();
+    if (text.isEmpty || text.length > 20 || RegExp(r'\s').hasMatch(text)) return null;
+    return normalizeCodeLanguage(text);
   }
 
   static const _blockDisplays = {'block', 'flex', 'grid', 'list-item', 'table', 'flow-root'};
@@ -403,7 +435,8 @@ class _Run {
     }
     if (code.trim().isEmpty) return;
 
-    final lang = _languageOf(pre);
+    final lang = _languageOf(pre) ?? _pendingCodeLanguage;
+    _pendingCodeLanguage = null;
     _boundary(0);
     _beginContent();
     final start = _length;

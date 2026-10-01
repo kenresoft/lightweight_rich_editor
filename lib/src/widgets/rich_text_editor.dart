@@ -955,7 +955,7 @@ class RichTextEditor extends StatelessWidget {
   }
 }
 
-/// A small "language · copy" chip in the top-right corner of every code block
+/// A small "language · copy" chip on the top-right edge of every code block
 /// currently in view. Positions come from the same cached layout the ruled
 /// lines use (`TextSpanRenderer.codeBlocks`), re-read on every document change
 /// or scroll, so no extra text layout happens here.
@@ -993,7 +993,9 @@ class _CodeBlockActions extends StatelessWidget {
               if (top + 4 < -24 || top > constraints.maxHeight) continue;
               children.add(
                 Positioned(
-                  top: top + 2,
+                  // Hangs on the block's top edge, over the gap above it, so a long
+                  // first line is never covered; a block at the very top keeps it inside.
+                  top: (top - 21).clamp(0.0, double.infinity),
                   right: rightInset - 4,
                   child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
                 ),
