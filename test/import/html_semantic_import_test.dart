@@ -275,7 +275,8 @@ void main() {
       await clipboard.paste(const EditorSelection.collapsed(0));
       final renderer = TextSpanRenderer(theme: const RichTextRenderTheme(lineHeight: 30));
       final span = renderer.renderSpan(document, style: const TextStyle(fontSize: 16));
-      expect(span.toPlainText(), document.text);
+      // (bullet markers are drawn as dots, same length)
+      expect(span.toPlainText().replaceAll('•', '-'), document.text);
       final runs = span.children!.cast<TextSpan>();
       final codeRun = runs.firstWhere((r) => r.text!.contains('print'));
       expect(codeRun.style!.fontFamily, 'monospace');

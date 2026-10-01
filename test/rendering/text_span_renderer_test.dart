@@ -490,7 +490,10 @@ void main() {
       final span = renderer.renderSpan(document);
       final children = span.children!.cast<TextSpan>();
 
-      expect(children.first.text, '- ');
+      // Drawn as a bullet dot, one character for one character: the stored
+      // text (and every offset) is still '- '.
+      expect(children.first.text, '• ');
+      expect(span.toPlainText().length, document.text.length);
       expect(children.first.style!.fontWeight, FontWeight.w600);
       expect(children.first.style!.letterSpacing, isNot(3.0));
     });

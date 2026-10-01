@@ -909,7 +909,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         if (prefixEnd > currentPos) {
           children.add(
             TextSpan(
-              text: text.substring(currentPos, prefixEnd),
+              text: _displayPrefix(text.substring(currentPos, prefixEnd), currentChecked),
               style: _listPrefixStyle(resolvedStyle),
               recognizer: currentChecked != null
                   ? _checkboxRecognizerFor(currentPos)
@@ -1092,6 +1092,18 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
                 ? theme.linkColor.withValues(alpha: 0.3)
                 : (isOtherMatch ? theme.otherMatchesHighlightColor : null)),
     );
+  }
+
+  // A bullet item's '-' / '*' / '+' is drawn as a bullet dot. One character
+  // for one character, so every offset in the document and the field still
+  // lines up; the stored text is untouched (copy, export and undo see '- ').
+  String _displayPrefix(String prefix, bool? checked) {
+    if (checked != null) return prefix;
+    final i = prefix.length - 2;
+    if (i < 0 || prefix.codeUnitAt(prefix.length - 1) != 0x20) return prefix;
+    final marker = prefix[i];
+    if ((marker != '-' && marker != '*' && marker != '+') || prefix.substring(0, i).trim().isNotEmpty) return prefix;
+    return '${prefix.substring(0, i)}• ';
   }
 
   // Styling for a literal list-prefix run — layers the theme's marker
