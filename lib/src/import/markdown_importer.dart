@@ -150,11 +150,41 @@ class MarkdownImporter {
   }
 
   ({String text, List<TextAttribute> attributes}) _parseInline(String line, bool isWhatsApp) {
+    // Backslash escapes: `\*` is a literal `*`. The backslash is dropped from
+    // the output and the escaped character never starts a link or emphasis.
+    final escaped = <int>{};
+    final dropped = <int>{};
+    for (var k = 0; k + 1 < line.length; k++) {
+      if (line[k] == r'\' && _escapable.contains(line[k + 1])) {
+        dropped.add(k);
+        escaped.add(k + 1);
+        k++;
+      }
+    }
+
     // Links first
     final links = <({int start, int end, int textStart, int textEnd, String url})>[];
     var i = 0;
     while (i < line.length) {
-      if (line[i] == '[') {
+      if (line[i] == '<' && !escaped.contains(i)) {
+        // Autolink: <https://example.com> or <name@example.com>
+        final close = line.indexOf('>', i + 1);
+        if (close != -1) {
+          final inner = line.substring(i + 1, close);
+          String? url;
+          if (RegExp(r'^(https?|mailto|tel):[^\s<>]+$', caseSensitive: false).hasMatch(inner)) {
+            url = inner;
+          } else if (RegExp(r'^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$').hasMatch(inner)) {
+            url = 'mailto:$inner';
+          }
+          if (url != null) {
+            links.add((start: i, end: close + 1, textStart: i + 1, textEnd: close, url: url));
+            i = close + 1;
+            continue;
+          }
+        }
+      }
+      if (line[i] == '[' && !escaped.contains(i)) {
         final closeBracket = line.indexOf(']', i + 1);
         if (closeBracket != -1 && closeBracket + 1 < line.length && line[closeBracket + 1] == '(') {
           final closeParen = line.indexOf(')', closeBracket + 2);
@@ -174,16 +204,31 @@ class MarkdownImporter {
     bool insideLink(int index) => links.any((l) => index >= l.start && index < l.end);
 
     // Emphasis markers outside link ranges
-    final occurrences = <({int index, String marker})>[];
+    final occurrences = <({int index, String marker, bool canOpen, bool canClose})>[];
     i = 0;
     while (i < line.length) {
-      if (insideLink(i)) {
+      if (insideLink(i) || escaped.contains(i) || dropped.contains(i)) {
         i++;
         continue;
       }
       final marker = _markerAt(line, i, isWhatsApp);
       if (marker != null) {
-        occurrences.add((index: i, marker: marker));
+        // Flanking, as in CommonMark: an opener is followed by text and a closer
+        // preceded by it, so `2 * 3 * 4` is arithmetic, not emphasis. `_` also
+        // may not open or close inside a word (snake_case_name).
+        final before = i > 0 ? line[i - 1] : null;
+        final after = i + marker.length < line.length ? line[i + marker.length] : null;
+        var canOpen = after != null && !_isSpace(after);
+        var canClose = before != null && !_isSpace(before);
+        if (marker.startsWith('_')) {
+          if (before != null && _isWordChar(before)) canOpen = false;
+          if (after != null && _isWordChar(after)) canClose = false;
+        }
+        if (marker.startsWith('`') && !isWhatsApp) {
+          canOpen = after != null;
+          canClose = before != null;
+        }
+        occurrences.add((index: i, marker: marker, canOpen: canOpen, canClose: canClose));
         i += marker.length;
       } else {
         i++;
@@ -225,7 +270,7 @@ class MarkdownImporter {
         continue;
       }
 
-      buffer.write(line[i]);
+      if (!dropped.contains(i)) buffer.write(line[i]);
       i++;
     }
 
@@ -286,8 +331,13 @@ class MarkdownImporter {
     }
   }
 
+  static const _escapable = r'\`*_{}[]()#+-.!~<>|';
+
+  static bool _isSpace(String ch) => ch.trim().isEmpty;
+  static bool _isWordChar(String ch) => RegExp(r'[A-Za-z0-9]').hasMatch(ch);
+
   List<({int openIndex, int closeIndex, int markerLength, AttributeType type})> _pairMarkers(
-      List<({int index, String marker})> occurrences,
+      List<({int index, String marker, bool canOpen, bool canClose})> occurrences,
       bool isWhatsApp,
       ) {
     final pairs = <({int openIndex, int closeIndex, int markerLength, AttributeType type})>[];
@@ -295,7 +345,7 @@ class MarkdownImporter {
 
     for (final occ in occurrences) {
       final stack = openStacks.putIfAbsent(occ.marker, () => []);
-      if (stack.isNotEmpty) {
+      if (stack.isNotEmpty && occ.canClose) {
         final openIndex = stack.removeLast();
         if (occ.index > openIndex + occ.marker.length) {
           pairs.add((
@@ -305,7 +355,7 @@ class MarkdownImporter {
           type: _markerType(occ.marker, isWhatsApp),
           ));
         }
-      } else {
+      } else if (occ.canOpen) {
         stack.add(occ.index);
       }
     }
