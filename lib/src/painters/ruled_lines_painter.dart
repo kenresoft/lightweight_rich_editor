@@ -118,8 +118,14 @@ class RuledLinesPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Blocks and selection bars scroll with the text, so they are cut at the
+    // text area's top edge like the text itself: with a header above the
+    // editor (a title, chips) they must not bleed up behind it.
+    canvas.save();
+    canvas.clipRect(Rect.fromLTRB(0, topPadding, size.width, size.height));
     _drawCodeBlocks(canvas, size);
     _drawSelectedBlankLines(canvas, size);
+    canvas.restore();
     if (lineStyle != RuledLineStyle.none) {
       _drawRuledLines(canvas, size);
     }

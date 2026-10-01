@@ -990,12 +990,14 @@ class _CodeBlockActions extends StatelessWidget {
             final children = <Widget>[];
             for (final block in blocks) {
               final top = style.paddingTop + block.top - scroll;
-              if (top + 4 < -24 || top > constraints.maxHeight) continue;
+              // Hidden once the block's top edge has scrolled under the text
+              // area's top (the header above the editor is not part of it).
+              if (top < style.paddingTop - 1 || top > constraints.maxHeight) continue;
               children.add(
                 Positioned(
                   // Hangs on the block's top edge, over the gap above it, so a long
                   // first line is never covered; a block at the very top keeps it inside.
-                  top: (top - 21).clamp(0.0, double.infinity),
+                  top: (top - 21).clamp(style.paddingTop, double.infinity),
                   right: rightInset - 4,
                   child: _CodeBlockChip(controller: controller, block: block, color: style.codeBlockLabelColor),
                 ),

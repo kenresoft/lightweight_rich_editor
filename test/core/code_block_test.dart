@@ -1,5 +1,6 @@
 // Block-level code: paragraph metadata that behaves like a block through
 // editing, undo/redo, rendering, the ruled-paper layer, copy and export.
+import 'dart:ui' show ClipOp;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,10 @@ class _Canvas implements Canvas {
 
   @override
   void drawRRect(RRect rrect, Paint paint) => rrects.add(rrect);
+
+  final clips = <Rect>[];
+  @override
+  void clipRect(Rect rect, {ClipOp clipOp = ClipOp.intersect, bool doAntiAlias = true}) => clips.add(rect);
 
   @override
   dynamic noSuchMethod(Invocation invocation) {}
@@ -286,6 +291,25 @@ void main() {
       // rules above and below are still there
       expect(canvas.lineYs.any((y) => y <= top + 0.5), isTrue);
       expect(canvas.lineYs.any((y) => y > bottom + 0.5), isTrue);
+    });
+
+    test('a block scrolled partly above the text area is clipped at its top edge, not painted behind a header', () {
+      final l = lay('a\nb\nc\nd\ne', attrs: [codeSpan(0, 9)], dpr: 1.0);
+      final canvas = _Canvas();
+      RuledLinesPainter(
+        lineBottoms: l.bottoms,
+        codeBlocks: l.renderer.codeBlocks,
+        fallbackLineHeight: l.pitch,
+        topPadding: 120,
+        scrollOffset: l.pitch * 2,
+        marginOpacity: 0,
+        lineStyle: RuledLineStyle.none,
+        marginLineX: 44,
+      ).paint(canvas, const Size(400, 600));
+      expect(canvas.rrects, hasLength(1));
+      expect(canvas.rrects.single.top, lessThan(120), reason: 'the rect itself starts above the text area');
+      expect(canvas.clips, isNotEmpty);
+      expect(canvas.clips.first.top, 120, reason: 'but the layer is clipped at the text area top');
     });
 
     test('a block scrolled out of view paints nothing', () {
