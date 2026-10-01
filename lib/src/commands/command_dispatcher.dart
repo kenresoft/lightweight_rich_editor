@@ -220,6 +220,21 @@ class CommandDispatcher {
     return plan.selection;
   }
 
+  /// Edits the link over `[start, end)`: sets its visible [text] (when it
+  /// differs) and its [url] (`null` removes the link) as one undo step. Returns
+  /// the selection covering the edited text.
+  EditorSelection editLink(int start, int end, String text, String? url) {
+    final current = engine.document.text.substring(start, end);
+    final newEnd = start + text.length;
+    final target = EditorSelection(baseOffset: start, extentOffset: newEnd);
+    final commands = <EditorCommand>[
+      if (text != current) ReplaceRangeCommand(start: start, end: end, text: text),
+      ApplyAttributeCommand(AttributeType.link, target, url),
+    ];
+    dispatch(commands.length == 1 ? commands.first : CompositeCommand(commands));
+    return target;
+  }
+
   void clearFormatting(EditorSelection selection) {
     dispatch(ClearFormattingCommand(selection));
   }

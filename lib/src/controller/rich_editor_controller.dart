@@ -837,6 +837,11 @@ class RichEditorController extends TextEditingController {
   String codeBlockText(int start, int end) => document.text.substring(start, end);
 
   void setLink(String? url) => commands.setLink(_currentSelection, url);
+
+  /// Changes the text and/or address of the link at [range] in one undo step;
+  /// `url: null` removes the link and keeps its text.
+  void editLink(TextRange range, String text, String? url) =>
+      _syncSelection(commands.editLink(range.start, range.end, text, url));
   void setHeader(String? level) => commands.setHeader(_currentSelection, level);
   void setAlignment(ParagraphAlignment? alignment) =>
       commands.setAlignment(_currentSelection, alignment);

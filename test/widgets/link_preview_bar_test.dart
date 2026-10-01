@@ -4,6 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/src/controller/rich_editor_controller.dart';
 import 'package:lightweight_rich_editor/src/models/attribute_type.dart';
 import 'package:lightweight_rich_editor/src/models/text_attribute.dart';
+import 'package:lightweight_rich_editor/src/utils/link_launcher.dart';
+import 'package:lightweight_rich_editor/src/utils/url_detector.dart';
+import 'package:lightweight_rich_editor/src/widgets/link_edit_sheet.dart';
 import 'package:lightweight_rich_editor/src/widgets/link_preview_bar.dart';
 import 'package:lightweight_rich_editor/src/widgets/rich_text_editor.dart';
 
@@ -113,20 +116,101 @@ void main() {
     expect(find.byType(LinkPreviewBar), findsOneWidget);
   });
 
-  testWidgets('Dismiss hides the bar until the caret moves into a link again', (tester) async {
+  testWidgets('typing or pasting next to a link does not pop the bar; moving the caret onto it does', (tester) async {
     final c = linked();
     await mount(tester, c, autofocus: true);
     c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
     await tester.pump();
     expect(find.byType(LinkPreviewBar), findsOneWidget);
-    await tester.tap(find.byTooltip('Dismiss'));
+    // an edit that leaves the caret inside the link
+    c.value = TextEditingValue(text: 'Click hexre for docs', selection: const TextSelection.collapsed(offset: 9));
     await tester.pump();
     expect(find.byType(LinkPreviewBar), findsNothing);
+    // moving away and back is a deliberate touch
     c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 0));
     await tester.pump();
-    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 9));
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
     await tester.pump();
     expect(find.byType(LinkPreviewBar), findsOneWidget);
+  });
+
+  testWidgets('Remove link unlinks and keeps the text, as one undo step', (tester) async {
+    final c = linked();
+    await mount(tester, c, autofocus: true);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Remove link'));
+    await tester.pump();
+    expect(c.linkUrlAt(8), isNull);
+    expect(c.document.text, 'Click here for docs');
+    expect(find.byType(LinkPreviewBar), findsNothing);
+    c.undo();
+    expect(c.linkUrlAt(8), 'https://docs.example.com/cms/');
+  });
+
+  testWidgets('Edit link: change the text and the address in a sheet', (tester) async {
+    final c = linked();
+    await mount(tester, c, autofocus: true);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Edit link'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit link'), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextField, 'Text'), 'our docs');
+    await tester.enterText(find.widgetWithText(TextField, 'Link'), 'kenresoft.com/docs');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(c.document.text, 'Click our docs for docs');
+    expect(c.linkUrlAt(8), 'https://kenresoft.com/docs');
+    expect(c.linkRangeAt(8), const TextRange(start: 6, end: 14));
+    c.undo();
+    expect(c.document.text, 'Click here for docs');
+    expect(c.linkUrlAt(8), 'https://docs.example.com/cms/');
+  });
+
+  testWidgets('Edit link: an email address is stored as mail, an unopenable one is refused', (tester) async {
+    final c = linked();
+    await mount(tester, c, autofocus: true);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Edit link'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Link'), 'javascript:alert(1)');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text("That isn't a link we can open"), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextField, 'Link'), 'kix@gmail.com');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(c.linkUrlAt(8), 'mailto:kix@gmail.com');
+  });
+
+  testWidgets('Edit sheet: Remove link', (tester) async {
+    final c = linked();
+    await mount(tester, c, autofocus: true);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Edit link'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove link'));
+    await tester.pumpAndSettle();
+    expect(c.linkUrlAt(8), isNull);
+    expect(c.document.text, 'Click here for docs');
+  });
+
+  test('an address autolinks as mail, never as https://name@host', () {
+    expect(normalizeUrlToken('kix@gmail.com'), 'mailto:kix@gmail.com');
+    expect(normalizeUrlToken('first.last+tag@sub.example.co.uk'), 'mailto:first.last+tag@sub.example.co.uk');
+    expect(normalizeUrlToken('example.com'), 'https://example.com');
+    expect(detectAllUrls('write kix@gmail.com now').single.href, 'mailto:kix@gmail.com');
+    // links stored wrongly by an older build still open as mail
+    expect(normalizeLinkUri('https://kix@gmail.com')?.toString(), 'mailto:kix@gmail.com');
+    expect(normalizeLinkUri('https://user:pw@host.com/x')?.scheme, 'https');
+    expect(linkDisplayTarget('https://kix@gmail.com'), 'kix@gmail.com');
+    expect(hrefForInput('kix@gmail.com'), 'mailto:kix@gmail.com');
+    expect(hrefForInput('kenresoft.com/x'), 'https://kenresoft.com/x');
+    expect(hrefForInput('tel:+2348012345678'), 'tel:+2348012345678');
+    expect(hrefForInput('javascript:alert(1)'), isNull);
   });
 
   test('the bar splits a URL into host and the rest', () {

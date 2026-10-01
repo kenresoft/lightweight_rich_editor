@@ -15,6 +15,7 @@ import '../rendering/editor_style.dart';
 import '../search/search_index.dart';
 import '../utils/link_launcher.dart';
 import '../utils/list_prefix.dart';
+import 'link_edit_sheet.dart';
 import 'link_entry_dialog.dart';
 import 'link_preview_bar.dart';
 
@@ -321,6 +322,16 @@ class RichTextEditor extends StatelessWidget {
     this.placeholder,
     this.openLinksOnTap = false,
   });
+
+  // The bar's Open is an explicit action: it opens at once, with no "Open link?"
+  // prompt in between (the prompt guards an accidental tap on the text).
+  void _openLinkNow(BuildContext context, String url) {
+    if (controller.hasCustomTapHandler) {
+      controller.renderer.onTapLink?.call(url);
+    } else {
+      openLinkNow(context, url);
+    }
+  }
 
   void _openLink(BuildContext context, String url) {
     if (controller.hasCustomTapHandler) {
@@ -946,7 +957,7 @@ class RichTextEditor extends StatelessWidget {
                       child: _LinkBarHost(
                         controller: controller,
                         scrollController: scrollController,
-                        onOpen: (url) => _openLink(context, url),
+                        onOpen: (url) => _openLinkNow(context, url),
                       ),
                     ),
                   ],
@@ -958,6 +969,15 @@ class RichTextEditor extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The chip's text: the block's label; for an unlabelled block the language its
+/// text looks like (what its colours follow); "plain text" for an explicit
+/// plain block; "code" when there is nothing to say.
+String _chipLabel(CodeBlockRegion block) {
+  final language = block.language;
+  if (language == 'text') return 'plain text';
+  return language ?? block.guessedLanguage ?? 'code';
 }
 
 /// Clips to the child's box, extended downward by [extra].
@@ -990,6 +1010,7 @@ class _LinkBarHost extends StatefulWidget {
 
 class _LinkBarHostState extends State<_LinkBarHost> {
   int? _dismissedAt;
+  String? _lastText;
 
   @override
   void initState() {
@@ -1020,6 +1041,28 @@ class _LinkBarHostState extends State<_LinkBarHost> {
     }
   }
 
+  Future<void> _edit(BuildContext context, int offset) async {
+    final c = widget.controller;
+    final range = c.linkRangeAt(offset);
+    final url = c.linkUrlAt(offset);
+    if (range == null || url == null) return;
+    final result = await showLinkEditSheet(context, text: c.document.text.substring(range.start, range.end), url: url);
+    if (result == null) return;
+    if (result.remove) {
+      c.editLink(range, c.document.text.substring(range.start, range.end), null);
+    } else {
+      c.editLink(range, result.text, result.url);
+    }
+    c.focusNode.requestFocus();
+  }
+
+  void _remove(int offset) {
+    final c = widget.controller;
+    final range = c.linkRangeAt(offset);
+    if (range == null) return;
+    c.editLink(range, c.document.text.substring(range.start, range.end), null);
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -1028,16 +1071,23 @@ class _LinkBarHostState extends State<_LinkBarHost> {
         final c = widget.controller;
         final sel = c.selection;
         final url = c.focusNode.hasFocus && sel.isValid && sel.isCollapsed ? c.linkUrlAt(sel.start) : null;
+        // Typing or pasting leaves the caret in or beside a link without the
+        // user having touched it: stay quiet until the caret moves on.
+        final text = c.value.text;
+        final edited = _lastText != null && !identical(_lastText, text) && _lastText != text;
+        _lastText = text;
         if (url == null) {
           _dismissedAt = null;
           return const SizedBox.shrink();
         }
+        if (edited) _dismissedAt = sel.start;
         if (_dismissedAt == sel.start) return const SizedBox.shrink();
         _dismissedAt = null;
         return LinkPreviewBar(
           url: url,
           onOpen: () => widget.onOpen(url),
-          onClose: () => setState(() => _dismissedAt = sel.start),
+          onEdit: () => _edit(context, sel.start),
+          onRemove: () => _remove(sel.start),
         );
       },
     );
@@ -1089,7 +1139,7 @@ class _CodeBlockActions extends StatelessWidget {
               // chip; else on the last row (of a multi-row block); else, when both
               // rows run long, a compact chip in the card's top padding strip,
               // above the glyphs.
-              final label = block.language ?? 'code';
+              final label = _chipLabel(block);
               final chipWidth = 36 + label.length * 6.6;
               final chipLeft = constraints.maxWidth - (rightInset - 6) - chipWidth - 6;
               const chipHeight = 24.0;
@@ -1137,7 +1187,7 @@ class _CodeBlockChip extends StatelessWidget {
   Future<void> _editLanguage(BuildContext context) async {
     final result = await showDialog<String>(
       context: context,
-      builder: (_) => _CodeLanguageDialog(initial: block.language ?? ''),
+      builder: (_) => _CodeLanguageDialog(initial: block.language == 'text' ? '' : (block.language ?? '')),
     );
     if (result == null) return;
     controller.selection = TextSelection.collapsed(offset: block.start);
@@ -1146,7 +1196,7 @@ class _CodeBlockChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = block.language ?? 'code';
+    final label = _chipLabel(block);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1238,7 +1288,8 @@ class _CodeLanguageDialogState extends State<_CodeLanguageDialog> {
               spacing: 6,
               runSpacing: 0,
               children: [
-                ActionChip(label: const Text('Plain text'), onPressed: () => Navigator.pop(context, '')),
+                ActionChip(label: const Text('Auto-detect'), onPressed: () => Navigator.pop(context, '')),
+                ActionChip(label: const Text('Plain text'), onPressed: () => Navigator.pop(context, 'text')),
                 for (final (label, value) in _commonLanguages)
                   ActionChip(label: Text(label), onPressed: () => Navigator.pop(context, value)),
               ],

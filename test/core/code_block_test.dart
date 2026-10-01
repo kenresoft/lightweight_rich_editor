@@ -462,7 +462,7 @@ void main() {
       expect(find.text('kotlin'), findsOneWidget);
     });
 
-    testWidgets('the language dialog offers one-tap common languages and Plain text', (tester) async {
+    testWidgets('the language dialog offers one-tap common languages, Auto-detect and Plain text', (tester) async {
       final c = make('x\ny', [codeSpan(0, 1)]);
       addTearDown(c.dispose);
       await pump(tester, c);
@@ -475,8 +475,25 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(ActionChip, 'Plain text'));
       await tester.pumpAndSettle();
+      expect(c.document.paragraphs.records.first.headerLevel, 'code:text', reason: 'explicit plain: never auto-coloured');
+      expect(find.text('plain text'), findsOneWidget);
+      await tester.tap(find.text('plain text'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ActionChip, 'Auto-detect'));
+      await tester.pumpAndSettle();
       expect(c.document.paragraphs.records.first.headerLevel, 'code');
       expect(c.document.text, 'x\ny');
+    });
+
+    testWidgets('an unlabelled block whose text looks like a language shows that language on its chip and is coloured', (tester) async {
+      const html = '<!DOCTYPE html>\n<html>\n<body>\n<h1 class="a">Hi</h1>\n</body>\n</html>';
+      final c = make(html, [codeSpan(0, html.length)]);
+      addTearDown(c.dispose);
+      await pump(tester, c);
+      expect(find.text('html'), findsOneWidget);
+      expect(c.renderer.codeBlocks.single.guessedLanguage, 'html');
+      expect(c.renderer.codeBlocks.single.language, isNull, reason: 'the guess is never stored');
+      expect(c.document.paragraphs.records.first.headerLevel, 'code');
     });
 
     testWidgets('the chip is inside the card and never on code: first row, else last row, else a compact strip', (tester) async {

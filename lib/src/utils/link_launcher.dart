@@ -25,6 +25,16 @@ Uri? normalizeLinkUri(String raw) {
       return _hostPattern.hasMatch(text) ? Uri.tryParse('https://$text') : null;
     }
     if ((parsed.scheme == 'http' || parsed.scheme == 'https') && parsed.host.isEmpty) return null;
+    // `https://name@host.tld` with nothing after it is an email address that an
+    // older autolink stored with the wrong scheme; open it as mail.
+    if ((parsed.scheme == 'http' || parsed.scheme == 'https') &&
+        parsed.userInfo.isNotEmpty &&
+        !parsed.userInfo.contains(':') &&
+        (parsed.path.isEmpty || parsed.path == '/') &&
+        !parsed.hasQuery &&
+        parsed.host.contains('.')) {
+      return Uri(scheme: 'mailto', path: '${parsed.userInfo}@${parsed.host}');
+    }
     if ((parsed.scheme == 'mailto' || parsed.scheme == 'tel') && parsed.path.isEmpty) return null;
     return parsed;
   }
@@ -56,6 +66,25 @@ Future<bool> launchLinkUrl(String url) async {
   }
 }
 
+/// Opens [url] and, if nothing could handle it, says so in a snackbar. No
+/// confirmation: used for an explicit "Open" the user just pressed.
+Future<void> openLinkNow(BuildContext context, String url) async {
+  final opened = await launchLinkUrl(url);
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text("Couldn't open this link")),
+    );
+  }
+}
+
+/// What a link opens, for display: the address of a mail link, the number of a
+/// phone link, the URL otherwise.
+String linkDisplayTarget(String url) {
+  final uri = normalizeLinkUri(url);
+  if (uri != null && (uri.scheme == 'mailto' || uri.scheme == 'tel')) return uri.path;
+  return url;
+}
+
 /// Shows an "Open link?" confirmation before calling [launchLinkUrl] —
 /// guards against opening a link from an accidental tap, since tapping
 /// inside editable rich text is also how the caret is moved near a link.
@@ -69,8 +98,12 @@ Future<void> confirmAndLaunchLink(BuildContext context, String url) async {
   final shouldOpen = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('Open link?'),
-      content: Text(url),
+      title: Text(switch (normalizeLinkUri(url)?.scheme) {
+        'mailto' => 'Write an email?',
+        'tel' => 'Call this number?',
+        _ => 'Open link?',
+      }),
+      content: Text(linkDisplayTarget(url)),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext, false),

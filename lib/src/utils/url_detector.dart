@@ -34,6 +34,8 @@ const _commonTlds = {
   'me', 'info', 'biz', 'us', 'uk', 'ca', 'de', 'fr', 'jp', 'cn', 'in',
 };
 
+final RegExp _emailToken = RegExp(r'^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$');
+
 // Trailing punctuation trimmed off a token before treating it as a URL,
 // shared by detectUrlBeforeBoundary and detectAllUrls.
 final RegExp _trailingPunctuation = RegExp(r'[.,!?;:]+$');
@@ -102,6 +104,11 @@ List<DetectedUrl> detectAllUrls(String text) {
 /// [token] isn't confidently a URL. Shared by autolink detection and
 /// the manual link-entry dialog so both resolve to the same href.
 String? normalizeUrlToken(String token) {
+  // An address is a mail link, never `https://name@host` (which would parse as
+  // the host with a user name and open a web page).
+  if (_emailToken.hasMatch(token)) return 'mailto:$token';
+  if (token.startsWith('mailto:') && _emailToken.hasMatch(token.substring(7))) return token;
+
   if (token.startsWith('http://') || token.startsWith('https://')) {
     final uri = Uri.tryParse(token);
     if (uri == null || uri.host.isEmpty) return null;

@@ -13,6 +13,7 @@ class CodeBlockRegion {
     this.firstRowBottom = 0.0,
     this.lastRowTop = 0.0,
     this.lastLineRight = 0.0,
+    this.guessedLanguage,
   });
 
   /// Y of the block's first line top / last line bottom.
@@ -25,6 +26,10 @@ class CodeBlockRegion {
 
   /// Normalized language label, or `null`.
   final String? language;
+
+  /// For a block without a label: the language its text looks like (what its
+  /// colours follow), or `null`. Never stored.
+  final String? guessedLanguage;
 
   /// Right edge (x, text-area relative) of the text on the block's first row,
   /// and of the last row of whatever is directly above it (0 when that row is
@@ -48,6 +53,7 @@ class CodeBlockRegion {
       other.start == start &&
       other.end == end &&
       other.language == language &&
+      other.guessedLanguage == guessedLanguage &&
       other.firstLineRight == firstLineRight &&
       other.previousLineRight == previousLineRight &&
       other.firstRowBottom == firstRowBottom &&
@@ -55,7 +61,7 @@ class CodeBlockRegion {
       other.lastLineRight == lastLineRight;
 
   @override
-  int get hashCode => Object.hash(top, bottom, start, end, language, firstLineRight, previousLineRight, firstRowBottom, lastRowTop, lastLineRight);
+  int get hashCode => Object.hash(top, bottom, start, end, language, guessedLanguage, firstLineRight, previousLineRight, firstRowBottom, lastRowTop, lastLineRight);
 }
 
 /// An empty paragraph (a blank line) and where it sits, so the ruled-paper layer

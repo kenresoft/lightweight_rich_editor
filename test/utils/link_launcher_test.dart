@@ -229,7 +229,7 @@ void main() {
       expect(tapped, ['https://kenresoft.com/x', 'https://kenresoft.com/x']);
     });
 
-    testWidgets('caret inside a link shows the preview bar; its Open button confirms and launches', (tester) async {
+    testWidgets('caret inside a link shows the preview bar; its Open button launches at once, with no prompt', (tester) async {
       final c = RichEditorController(
         text: text,
         initialAttributes: [link(8, 12, 'https://kenresoft.com/docs')],
@@ -242,24 +242,21 @@ void main() {
       expect(find.textContaining('kenresoft.com'), findsOneWidget);
       await tester.tap(find.byTooltip('Open link'));
       await tester.pumpAndSettle();
-      expect(find.text('Open link?'), findsOneWidget);
-      await tester.tap(find.text('Open'));
-      await tester.pumpAndSettle();
+      expect(find.text('Open link?'), findsNothing, reason: 'the bar is the explicit action; no second popup');
       expect(fake.launched, ['https://kenresoft.com/docs']);
     });
 
-    testWidgets('Cancel does not launch', (tester) async {
-      final c = RichEditorController(text: text, initialAttributes: [link(8, 12, 'https://kenresoft.com')]);
+    testWidgets('an email link opens as mail and the bar shows the address, not a web host', (tester) async {
+      final c = RichEditorController(text: text, initialAttributes: [link(8, 12, 'mailto:kix@gmail.com')]);
       addTearDown(c.dispose);
       await pump(tester, c);
       c.focusNode.requestFocus();
       c.selection = const TextSelection.collapsed(offset: 10);
       await tester.pumpAndSettle();
+      expect(find.textContaining('kix@gmail.com'), findsOneWidget);
       await tester.tap(find.byTooltip('Open link'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      expect(fake.launched, isEmpty);
+      expect(fake.launched, ['mailto:kix@gmail.com']);
     });
 
     testWidgets('an unopenable link says so instead of failing silently', (tester) async {
@@ -270,8 +267,6 @@ void main() {
       c.selection = const TextSelection.collapsed(offset: 10);
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Open link'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
       expect(find.text("Couldn't open this link"), findsOneWidget);
       expect(fake.launched, isEmpty);

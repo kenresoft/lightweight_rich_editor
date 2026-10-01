@@ -501,6 +501,12 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       return right;
     }
 
+    String? guessed(ParagraphRecord first, ParagraphRecord last) {
+      if (codeBlockLanguage(first.headerLevel) != null) return null;
+      final g = _guessedLanguage(document.text.substring(first.start, last.end));
+      return canHighlight(g) ? g : null;
+    }
+
     void emit(ParagraphRecord first, ParagraphRecord last) {
       final a = lineIndexAt(first.start);
       final b = lineIndexAt(last.end);
@@ -510,6 +516,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         start: first.start,
         end: last.end,
         language: codeBlockLanguage(first.headerLevel),
+        guessedLanguage: guessed(first, last),
         firstLineRight: lineRight(first.start),
         previousLineRight: first.start == 0 ? 0.0 : lineRight(first.start - 1),
         firstRowBottom: bottoms[a],
