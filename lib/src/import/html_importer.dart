@@ -269,6 +269,11 @@ class _Run {
       _pendingCodeLanguage = barLang;
       return;
     }
+    // Pills/badges/tag chips side by side (a tag list, a meta row) are separate
+    // items on the page, set apart by the container's flex gap. When that
+    // container is not part of what was copied the pills touch in the markup,
+    // so a pill that directly follows another pill starts a new line.
+    if (_isChip(node) && _previousIsChip(node)) _boundary(0);
     final display = _displayOf(node);
     if (display == 'none') return; // hidden on the page (menus, duplicates) is hidden in the note
     var margins = _marginsFor(tag);
@@ -288,13 +293,20 @@ class _Run {
 
     if (tag == 'li' && list != null && node.text.trim().isEmpty) return; // an empty bullet is noise
 
+    // A "card" item (a list the site styled as a grid of cards: no marker, a
+    // heading inside) is not a list entry. It becomes its own block, set off by a
+    // blank line, with no bullet or number: the site's own badge ("01") is its
+    // visible numbering, and a second "1." would only double it.
+    final isCard = tag == 'li' && list != null && _isCardItem(node);
+    if (isCard) margins = _Margins(paragraphGap, paragraphGap);
+
     if (margins != null) {
       // A nested list sits tight under its parent item.
       final nestedList = (tag == 'ul' || tag == 'ol') && list != null;
       _boundary(nestedList ? 0 : margins.before);
     }
 
-    if (tag == 'li' && list != null) {
+    if (tag == 'li' && list != null && !isCard) {
       final ownText = node.text.trimLeft();
       if (listPrefixLength(ownText, 0) == 0) {
         _beginContent();
@@ -328,6 +340,42 @@ class _Run {
       final nestedList = (tag == 'ul' || tag == 'ol') && list != null;
       _boundary(nestedList ? 0 : margins.after);
     }
+  }
+
+  static final RegExp _radius = RegExp(r'border-radius\s*:\s*(?!0(?:px)?\s*[;"])[\d.]', caseSensitive: false);
+  static final RegExp _filled = RegExp(r'background-color\s*:\s*(?!rgba\(0,\s*0,\s*0,\s*0\))(?!transparent)[a-z]', caseSensitive: false);
+  static final RegExp _outlined = RegExp(r'(?:^|;)\s*border\s*:\s*(?!0(?:px)?\b)[\d.]+px', caseSensitive: false);
+
+  // An inline element styled as a pill: rounded, and filled or outlined. Not
+  // `code`/`kbd` (those are inline code, which stays in the line).
+  static bool _isChip(dom.Element e) {
+    final tag = e.localName;
+    if (tag == 'code' || tag == 'kbd' || tag == 'pre' || tag == 'mark') return false;
+    final style = e.attributes['style'];
+    if (style == null || !_radius.hasMatch(style)) return false;
+    return _filled.hasMatch(style) || _outlined.hasMatch(style);
+  }
+
+  // The nearest preceding sibling element (skipping whitespace-only text) is a pill.
+  static bool _previousIsChip(dom.Element e) {
+    final siblings = e.parentNode?.nodes;
+    if (siblings == null) return false;
+    var i = siblings.indexOf(e) - 1;
+    while (i >= 0 && siblings[i] is dom.Text && (siblings[i] as dom.Text).text.trim().isEmpty) {
+      i--;
+    }
+    return i >= 0 && siblings[i] is dom.Element && _isChip(siblings[i] as dom.Element);
+  }
+
+  static final RegExp _noListStyle = RegExp(r'list-style(?:-type)?\s*:\s*none', caseSensitive: false);
+
+  static bool _isCardItem(dom.Element li) {
+    if (_noListStyle.hasMatch(li.attributes['style'] ?? '')) return true;
+    for (final c in li.children) {
+      final n = c.localName;
+      if (n != null && n.length == 2 && n[0] == 'h' && '123456'.contains(n[1])) return true;
+    }
+    return false;
   }
 
   String? _pendingCodeLanguage;

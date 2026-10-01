@@ -236,9 +236,10 @@ void main() {
       );
       addTearDown(c.dispose);
       await pump(tester, c);
+      c.focusNode.requestFocus();
       c.selection = const TextSelection.collapsed(offset: 10);
       await tester.pumpAndSettle();
-      expect(find.text('https://kenresoft.com/docs'), findsOneWidget);
+      expect(find.textContaining('kenresoft.com'), findsOneWidget);
       await tester.tap(find.byTooltip('Open link'));
       await tester.pumpAndSettle();
       expect(find.text('Open link?'), findsOneWidget);
@@ -251,6 +252,7 @@ void main() {
       final c = RichEditorController(text: text, initialAttributes: [link(8, 12, 'https://kenresoft.com')]);
       addTearDown(c.dispose);
       await pump(tester, c);
+      c.focusNode.requestFocus();
       c.selection = const TextSelection.collapsed(offset: 10);
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Open link'));
@@ -264,6 +266,7 @@ void main() {
       final c = RichEditorController(text: text, initialAttributes: [link(8, 12, 'javascript:alert(1)')]);
       addTearDown(c.dispose);
       await pump(tester, c);
+      c.focusNode.requestFocus();
       c.selection = const TextSelection.collapsed(offset: 10);
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Open link'));

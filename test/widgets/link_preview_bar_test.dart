@@ -43,7 +43,7 @@ void main() {
       await tester.pump();
 
       expect(find.byType(LinkPreviewBar), findsOneWidget);
-      expect(find.text('https://example.com'), findsOneWidget);
+      expect(find.textContaining('example.com'), findsOneWidget);
 
       controller.value = controller.value.copyWith(
         selection: const TextSelection.collapsed(offset: 0),
@@ -83,5 +83,55 @@ void main() {
     await tester.pump();
 
     expect(find.byType(LinkPreviewBar), findsNothing);
+  });
+  RichEditorController linked() => RichEditorController(
+        text: 'Click here for docs',
+        initialAttributes: [TextAttribute(start: 6, end: 10, type: AttributeType.link, value: 'https://docs.example.com/cms/')],
+      );
+
+  Future<void> mount(WidgetTester tester, RichEditorController c, {required bool autofocus}) async {
+    final sc = ScrollController();
+    addTearDown(sc.dispose);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(height: 300, child: RichTextEditor(controller: c, scrollController: sc, autofocus: autofocus)),
+      ),
+    ));
+    await tester.pump();
+  }
+
+  testWidgets('a note that opens with its caret inside a link, without focus, shows no bar', (tester) async {
+    final c = linked();
+    await mount(tester, c, autofocus: false);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    await tester.pump();
+    expect(find.byType(LinkPreviewBar), findsNothing);
+    // the user taps into the editor: now it is shown
+    c.focusNode.requestFocus();
+    await tester.pumpAndSettle();
+    expect(find.byType(LinkPreviewBar), findsOneWidget);
+  });
+
+  testWidgets('Dismiss hides the bar until the caret moves into a link again', (tester) async {
+    final c = linked();
+    await mount(tester, c, autofocus: true);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 8));
+    await tester.pump();
+    expect(find.byType(LinkPreviewBar), findsOneWidget);
+    await tester.tap(find.byTooltip('Dismiss'));
+    await tester.pump();
+    expect(find.byType(LinkPreviewBar), findsNothing);
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 0));
+    await tester.pump();
+    c.value = c.value.copyWith(selection: const TextSelection.collapsed(offset: 9));
+    await tester.pump();
+    expect(find.byType(LinkPreviewBar), findsOneWidget);
+  });
+
+  test('the bar splits a URL into host and the rest', () {
+    expect(LinkPreviewBar.split('https://www.kenresoft.com/cms/?a=1'), ('kenresoft.com', '/cms/?a=1'));
+    expect(LinkPreviewBar.split('https://kenresoft.com/'), ('kenresoft.com', ''));
+    expect(LinkPreviewBar.split('not a url'), ('not a url', ''));
   });
 }

@@ -850,9 +850,17 @@ class RichTextEditor extends StatelessWidget {
                           // own — this ambient value is the only way to
                           // reach it, and must stay in sync with the one
                           // passed to lineBottomOffsets above.
-                          child: DefaultTextHeightBehavior(
+                          // The field's scroll area ends [paddingBottom] above the
+                          // editor's bottom edge (that gap is the end-of-note breathing
+                          // room). Its clip is widened by the same amount so a line
+                          // scrolling through that gap is drawn whole instead of being
+                          // cut mid-glyph at an invisible edge above the bottom bar.
+                          child: ClipRect(
+                            clipper: _ExtendBottomClipper(editorStyle.paddingBottom),
+                            child: DefaultTextHeightBehavior(
                             textHeightBehavior: _kTextHeightBehavior,
                             child: TextField(
+                              clipBehavior: Clip.none,
                               controller: controller,
                               focusNode: controller.focusNode,
                               scrollController: scrollController,
@@ -907,6 +915,7 @@ class RichTextEditor extends StatelessWidget {
                                   _defaultContextMenuBuilder,
                             ),
                           ),
+                          ),
                         ),
                         ),
                       ),
@@ -934,19 +943,10 @@ class RichTextEditor extends StatelessWidget {
                       left: 8,
                       right: 8,
                       bottom: 8,
-                      child: ListenableBuilder(
-                        listenable: controller,
-                        builder: (context, child) {
-                          final sel = controller.selection;
-                          final url = sel.isValid && sel.isCollapsed
-                              ? controller.linkUrlAt(sel.start)
-                              : null;
-                          if (url == null) return const SizedBox.shrink();
-                          return LinkPreviewBar(
-                            url: url,
-                            onOpen: () => _openLink(context, url),
-                          );
-                        },
+                      child: _LinkBarHost(
+                        controller: controller,
+                        scrollController: scrollController,
+                        onOpen: (url) => _openLink(context, url),
                       ),
                     ),
                   ],
@@ -956,6 +956,90 @@ class RichTextEditor extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+}
+
+/// Clips to the child's box, extended downward by [extra].
+class _ExtendBottomClipper extends CustomClipper<Rect> {
+  const _ExtendBottomClipper(this.extra);
+
+  final double extra;
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(0, 0, size.width, size.height + extra);
+
+  @override
+  bool shouldReclip(_ExtendBottomClipper old) => old.extra != extra;
+}
+
+/// Shows the link bar for a link the user has just touched: the editor must
+/// have focus (a note that merely opens with its caret inside a link stays
+/// quiet), the caret must be in the link, and the bar goes away when the user
+/// dismisses it, scrolls, or moves the caret.
+class _LinkBarHost extends StatefulWidget {
+  const _LinkBarHost({required this.controller, required this.scrollController, required this.onOpen});
+
+  final RichEditorController controller;
+  final ScrollController scrollController;
+  final void Function(String url) onOpen;
+
+  @override
+  State<_LinkBarHost> createState() => _LinkBarHostState();
+}
+
+class _LinkBarHostState extends State<_LinkBarHost> {
+  int? _dismissedAt;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinkBarHost old) {
+    super.didUpdateWidget(old);
+    if (old.scrollController != widget.scrollController) {
+      old.scrollController.removeListener(_onScroll);
+      widget.scrollController.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  // Scrolling away is a "not now": hide until the caret moves.
+  void _onScroll() {
+    final sel = widget.controller.selection;
+    if (_dismissedAt == null && sel.isValid && sel.isCollapsed && widget.controller.linkUrlAt(sel.start) != null) {
+      setState(() => _dismissedAt = sel.start);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([widget.controller, widget.controller.focusNode]),
+      builder: (context, _) {
+        final c = widget.controller;
+        final sel = c.selection;
+        final url = c.focusNode.hasFocus && sel.isValid && sel.isCollapsed ? c.linkUrlAt(sel.start) : null;
+        if (url == null) {
+          _dismissedAt = null;
+          return const SizedBox.shrink();
+        }
+        if (_dismissedAt == sel.start) return const SizedBox.shrink();
+        _dismissedAt = null;
+        return LinkPreviewBar(
+          url: url,
+          onOpen: () => widget.onOpen(url),
+          onClose: () => setState(() => _dismissedAt = sel.start),
+        );
+      },
     );
   }
 }

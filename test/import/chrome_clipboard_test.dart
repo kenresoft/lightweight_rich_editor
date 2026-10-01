@@ -10,6 +10,27 @@ String _import(String html) => const HtmlImporter().parse(html).text;
 
 void main() {
   group('Chrome clipboard markup', () {
+    test('adjacent pills whose flex container was not copied are separate lines; one pill in a sentence stays inline', () {
+      const pill = 'border: 1px solid rgb(200, 200, 200); border-radius: 2.14748e+09px; background-color: rgb(255, 255, 255); padding-inline: 12px;';
+      expect(
+        _import('<span style="$pill">Scalable Code</span><span style="$pill">Dart</span><span style="$pill">Mobile</span>'),
+        'Scalable Code\nDart\nMobile',
+      );
+      expect(_import('<p>New <span style="$pill">beta</span> feature</p>'), 'New beta feature');
+      expect(_import('<p>use <code style="border-radius: 4px; background-color: rgb(240,240,240)">a</code><code style="border-radius: 4px; background-color: rgb(240,240,240)">b</code></p>'), 'use ab');
+    });
+
+    test('a list styled as numbered cards (badge, heading, text) is blocks, not "1. 01"', () {
+      const html = '<ol><li><span>01</span><h3>Self-hosted</h3><p>It deploys into your account.</p></li>'
+          '<li><span>02</span><h3>API-first</h3><p>Content is served over REST.</p></li></ol><p>After</p>';
+      expect(_import(html), '01\nSelf-hosted\nIt deploys into your account.\n\n02\nAPI-first\nContent is served over REST.\n\nAfter');
+    });
+
+    test('list-style:none items carry no marker either; an ordinary list keeps its numbers', () {
+      expect(_import('<ul style="list-style: none"><li style="list-style: none">a</li><li style="list-style: none">b</li></ul>'), 'a\n\nb');
+      expect(_import('<ol><li>one</li><li>two</li></ol>'), '  1. one\n  2. two');
+    });
+
     test('children of a display:flex row are separate lines, not run together', () {
       const html = '<!--StartFragment--><div class="meta" style="$_reset display: flex; flex-wrap: wrap; gap: 4px 16px;">'
           '<span style="$_reset color: rgb(29, 78, 216);">Image SEO</span>'
