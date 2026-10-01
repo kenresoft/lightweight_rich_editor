@@ -25,6 +25,7 @@ Uri? normalizeLinkUri(String raw) {
       return _hostPattern.hasMatch(text) ? Uri.tryParse('https://$text') : null;
     }
     if ((parsed.scheme == 'http' || parsed.scheme == 'https') && parsed.host.isEmpty) return null;
+    if ((parsed.scheme == 'mailto' || parsed.scheme == 'tel') && parsed.path.isEmpty) return null;
     return parsed;
   }
   if (_emailPattern.hasMatch(text)) return Uri.tryParse('mailto:$text');

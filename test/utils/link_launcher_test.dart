@@ -64,7 +64,8 @@ void main() {
     });
 
     test('invalid or unsafe links are refused', () {
-      for (final bad in ['', '   ', 'not a url', 'javascript:alert(1)', 'file:///etc/passwd', 'intent://x#Intent;end', 'https://', 'just-a-word', 'data:text/html,hi']) {
+      for (final bad in ['', '   ', 'not a url', 'javascript:alert(1)', 'file:///etc/passwd', 'intent://x#Intent;end', 'https://', 'just-a-word', 'data:text/html,hi',
+        'JAVASCRIPT:alert(1)', 'vbscript:x', 'market://details?id=a', 'sms:123', 'ftp://example.com', 'content://media/1', 'ws://x.dev', 'about:blank', 'chrome://settings', 'java script:alert(1)', 'http://', 'mailto:']) {
         expect(normalizeLinkUri(bad), isNull, reason: bad);
       }
     });
