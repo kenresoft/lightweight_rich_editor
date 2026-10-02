@@ -26,7 +26,7 @@ void main() {
 
     expect(shown.length, c.document.text.length, reason: 'every offset must still line up');
     expect(shown, contains('☐'));
-    expect(shown, contains('☑'));
+    expect(shown, contains('☒'));
     expect(shown, isNot(contains('[ ]')));
     expect(shown, isNot(contains('[x]')));
     expect(shown.split('\n').first.endsWith('open'), isTrue);

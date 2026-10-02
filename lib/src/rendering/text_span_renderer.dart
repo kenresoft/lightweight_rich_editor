@@ -1343,8 +1343,13 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       final m = _taskPrefix.firstMatch(prefix);
       if (m == null) return prefix;
       final lead = m.group(1)!;
-      final glyph = checked ? '☑' : '☐';
-      return '$lead$glyph${' ' * (prefix.length - lead.length - 1)}';
+      // Two neighbours from the same symbol block, so they are drawn by the same plain
+      // font and match. (The ballot box with check, U+2611, is an emoji on Android and
+      // came out as a coloured tick next to a thin empty box.)
+      final glyph = checked ? '☒' : '☐';
+      // Hair spaces (about a tenth of an em each) keep the item's text starting about
+      // where a bullet's or a number's does, instead of two ems in.
+      return '$lead$glyph${' ' * (prefix.length - lead.length - 1)}';
     }
     final i = prefix.length - 2;
     if (i < 0 || prefix.codeUnitAt(prefix.length - 1) != 0x20) return prefix;
