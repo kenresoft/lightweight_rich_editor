@@ -269,6 +269,25 @@ void main() {
       });
     }
 
+    // The Notebook's "Line Spacing" presets: a tighter row shrinks the headings in
+    // proportion (never inflates them for a roomier one) and they must still be one row.
+    for (final pitch in [27.0, 34.0]) {
+      test('headings are one row at a ${pitch}px row for every text scale 0.85–3.0', () {
+        // The same factor the Notebook app applies (ruled_rich_editor.dart).
+        final k = pitch < 30 ? pitch / 30 * 0.96 : 1.0;
+        final theme = notebookTheme.copyWith(lineHeight: pitch, h1FontSize: 24 * k, h2FontSize: 21 * k, h3FontSize: 18 * k);
+        final renderer = TextSpanRenderer(theme: theme);
+        final failures = <String>[];
+        for (var i = 85; i <= 300; i++) {
+          final m = renderer.rowMetrics(textScaler: TextScaler.linear(i / 100), style: const TextStyle(fontFamily: _family));
+          for (final size in [theme.h1FontSize, theme.h2FontSize, theme.h3FontSize]) {
+            if (m.rowsForParagraph(size, FontWeight.bold) != 1) failures.add('scale ${i / 100} size $size');
+          }
+        }
+        expect(failures, isEmpty, reason: failures.take(10).join('; '));
+      });
+    }
+
     for (final scale in scales) {
       test('normal/long/width-filling headings lay out as 1 row per visual line @scale $scale', () {
         const short = 'Title';
