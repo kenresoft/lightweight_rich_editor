@@ -101,7 +101,7 @@ class MarkdownExporter {
     for (var i = start; i < end; i++) {
       final closing = sorted.where((a) => a.end == i && a.start < end && a.end > start).toList().reversed;
       for (final attr in closing) {
-        buffer.write(_markerFor(attr.type, isOpen: false));
+        buffer.write(_markerFor(attr.type, value: attr.value, isOpen: false));
       }
       final opening = sorted.where((a) => a.start == i && a.start >= start);
       for (final attr in opening) {
@@ -113,7 +113,7 @@ class MarkdownExporter {
     final stillOpenAtEnd = sorted.where((a) => a.start < end && a.end >= end && a.start < a.end).toList()
       ..sort((a, b) => b.start.compareTo(a.start));
     for (final attr in stillOpenAtEnd) {
-      buffer.write(_markerFor(attr.type, isOpen: false));
+      buffer.write(_markerFor(attr.type, value: attr.value, isOpen: false));
     }
 
     return buffer.toString();

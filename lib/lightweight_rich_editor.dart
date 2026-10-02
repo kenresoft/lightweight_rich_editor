@@ -24,6 +24,8 @@ export 'src/utils/string_utils.dart';
 export 'src/utils/list_prefix.dart';
 export 'src/utils/link_launcher.dart' show launchLinkUrl, confirmAndLaunchLink, normalizeLinkUri, openLinkNow, linkDisplayTarget;
 export 'src/widgets/link_edit_sheet.dart' show showLinkSheetFor, showLinkEditSheet, LinkEditResult, hrefForInput;
+export 'src/export/markdown_exporter.dart';
+export 'src/import/markdown_importer.dart';
 export 'src/images/rich_image_store.dart';
 export 'src/images/rich_image_cache.dart';
 export 'src/images/image_prepare.dart' show prepareImage, PreparedImage;
