@@ -53,6 +53,7 @@ class CommandDispatcher {
         end: edit.end,
         text: edit.text,
         relativeAttributes: edit.relativeAttributes,
+        stripAttributes: engine.stickyOff,
       ));
       return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
     }
@@ -61,6 +62,7 @@ class CommandDispatcher {
       end: selection.end,
       text: text,
       attributesForInsertion: Map.of(engine.stickyAttributes),
+      stripAttributes: engine.stickyOff,
     ));
   }
 

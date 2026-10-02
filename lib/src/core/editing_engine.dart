@@ -29,6 +29,13 @@ class EditingEngine {
   /// attributes and the payload (color, size, link) for value attributes.
   final Map<AttributeType, Object?> _stickyAttributes = {};
 
+  /// Types the writer switched off at this caret, inside or at the end of text
+  /// that has them. The caret still sits against the old formatting, so without
+  /// this the toolbar would keep showing it as active. Reset when the caret moves.
+  final Set<AttributeType> _stickyOff = {};
+
+  Set<AttributeType> get stickyOff => Set.unmodifiable(_stickyOff);
+
   EditingEngine({required this.document, required this.transactions});
 
   /// Read-only view of the formatting pending for the next typed
@@ -46,6 +53,7 @@ class EditingEngine {
   /// formatting for the next character typed.
   void syncStickyAttributesAt(int position) {
     _stickyAttributes.clear();
+    _stickyOff.clear();
     final length = document.length;
     if (length == 0) return;
 
@@ -85,6 +93,7 @@ class EditingEngine {
       int end,
       String text, {
         Map<AttributeType, Object?>? attributesForInsertion,
+        Set<AttributeType> stripInherited = const {},
       }) {
     assert(start >= 0 && end <= document.length && start <= end,
     'replaceRange range out of bounds');
@@ -104,6 +113,7 @@ class EditingEngine {
       document.paragraphs.applyInsertion(start, text);
 
       final insertionAttributes = attributesForInsertion ?? _stickyAttributes;
+      _dropInheritedAttributes(start, text.length, stripInherited);
       for (final entry in insertionAttributes.entries) {
         store.insert(TextAttribute(
           start: start,
@@ -124,6 +134,24 @@ class EditingEngine {
     assert(_debugValidateParagraphs());
     transactions.notify();
     return EditorSelection.collapsed(start + text.length);
+  }
+
+  /// Text inserted at the edge of a span, or inside one, joins it
+  /// ([AttributeStore.shiftForInsertion] grows the span). When the writer has
+  /// switched a style off at the caret ([stickyOff]) the new text must not keep
+  /// it, so this strips [types] from `[start, start + length)`. Without it,
+  /// turning bold off at the end of bold text, or clearing formatting at a
+  /// caret, changed the button but not the typing.
+  ///
+  /// Only the types the writer explicitly turned off are stripped; everything
+  /// else keeps the old behaviour (a keyboard suggestion replacing a word inside
+  /// a coloured run keeps its colour).
+  void _dropInheritedAttributes(int start, int length, Set<AttributeType> types) {
+    if (types.isEmpty) return;
+    final store = document.attributeStore;
+    for (final type in types) {
+      store.clearRange(start, start + length, type: type);
+    }
   }
 
   // Asserts ParagraphIndex remains internally well-formed (contiguous,
@@ -997,7 +1025,9 @@ class EditingEngine {
     if (selection.isCollapsed) {
       if (_stickyAttributes.containsKey(type)) {
         _stickyAttributes.remove(type);
+        _stickyOff.add(type);
       } else {
+        _stickyOff.remove(type);
         _stickyAttributes[type] = null;
       }
       transactions.notify();
@@ -1071,6 +1101,7 @@ class EditingEngine {
 
     if (selection.isCollapsed) {
       _stickyAttributes.remove(type);
+      _stickyOff.add(type);
       transactions.notify();
       return;
     }
@@ -1096,6 +1127,7 @@ class EditingEngine {
   void clearFormatting(EditorSelection selection) {
     if (selection.isCollapsed) {
       if (_stickyAttributes.isEmpty) return;
+      _stickyOff.addAll(_stickyAttributes.keys);
       _stickyAttributes.clear();
       transactions.notify();
       return;
@@ -1319,6 +1351,7 @@ class EditingEngine {
     _stickyAttributes
       ..clear()
       ..addAll(attributes);
+    _stickyOff.clear();
     transactions.notify();
   }
 
@@ -1340,8 +1373,9 @@ class EditingEngine {
   EditorSelection pasteRich(
       EditorSelection selection,
       String text,
-      List<TextAttribute> relativeAttributes,
-      ) {
+      List<TextAttribute> relativeAttributes, {
+      Set<AttributeType> stripInherited = const {},
+      }) {
     final store = document.attributeStore;
     final buffer = document.buffer;
     final start = selection.start;
@@ -1357,6 +1391,7 @@ class EditingEngine {
       buffer.insert(start, text);
       document.paragraphs.applyInsertion(start, text);
 
+      _dropInheritedAttributes(start, text.length, stripInherited);
       for (final attr in relativeAttributes) {
         store.insert(TextAttribute(
           start: start + attr.start,

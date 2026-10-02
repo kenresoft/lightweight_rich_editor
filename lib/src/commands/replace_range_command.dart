@@ -30,6 +30,11 @@ class ReplaceRangeCommand extends EditorCommand {
   final Map<AttributeType, Object?>? attributesForInsertion;
   final List<TextAttribute>? relativeAttributes;
 
+  /// Formatting the writer switched off at the caret: the inserted text must not
+  /// inherit it from the span it lands against. Stored on the command so redo
+  /// reproduces the edit exactly.
+  final Set<AttributeType> stripAttributes;
+
   String? _removedText;
   List<TextAttribute>? _removedSpans;
   List<ParagraphRecord>? _removedBlockMetadata;
@@ -40,6 +45,7 @@ class ReplaceRangeCommand extends EditorCommand {
     required this.text,
     this.attributesForInsertion,
     this.relativeAttributes,
+    this.stripAttributes = const {},
   }) : assert(end >= start, 'end must not be before start'),
         assert(
         attributesForInsertion == null || relativeAttributes == null,
@@ -66,9 +72,16 @@ class ReplaceRangeCommand extends EditorCommand {
         EditorSelection(baseOffset: safeStart, extentOffset: safeEnd),
         text,
         relativeAttributes!,
+        stripInherited: stripAttributes,
       );
     }
-    return engine.replaceRange(safeStart, safeEnd, text, attributesForInsertion: attributesForInsertion);
+    return engine.replaceRange(
+      safeStart,
+      safeEnd,
+      text,
+      attributesForInsertion: attributesForInsertion,
+      stripInherited: stripAttributes,
+    );
   }
 
   @override
@@ -94,7 +107,9 @@ class ReplaceRangeCommand extends EditorCommand {
 
     if (_isPureInsert && previous._isPureInsert) {
       return start == previous.start + previous.text.length &&
-          _sameAttributeIntent(attributesForInsertion, previous.attributesForInsertion);
+          _sameAttributeIntent(attributesForInsertion, previous.attributesForInsertion) &&
+          stripAttributes.length == previous.stripAttributes.length &&
+          stripAttributes.containsAll(previous.stripAttributes);
     }
 
     if (_isPureDelete && previous._isPureDelete) {

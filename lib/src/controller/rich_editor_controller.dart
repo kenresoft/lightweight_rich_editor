@@ -272,6 +272,7 @@ class RichEditorController extends TextEditingController {
               end: edit.end,
               text: edit.text,
               relativeAttributes: edit.relativeAttributes,
+              stripAttributes: engine.stickyOff,
             ),
           );
           resultSelection = TextSelection.collapsed(
@@ -370,6 +371,7 @@ class RichEditorController extends TextEditingController {
                   end: diff.end,
                   text: diff.insertedText,
                   attributesForInsertion: Map.of(engine.stickyAttributes),
+                  stripAttributes: engine.stickyOff,
                 ),
               );
               ranAutolink = diff.insertedText.length == 1;
@@ -393,6 +395,7 @@ class RichEditorController extends TextEditingController {
                   end: diff.end,
                   text: diff.insertedText,
                   relativeAttributes: relativeAttributes,
+                  stripAttributes: engine.stickyOff,
                 ),
               );
               ranAutolink = false;
@@ -1104,7 +1107,7 @@ class RichEditorController extends TextEditingController {
     final sel = _currentSelection;
     if (sel.isCollapsed) {
       return engine.stickyAttributes.containsKey(type) ||
-          document.attributeStore.findAt(sel.start, type: type).isNotEmpty;
+          (!engine.stickyOff.contains(type) && document.attributeStore.findAt(sel.start, type: type).isNotEmpty);
     }
     return document.attributeStore.coversRange(sel.start, sel.end, type);
   }
@@ -1169,6 +1172,7 @@ class RichEditorController extends TextEditingController {
       if (engine.stickyAttributes.containsKey(type)) {
         return engine.stickyAttributes[type];
       }
+      if (engine.stickyOff.contains(type)) return null;
       final at = document.attributeStore.findAt(sel.start, type: type);
       return at.isEmpty ? null : at.first.value;
     }
