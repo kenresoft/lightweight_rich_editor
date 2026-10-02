@@ -186,6 +186,12 @@ class EditingEngine {
           store.insert(span.copyWith(end: i));
         }
       }
+
+      // The caret is now on a new line: a link or inline code that was pending for the
+      // text typed next belonged to the line above (Enter at the end of a link made
+      // everything typed on the next line part of the link).
+      _stickyAttributes.remove(AttributeType.link);
+      _stickyAttributes.remove(AttributeType.code);
     }
   }
 

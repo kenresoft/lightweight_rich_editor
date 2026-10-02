@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 
 void main() {
+  linkAndCodeTests();
   TestWidgetsFlutterBinding.ensureInitialized();
 
   RichEditorController typeAll(RichEditorController c, String text) {
@@ -115,5 +116,52 @@ void main() {
     c.clearFormatting();
     typeAll(c, 'c');
     expect([for (var i = 0; i < 3; i++) bold(c, i)], [true, true, false]);
+  });
+}
+
+void linkAndCodeTests() {
+  group('a link or inline code does not carry onto the next line', () {
+    RichEditorController typed(RichEditorController c, String text) {
+      for (final ch in text.split('')) {
+        final at = c.document.text.length;
+        c.value = TextEditingValue(text: c.document.text + ch, selection: TextSelection.collapsed(offset: at + 1));
+      }
+      return c;
+    }
+
+    test('Enter at the end of a link, then typing: the new text is not linked', () {
+      final c = RichEditorController(text: 'site');
+      addTearDown(c.dispose);
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+      c.setLink('https://example.com');
+      c.selection = const TextSelection.collapsed(offset: 4);
+      c.insertText('\n');
+      typed(c, 'next');
+      expect(c.document.text, 'site\nnext');
+      expect(c.document.attributeStore.findAt(0, type: AttributeType.link), isNotEmpty);
+      expect(c.document.attributeStore.findAt(6, type: AttributeType.link), isEmpty);
+    });
+
+    test('the same through the keyboard path', () {
+      final c = RichEditorController(text: 'site');
+      addTearDown(c.dispose);
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+      c.setLink('https://example.com');
+      c.selection = const TextSelection.collapsed(offset: 4);
+      c.value = const TextEditingValue(text: 'site\n', selection: TextSelection.collapsed(offset: 5));
+      typed(c, 'x');
+      expect(c.document.attributeStore.findAt(5, type: AttributeType.link), isEmpty);
+    });
+
+    test('inline code does not carry onto the next line either', () {
+      final c = RichEditorController(text: '');
+      addTearDown(c.dispose);
+      c.toggleCode();
+      typed(c, 'cd');
+      c.insertText('\n');
+      typed(c, 'plain');
+      expect(c.document.attributeStore.findAt(0, type: AttributeType.code), isNotEmpty);
+      expect(c.document.attributeStore.findAt(4, type: AttributeType.code), isEmpty);
+    });
   });
 }
