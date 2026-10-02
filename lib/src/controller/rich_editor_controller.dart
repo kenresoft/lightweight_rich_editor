@@ -858,6 +858,23 @@ class RichEditorController extends TextEditingController {
     );
   }
 
+  /// Scrolls the field so the end of the selection is on screen, once the layout has
+  /// settled (two frames on). The field scrolls to the caret by itself when text is
+  /// typed, but not when the selection was changed while another route (a sheet) had
+  /// the focus, and a toolbar that comes back with the focus shrinks the field
+  /// afterwards: the new text could end up under it.
+  void revealCaretSoon() {
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) {
+      binding.addPostFrameCallback((_) {
+        if (disposed) return;
+        final sel = selection;
+        if (!sel.isValid) return;
+        focusNode.context?.findAncestorStateOfType<EditableTextState>()?.bringIntoView(sel.extent);
+      });
+    });
+  }
+
   void toggleBold() => commands.toggleBold(_currentSelection);
 
   /// Exports the current document as an HTML string. Uses

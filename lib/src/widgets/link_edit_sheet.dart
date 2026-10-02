@@ -49,6 +49,7 @@ Future<void> showLinkSheetFor(BuildContext context, RichEditorController control
   if (result == null) return;
   controller.editLink(range, result.remove ? text : result.text, result.remove ? null : result.url);
   controller.focusNode.requestFocus();
+  controller.revealCaretSoon();
 }
 
 /// A bottom sheet to edit a link's text and address, or remove the link.
