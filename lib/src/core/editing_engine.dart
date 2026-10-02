@@ -580,8 +580,10 @@ class EditingEngine {
     final restAfterCaret = text.substring(caret, paragraphEnd).trim();
 
     if (restBeforeCaret.isEmpty && restAfterCaret.isEmpty) {
-      // Empty list item: exit the list instead of repeating the prefix.
-      return (start: paragraphStart, end: caret, text: '\n');
+      // Empty list item: exit the list instead of repeating the prefix. The marker is
+      // simply removed, so the item becomes an empty paragraph with the caret on it
+      // (replacing it with a newline left a stray blank row after every list).
+      return (start: paragraphStart, end: caret, text: '');
     }
 
     return (start: caret, end: caret, text: '\n${nextListPrefix(prefix)}');
@@ -623,7 +625,7 @@ class EditingEngine {
     relativeAttributes: stickyAsRelative(base.text.length),
     );
 
-    if (base.text == '\n') return plain; // exit-list or plain newline — nothing to renumber
+    if (base.text.isEmpty || base.text == '\n') return plain; // exit-list or plain newline — nothing to renumber
     final insertedPrefix = base.text.substring(1);
     if (listTypeOfPrefix(insertedPrefix) != ParagraphListType.numbered) return plain;
 

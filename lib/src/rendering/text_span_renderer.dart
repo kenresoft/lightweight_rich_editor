@@ -1331,11 +1331,21 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     );
   }
 
+  static final RegExp _taskPrefix = RegExp(r'^([ \t]*)[-*+] \[[ xX]\] $');
+
   // A bullet item's '-' / '*' / '+' is drawn as a bullet dot. One character
   // for one character, so every offset in the document and the field still
   // lines up; the stored text is untouched (copy, export and undo see '- ').
   String _displayPrefix(String prefix, bool? checked) {
-    if (checked != null) return prefix;
+    if (checked != null) {
+      // A task item's '- [ ] ' / '- [x] ' is drawn as a checkbox glyph, padded with
+      // thin spaces so it is still exactly as many characters as the marker.
+      final m = _taskPrefix.firstMatch(prefix);
+      if (m == null) return prefix;
+      final lead = m.group(1)!;
+      final glyph = checked ? '☑' : '☐';
+      return '$lead$glyph${' ' * (prefix.length - lead.length - 1)}';
+    }
     final i = prefix.length - 2;
     if (i < 0 || prefix.codeUnitAt(prefix.length - 1) != 0x20) return prefix;
     final marker = prefix[i];
