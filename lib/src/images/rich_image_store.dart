@@ -16,4 +16,14 @@ abstract class RichImageStore {
   /// Forgets [id]. Optional: a host may keep pictures a note once used, so that
   /// undo can bring a deleted picture back.
   Future<void> delete(String id) async {}
+
+  /// Notes the web address [id]'s picture was fetched from, so the editor can offer
+  /// it again when the picture is replaced (a typo in a link can then be fixed
+  /// rather than retyped). Optional: a host that does not keep addresses does not
+  /// override it.
+  Future<void> rememberSource(String id, String source) async {}
+
+  /// The web address [id]'s picture was fetched from, or `null` if it was not (a
+  /// gallery or camera picture) or the host does not keep addresses.
+  Future<String?> sourceOf(String id) async => null;
 }

@@ -10,6 +10,7 @@ import '../commands/set_header_level_command.dart';
 import '../core/editor_selection.dart';
 import '../images/image_prepare.dart';
 import '../images/image_source.dart';
+import '../images/rich_image_store.dart';
 import '../models/image_block.dart';
 import 'rich_editor_controller.dart';
 
@@ -73,6 +74,7 @@ extension RichEditorImages on RichEditorController {
       if (prepared != null) {
         try {
           id = await store.save(prepared.bytes);
+          await _rememberAddress(store, id, item.source);
         } catch (_) {
           id = null;
         }
@@ -87,6 +89,19 @@ extension RichEditorImages on RichEditorController {
     }
     _swapPicture(run, id, prepared);
     return true;
+  }
+
+  // Keeps the web address a picture came from (not a `data:` URI, which is the
+  // picture itself) so a later "replace" can offer it for correction. A host that
+  // cannot keep it must not make the picture fail, so errors here are ignored.
+  Future<void> _rememberAddress(RichImageStore store, String id, String source) async {
+    final s = source.trim();
+    if (!s.toLowerCase().startsWith('http')) return;
+    try {
+      await store.rememberSource(id, s);
+    } catch (_) {
+      // best effort
+    }
   }
 
   // Shows the stored picture [id] in the block [run] (same place, same instance
@@ -113,7 +128,7 @@ extension RichEditorImages on RichEditorController {
   /// Replaces the picture of the block [run] with [bytes]: same place in the note,
   /// one undo step. Returns `false` (and changes nothing) if there is no
   /// [imageStore], [bytes] is not a picture, or the block is gone.
-  Future<bool> replaceImageBytes(ImageRun run, Uint8List bytes) async {
+  Future<bool> replaceImageBytes(ImageRun run, Uint8List bytes, {String? source}) async {
     final store = imageStore;
     if (store == null) return false;
     final prepared = await prepareImage(bytes);
@@ -124,6 +139,7 @@ extension RichEditorImages on RichEditorController {
     } catch (_) {
       return false;
     }
+    if (source != null) await _rememberAddress(store, id, source);
     if (disposed || !isValidImageId(id)) return false;
     final current = imageRunByLevel(run.level); // it may have moved while the bytes were read
     if (current == null) return false;
@@ -137,7 +153,7 @@ extension RichEditorImages on RichEditorController {
     if (imageStore == null) return false;
     final bytes = await loadImageSource(source);
     if (bytes == null || disposed) return false;
-    return replaceImageBytes(run, bytes);
+    return replaceImageBytes(run, bytes, source: source);
   }
 
   /// Inserts the picture [id] (already in the store) as a block of [rows] rows at

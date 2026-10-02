@@ -28,6 +28,14 @@ class _Store extends RichImageStore {
 
   @override
   Future<Uint8List?> load(String id) async => files[id];
+
+  final Map<String, String> sources = {};
+
+  @override
+  Future<void> rememberSource(String id, String source) async => sources[id] = source;
+
+  @override
+  Future<String?> sourceOf(String id) async => sources[id];
 }
 
 
@@ -186,6 +194,26 @@ void main() {
       expect(c.imageRunAt(6)!.id, 'img1');
       expect(await c.replaceImageFromSource(c.imageRunAt(6)!, _dataUri), isTrue);
       expect(c.imageRunAt(6)!.id, 'img3');
+    });
+    test('a replacement from a web address remembers it, so a typo can be corrected later', () async {
+      final store = _Store();
+      final c = RichEditorController(text: 'above', theme: notebookTheme)..imageStore = store;
+      addTearDown(c.dispose);
+      c.selection = const TextSelection.collapsed(offset: 5);
+      expect(await c.insertImageBytes(base64Decode(_pngBase64)), isTrue);
+      final run = c.imageRunAt(6)!;
+      expect(await store.sourceOf(run.id), isNull, reason: 'a gallery picture has no address');
+
+      expect(await c.replaceImageBytes(run, base64Decode(_pngBase64), source: ' https://example.com/photo.png '), isTrue);
+      expect(await store.sourceOf(c.imageRunAt(6)!.id), 'https://example.com/photo.png');
+    });
+    test('a data: picture is not kept as an address (it is the picture itself)', () async {
+      final store = _Store();
+      final c = RichEditorController(text: 'above', theme: notebookTheme)..imageStore = store;
+      addTearDown(c.dispose);
+      c.selection = const TextSelection.collapsed(offset: 5);
+      expect(await c.insertImageFromSource(_dataUri), isTrue);
+      expect(store.sources, isEmpty);
     });
   });
 }
