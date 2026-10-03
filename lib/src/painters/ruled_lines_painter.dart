@@ -54,6 +54,7 @@ class RuledLinesPainter extends CustomPainter {
     this.selectionStart = -1,
     this.selectionEnd = -1,
     this.imageAccent = const Color(0xFF3F51B5),
+    this.pageIsDark = false,
     this.selectedBlankLines = const [],
     this.selectionColor = const Color(0x663F51B5),
     this.selectionBarLeft = 0.0,
@@ -117,6 +118,10 @@ class RuledLinesPainter extends CustomPainter {
   final int selectionStart;
   final int selectionEnd;
   final Color imageAccent;
+
+  /// Whether the page is dark, so a see-through picture that would vanish on it (a black
+  /// logo) is shown on a light card, and a white one on a light page on a dark card.
+  final bool pageIsDark;
 
   /// Vertical air between a picture and the rows above and below it.
   static const double imageInset = 4.0;
@@ -240,6 +245,8 @@ class RuledLinesPainter extends CustomPainter {
         final rrect = RRect.fromRectAndRadius(drawn, const Radius.circular(10));
         canvas.save();
         canvas.clipRRect(rrect);
+        final backdrop = imageCache?.inkOf(block.id)?.backdropFor(pageIsDark: pageIsDark);
+        if (backdrop != null) canvas.drawRect(drawn, Paint()..color = backdrop);
         canvas.drawImageRect(image, Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()), drawn, photo);
         if (selected && selectionEnd > selectionStart) canvas.drawRect(drawn, wash);
         canvas.restore();
@@ -414,6 +421,7 @@ class RuledLinesPainter extends CustomPainter {
       !identical(oldDelegate.inlineCode, inlineCode) ||
       !identical(oldDelegate.imageBlocks, imageBlocks) ||
       !identical(oldDelegate.imageCache, imageCache) ||
+      oldDelegate.pageIsDark != pageIsDark ||
       oldDelegate.imageLeft != imageLeft ||
       oldDelegate.imageRight != imageRight ||
       oldDelegate.selectionStart != selectionStart ||

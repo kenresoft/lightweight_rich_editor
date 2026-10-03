@@ -106,11 +106,18 @@ class ImportedImage {
 
 /// The most pictures one paste or import brings in; a whole web page can have
 /// hundreds. (They are fetched a few at a time, and one address is fetched once.)
-const int maxImportedImages = 60;
+const int maxImportedImages = 200;
+
+/// The most picture data one paste brings in; past it the rest of the page's pictures
+/// are left out (a page of big photos would otherwise fill the phone and every backup).
+const int maxImportedImageBytes = 30 * 1024 * 1024;
 
 /// What became of the pictures of a paste or import.
 class ImageImportReport {
-  const ImageImportReport({required this.added, required this.failed, required this.limited, this.limit = maxImportedImages});
+  const ImageImportReport({required this.added, required this.failed, required this.limited, this.limit = maxImportedImages, this.skipped = 0});
+
+  /// Pictures left out because the paste had already brought in [maxImportedImageBytes].
+  final int skipped;
 
   /// The most pictures one paste could bring in.
   final int limit;

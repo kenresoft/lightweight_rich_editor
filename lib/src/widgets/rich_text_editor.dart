@@ -907,6 +907,7 @@ class RichTextEditor extends StatelessWidget {
                                         selectionStart: controller.focusNode.hasFocus && sel.isValid ? sel.start : -1,
                                         selectionEnd: controller.focusNode.hasFocus && sel.isValid ? sel.end : -1,
                                         imageAccent: Theme.of(context).colorScheme.primary,
+                                        pageIsDark: Theme.of(context).brightness == Brightness.dark,
                                         codeBlockColor: editorStyle.codeBlockColor,
                                         codeBorderColor: editorStyle.codeBlockLabelColor.withValues(alpha: 0.22),
                                         inlineCode: controller.renderer.inlineCodeRects,

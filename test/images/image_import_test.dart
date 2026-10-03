@@ -118,7 +118,7 @@ void main() {
     });
 
     test('a data: URI is accepted, and no more than the cap is taken from a long page', () {
-      final many = List.generate(80, (i) => '<p><img src="https://e.com/$i.png" width="400" height="300"></p>').join();
+      final many = List.generate(250, (i) => '<p><img src="https://e.com/$i.png" width="400" height="300"></p>').join();
       expect(const HtmlImporter().parse(many, images: true).images, hasLength(maxImportedImages));
       expect(const HtmlImporter().parse('<img src="$_dataUri">', images: true).images, hasLength(1));
     });
@@ -200,6 +200,25 @@ void main() {
       expect(report?.added, 40);
       expect(report?.failed, 0);
       expect(report?.limited, isFalse);
+    });
+
+    test('a page of heavy pictures stops at the size budget and says how many it left out', () async {
+      final store = _Store();
+      final c = RichEditorController(text: '', theme: notebookTheme)..imageStore = store;
+      addTearDown(c.dispose);
+      c.importedImageByteBudget = 1; // the first picture alone is over it
+      ImageImportReport? report;
+      c.onImagesImported = (r) => report = r;
+      // Twelve different addresses (the data: header can carry a harmless extra field).
+      final html = List.generate(12, (i) => '<p><img src="data:image/png;n=$i;base64,$_pngBase64" width="400" height="400"></p>').join();
+      final r = const HtmlImporter().parse(html, images: true);
+      c.pasteRichText(r.text, r.attributes);
+
+      await c.resolveImportedImages(r.images);
+
+      expect(report?.added, greaterThanOrEqualTo(1));
+      expect(report?.skipped, greaterThanOrEqualTo(1));
+      expect(r.images.any((i) => c.imageRunByLevel(i.level) != null), isFalse, reason: 'no placeholder is left, shown or not');
     });
 
     test('a placeholder deleted before its picture arrives is not resurrected, and disposal is safe', () async {

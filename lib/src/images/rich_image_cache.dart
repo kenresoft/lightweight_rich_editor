@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 
 import '../models/image_block.dart' show pendingImageId;
 import 'rich_image_store.dart';
@@ -39,6 +41,9 @@ class RichImageCache extends ChangeNotifier {
     _entries[id] = entry;
     return entry.image;
   }
+
+  /// How [id] sits on a page (see [ImageInk]), once it is decoded and measured.
+  ImageInk? inkOf(String id) => _entries[id]?.ink;
 
   /// Whether loading [id] was tried and failed (bytes gone, not an image).
   bool hasFailed(String id) => _failed.contains(id);
@@ -95,12 +100,26 @@ class RichImageCache extends ChangeNotifier {
       _bytes += entry.bytes;
       _trim(keep: id);
       notifyListeners();
+      // Measured after it is shown (a see-through picture then gets its card): showing it
+      // never waits for this.
+      unawaited(_measure(id, entry));
     } catch (_) {
       _failed.add(id);
       if (!_disposed) notifyListeners();
     } finally {
       codec?.dispose();
       _loading.remove(id);
+    }
+  }
+
+  Future<void> _measure(String id, _Entry entry) async {
+    try {
+      final ink = await measureInk(entry.image);
+      if (_disposed || !identical(_entries[id], entry)) return;
+      entry.ink = ink;
+      if (ink.backdropFor(pageIsDark: false) != null || ink.backdropFor(pageIsDark: true) != null) notifyListeners();
+    } catch (_) {
+      // unmeasured: drawn as it is
     }
   }
 
@@ -132,12 +151,71 @@ class RichImageCache extends ChangeNotifier {
   }
 }
 
+/// How a picture sits on a page: how much of it is see-through, and how light the
+/// visible part is. Measured once, on a 16x16 copy, when the picture is decoded.
+class ImageInk {
+  const ImageInk({required this.transparentShare, required this.luma});
+
+  /// The share (0..1) of the picture that is see-through (a logo on nothing).
+  final double transparentShare;
+
+  /// The average lightness (0 black .. 1 white) of the visible part.
+  final double luma;
+
+  /// The backdrop a see-through picture needs on a page of the given brightness, or
+  /// `null` when it reads fine as it is: a white logo on a light page (or a black one
+  /// on a dark page) would vanish, so it is shown on a contrasting card, like the site
+  /// it came from shows it.
+  Color? backdropFor({required bool pageIsDark}) {
+    if (transparentShare < 0.12) return null;
+    if (!pageIsDark && luma > 0.72) return const Color(0xFF2B3140);
+    if (pageIsDark && luma < 0.28) return const Color(0xFFF3F4F8);
+    return null;
+  }
+}
+
+/// Measures [image] by drawing it small and reading the pixels.
+Future<ImageInk> measureInk(ui.Image image) async {
+  const side = 16;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawImageRect(
+    image,
+    Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+    Rect.fromLTWH(0, 0, side.toDouble(), side.toDouble()),
+    Paint()..filterQuality = FilterQuality.medium,
+  );
+  final small = await recorder.endRecording().toImage(side, side);
+  final data = await small.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+  small.dispose();
+  if (data == null) return const ImageInk(transparentShare: 0, luma: 0.5);
+  var transparent = 0;
+  var visible = 0;
+  var lumaSum = 0.0;
+  for (var i = 0; i < side * side; i++) {
+    final r = data.getUint8(i * 4);
+    final g = data.getUint8(i * 4 + 1);
+    final b = data.getUint8(i * 4 + 2);
+    final a = data.getUint8(i * 4 + 3);
+    if (a < 224) transparent++;
+    if (a > 32) {
+      visible++;
+      lumaSum += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    }
+  }
+  return ImageInk(
+    transparentShare: transparent / (side * side),
+    luma: visible == 0 ? 0.5 : lumaSum / visible,
+  );
+}
+
 class _Entry {
   _Entry(this.image, this.bytes, this.requestedWidth);
 
   final ui.Image image;
   final int bytes;
   final int requestedWidth;
+  ImageInk? ink;
 
   int get width => image.width;
 

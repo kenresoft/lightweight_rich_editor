@@ -65,11 +65,23 @@ extension RichEditorImages on RichEditorController {
     var next = 0;
     var added = 0;
     var failed = 0;
+    var skipped = 0;
+    var usedBytes = 0;
     Future<void> worker() async {
       while (next < items.length) {
         final item = items[next++];
+        // A page of big photos must not fill the phone: past the budget no new address is
+        // fetched (one already fetched costs nothing more).
+        if (usedBytes >= importedImageByteBudget && !fetched.containsKey(item.source)) {
+          final run = imageRunByLevel(item.level);
+          if (run != null) discardImage(run);
+          skipped++;
+          continue;
+        }
+        final fresh = !fetched.containsKey(item.source);
         if (await _resolveImported(item, fetched)) {
           added++;
+          if (fresh) usedBytes += (await fetched[item.source])?.prepared.bytes.length ?? 0;
         } else {
           failed++;
         }
@@ -78,7 +90,7 @@ extension RichEditorImages on RichEditorController {
 
     await Future.wait([for (var i = 0; i < (items.length < 4 ? items.length : 4); i++) worker()]);
     if (disposed) return;
-    onImagesImported?.call(ImageImportReport(added: added, failed: failed, limited: items.length >= importedImageLimit, limit: importedImageLimit));
+    onImagesImported?.call(ImageImportReport(added: added, failed: failed, limited: items.length >= importedImageLimit, limit: importedImageLimit, skipped: skipped));
   }
 
   // Fetches and shows one placeholder's picture; `false` when it could not be

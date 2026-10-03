@@ -93,6 +93,9 @@ class RichEditorController extends TextEditingController {
   int get importedImageLimit => clipboard.importedImageLimit;
   set importedImageLimit(int value) => clipboard.importedImageLimit = value.clamp(0, maxImportedImages);
 
+  /// The most picture data one paste brings in (see [maxImportedImageBytes]).
+  int importedImageByteBudget = maxImportedImageBytes;
+
   /// Whether [dispose] has run (asynchronous work finishing later must not touch
   /// a disposed controller).
   bool disposed = false;
