@@ -255,6 +255,7 @@ class RichEditorController extends TextEditingController {
     var resultSelection = newValue.selection;
     var resultComposing = newValue.composing;
     var ranAutolink = false;
+    int? enterBoundary; // Enter pressed right after text: the line it ends may end in an address
 
     // If anything in this block throws, Flutter's EditableText has
     // already applied the keystroke internally but document/super.value
@@ -291,9 +292,12 @@ class RichEditorController extends TextEditingController {
             offset: edit.start + edit.cursorOffsetFromStart,
           );
           resultComposing = TextRange.empty;
-          // Not autolinking here: the exit-list variant deletes the
-          // prefix, shifting positions _maybeAutolink assumes line up
-          // with the document.
+          // The exit-list variant deletes the list prefix, shifting positions, so only a plain
+          // line break (the new line break sits exactly where Enter was pressed) links the
+          // address before it, below, once the value is set.
+          if (edit.start == diff.start && diff.start < document.length && document.text[diff.start] == '\n') {
+            enterBoundary = diff.start;
+          }
         } else if (diff.insertedText.isEmpty && diff.end - diff.start == 1) {
           // Live backspace, routed through the same
           // EditingEngine.deleteBackwardEdit the programmatic
@@ -454,6 +458,8 @@ class RichEditorController extends TextEditingController {
 
     if (ranAutolink) {
       _maybeAutolink(diff);
+    } else if (enterBoundary != null) {
+      _linkAddressBefore(enterBoundary);
     }
   }
 
@@ -639,7 +645,12 @@ class RichEditorController extends TextEditingController {
     final lastChar = diff.insertedText[diff.insertedText.length - 1];
     if (!isAutolinkBoundary(lastChar)) return;
 
-    final boundaryIndex = diff.start + diff.insertedText.length - 1;
+    _linkAddressBefore(diff.start + diff.insertedText.length - 1);
+  }
+
+  // Links the address-shaped word that ends at [boundaryIndex] (where a space, tab or line
+  // break now is), if there is one and it is not linked to the same place already.
+  void _linkAddressBefore(int boundaryIndex) {
     final detected = detectUrlBeforeBoundary(document.text, boundaryIndex);
     if (detected == null) return;
 
