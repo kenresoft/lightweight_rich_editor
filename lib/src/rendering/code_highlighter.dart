@@ -255,6 +255,9 @@ const Map<String, _Lang> _languages = {
 };
 
 /// Whether [language] (a normalised label such as `dart`) has a tokenizer.
+/// The longest code block that is coloured; a longer one is shown plain (see the renderer).
+const int maxHighlightedCodeLength = 20000;
+
 bool canHighlight(String? language) => language != null && _languages.containsKey(language);
 
 bool _isIdentStart(int c) => (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || c == 0x5F || c == 0x24;

@@ -1153,6 +1153,9 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     final runs = <_ColorRun>[];
     void block(ParagraphRecord first, ParagraphRecord last) {
       final code = text.substring(first.start, last.end);
+      // A very long block stays plain: colouring it makes thousands of spans, which a
+      // phone takes seconds to lay out, and the block is still boxed and monospaced.
+      if (code.length > maxHighlightedCodeLength) return;
       // A labelled block uses its label; an unlabelled one is coloured by a
       // best-effort guess (never stored), or stays plain when unclear.
       final language = codeBlockLanguage(first.headerLevel) ?? _guessedLanguage(code);
