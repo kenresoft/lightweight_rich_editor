@@ -70,6 +70,10 @@ class RichTextRenderTheme {
   /// the start of a paragraph.
   final Color listMarkerColor;
 
+  /// The font family of ordinary text (a platform family such as `serif`, or a bundled
+  /// one). Empty keeps the app theme's font.
+  final String bodyFontFamily;
+
   const RichTextRenderTheme({
     this.baseFontSize = 16.0,
     this.textColor = const Color(0xFF000000),
@@ -87,6 +91,7 @@ class RichTextRenderTheme {
     this.matchHighlightColor = const Color(0xFFFFA726),
     this.otherMatchesHighlightColor = const Color(0x66FFA726),
     this.listMarkerColor = const Color(0xFF757575),
+    this.bodyFontFamily = '',
   });
 
   static const standard = RichTextRenderTheme();
@@ -108,6 +113,7 @@ class RichTextRenderTheme {
     Color? matchHighlightColor,
     Color? otherMatchesHighlightColor,
     Color? listMarkerColor,
+    String? bodyFontFamily,
   }) {
     return RichTextRenderTheme(
       baseFontSize: baseFontSize ?? this.baseFontSize,
@@ -126,6 +132,7 @@ class RichTextRenderTheme {
       matchHighlightColor: matchHighlightColor ?? this.matchHighlightColor,
       otherMatchesHighlightColor: otherMatchesHighlightColor ?? this.otherMatchesHighlightColor,
       listMarkerColor: listMarkerColor ?? this.listMarkerColor,
+      bodyFontFamily: bodyFontFamily ?? this.bodyFontFamily,
     );
   }
 
@@ -148,7 +155,8 @@ class RichTextRenderTheme {
         other.codeSyntax == codeSyntax &&
         other.matchHighlightColor == matchHighlightColor &&
         other.otherMatchesHighlightColor == otherMatchesHighlightColor &&
-        other.listMarkerColor == listMarkerColor;
+        other.listMarkerColor == listMarkerColor &&
+        other.bodyFontFamily == bodyFontFamily;
   }
 
   @override
@@ -169,5 +177,6 @@ class RichTextRenderTheme {
     matchHighlightColor,
     otherMatchesHighlightColor,
     listMarkerColor,
+    bodyFontFamily,
   );
 }

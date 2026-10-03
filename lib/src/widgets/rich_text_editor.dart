@@ -296,6 +296,10 @@ class RichTextEditor extends StatelessWidget {
   /// would fight the transition/hero animation).
   final bool autofocus;
 
+  /// A read-only editor can be scrolled, searched and copied from, but not typed in. A tap
+  /// on a link opens it, and a picture can be viewed but not resized, replaced or removed.
+  final bool readOnly;
+
   /// Hint text shown when the document is empty. `null` (the default)
   /// shows no hint, matching plain `TextField` behavior.
   final String? placeholder;
@@ -344,6 +348,7 @@ class RichTextEditor extends StatelessWidget {
     this.contextMenuBuilder,
     this.inputFormatters,
     this.autofocus = true,
+    this.readOnly = false,
     this.placeholder,
     this.openLinksOnTap = false,
     this.onReplaceImage,
@@ -604,6 +609,7 @@ class RichTextEditor extends StatelessWidget {
       leadingDistribution: TextLeadingDistribution.proportional,
       color: renderTheme.textColor,
       letterSpacing: 0.2,
+      fontFamily: renderTheme.bodyFontFamily.isEmpty ? null : renderTheme.bodyFontFamily,
     );
     final measuredStyle = inputTextStyle.merge(baseTextStyle);
     // A forced strut takes its baseline from the strut's own font, so it must
@@ -940,7 +946,7 @@ class RichTextEditor extends StatelessWidget {
                     Positioned.fill(
                       child: RepaintBoundary(
                         child: _LinkTapListener(
-                          enabled: openLinksOnTap,
+                          enabled: openLinksOnTap || readOnly,
                           controller: controller,
                           onOpen: (url) => _openLink(context, url),
                           child: Padding(
@@ -968,7 +974,8 @@ class RichTextEditor extends StatelessWidget {
                             child: TextField(
                               clipBehavior: Clip.none,
                               // A picture is selected as a whole: no caret on its blank rows.
-                              showCursor: controller.selectedImageRun == null ? null : false,
+                              readOnly: readOnly,
+                              showCursor: readOnly || controller.selectedImageRun != null ? false : null,
                               contentInsertionConfiguration: controller.imageStore == null
                                   ? null
                                   : ContentInsertionConfiguration(
@@ -1089,7 +1096,8 @@ class RichTextEditor extends StatelessWidget {
                     Positioned.fill(
                       child: _ImageActions(
                         controller: controller,
-                        onReplace: onReplaceImage,
+                        readOnly: readOnly,
+                        onReplace: readOnly ? null : onReplaceImage,
                         onSave: onSaveImage,
                         onRemoved: onImageRemoved,
                         onOpen: onOpenImage,
@@ -1325,6 +1333,7 @@ class _ImageRefitState extends State<_ImageRefit> {
 
 class _ImageActions extends StatelessWidget {
   const _ImageActions({
+    required this.readOnly,
     required this.controller,
     required this.onReplace,
     required this.onSave,
@@ -1337,6 +1346,7 @@ class _ImageActions extends StatelessWidget {
     required this.regions,
   });
 
+  final bool readOnly;
   final RichEditorController controller;
   final void Function(ImageRun run)? onReplace;
   final void Function(ImageRun run)? onSave;
@@ -1386,7 +1396,7 @@ class _ImageActions extends StatelessWidget {
             // (still loading) there is nothing to size yet.
             final presets = <_SizePreset>[];
             var activeRows = run.rows;
-            if (image != null && drawn != null) {
+            if (!readOnly && image != null && drawn != null) {
               final fullHeight = area.width * image.height / image.width;
               final full = ((fullHeight + 2 * RuledLinesPainter.imageInset) / pitch).ceil().clamp(minImageRows, maxImageRows);
               for (final (label, share) in const [('S', 0.4), ('M', 0.6), ('L', 0.8), ('Full', 1.0)]) {
@@ -1399,7 +1409,7 @@ class _ImageActions extends StatelessWidget {
               activeRows = math.min(run.rows, full);
             }
 
-            final barWidth = _ImageBar.widthFor(presets.length, (onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0) + (onOpen != null ? 1 : 0) + 1);
+            final barWidth = _ImageBar.widthFor(presets.length, (onReplace != null ? 1 : 0) + (onSave != null ? 1 : 0) + (onOpen != null ? 1 : 0) + (readOnly ? 0 : 1));
             final shownHeight = drawn?.height ?? (region.height - 2 * RuledLinesPainter.imageInset);
             const gap = 8.0;
             // Below the picture, so it is not covered; above it when the screen ends
@@ -1437,6 +1447,7 @@ class _ImageActions extends StatelessWidget {
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
                       child: _ImageBar(
+                    readOnly: readOnly,
                     controller: controller,
                     presets: presets,
                     activeRows: activeRows,
@@ -1469,6 +1480,7 @@ class _SizePreset {
 /// screen readers, and Remove is tinted so it is not hit by mistake.
 class _ImageBar extends StatelessWidget {
   const _ImageBar({
+    required this.readOnly,
     required this.controller,
     required this.presets,
     required this.activeRows,
@@ -1483,6 +1495,7 @@ class _ImageBar extends StatelessWidget {
 
   static double widthFor(int presets, int actions) => 12 + presets * _chip + (presets > 0 ? 9 : 0) + actions * _chip;
 
+  final bool readOnly;
   final RichEditorController controller;
   final List<_SizePreset> presets;
   final int activeRows;
@@ -1559,10 +1572,11 @@ class _ImageBar extends StatelessWidget {
               if (onOpen != null) action(Icons.open_in_full_rounded, 'View picture', () => _act(onOpen!)),
               if (onSave != null) action(Icons.download_rounded, 'Save picture', () => _act(onSave!)),
               if (onReplace != null) action(Icons.swap_horiz_rounded, 'Replace picture', () => _act(onReplace!)),
-              action(Icons.delete_outline_rounded, 'Remove picture', () {
-                _act(controller.deleteImage);
-                onRemoved?.call();
-              }, color: const Color(0xFFFFB4AB)),
+              if (!readOnly)
+                action(Icons.delete_outline_rounded, 'Remove picture', () {
+                  _act(controller.deleteImage);
+                  onRemoved?.call();
+                }, color: const Color(0xFFFFB4AB)),
             ],
           ),
         ),

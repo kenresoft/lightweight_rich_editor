@@ -407,6 +407,19 @@ void main() {
       expect(c.document.paragraphs.hasAnyImage, isTrue, reason: 'and Undo brings it back');
     });
 
+    testWidgets('cutting a selected picture removes all of it, not just its line breaks', (tester) async {
+      final (c, _) = await pumpEditor(tester);
+      c.selection = const TextSelection.collapsed(offset: 5);
+      c.insertImageBlock('pic', rows: 5);
+      await tester.pump();
+      final run = c.imageRunAt(6)!;
+      c.selection = TextSelection(baseOffset: run.start, extentOffset: run.end);
+      await tester.runAsync(c.cut);
+      await tester.pump();
+      expect(c.document.paragraphs.hasAnyImage, isFalse, reason: 'no shorter picture left behind');
+      expect(c.text, 'hello\n');
+    });
+
     testWidgets('named sizes: S / M / L / Full set the picture\'s width, the active one is marked, and the bar never covers the picture', (tester) async {
       final (c, _) = await pumpEditor(tester);
       c.selection = const TextSelection.collapsed(offset: 5);

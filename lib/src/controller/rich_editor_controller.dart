@@ -838,8 +838,17 @@ class RichEditorController extends TextEditingController {
       clipboard.copy(EditorSelection(baseOffset: start, extentOffset: end));
 
   /// Copies then deletes the current selection. See [ClipboardManager.cut].
-  Future<void> cut() async =>
-      _syncSelection(await clipboard.cut(_currentSelection));
+  Future<void> cut() async {
+    // A picture is its rows; cutting only the line breaks inside it would leave a
+    // shorter picture behind. It goes whole, and a paste brings it back whole.
+    final run = selection.isValid && !selection.isCollapsed ? selectedImageRun : null;
+    if (run != null) {
+      await clipboard.copy(EditorSelection(baseOffset: run.start, extentOffset: run.end));
+      deleteImage(run);
+      return;
+    }
+    _syncSelection(await clipboard.cut(_currentSelection));
+  }
 
   /// Pastes at the current selection — rich content if [clipboard] has a
   /// matching delegate entry, otherwise plain text from the system
