@@ -110,12 +110,12 @@ class HtmlImporter {
   /// Parses [htmlString]. With [images] on, each `<img>` (a web address or an
   /// inline `data:` URI) becomes a block of blank placeholder rows and is listed
   /// in the result's `images`, for the caller to fetch and fill in.
-  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) parse(String htmlString, {bool images = false}) {
+  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) parse(String htmlString, {bool images = false, int maxImages = maxImportedImages}) {
     // Our own export (see HtmlExporter.marker) is re-imported line for line.
     final exact = htmlString.contains(_generatorMarker);
     final document = html_parser.parse(_fragmentOf(htmlString));
     final body = document.body;
-    final run = _Run(exact ? 0 : paragraphGap, tightHeadings: exact, importColors: exact, includeImages: images);
+    final run = _Run(exact ? 0 : paragraphGap, tightHeadings: exact, importColors: exact, includeImages: images, maxImages: maxImages);
     if (body != null) run.walk(body, const [], null);
     return run.finish();
   }
@@ -141,9 +141,10 @@ String _fragmentOf(String html) {
 }
 
 class _Run {
-  _Run(this.paragraphGap, {this.tightHeadings = false, this.importColors = false, this.includeImages = false});
+  _Run(this.paragraphGap, {this.tightHeadings = false, this.importColors = false, this.includeImages = false, this.maxImages = maxImportedImages});
 
   final bool includeImages;
+  final int maxImages;
   final List<ImportedImage> _images = [];
 
   final int paragraphGap;
@@ -533,13 +534,16 @@ class _Run {
   // once its bytes are fetched. Icons, emoji and tracking pixels (tiny or marked
   // as such) are not pictures worth a block.
   void _remoteImage(dom.Element e) {
-    if (!includeImages || _images.length >= maxImportedImages) return;
-    var src = (e.attributes['src'] ?? e.attributes['data-src'] ?? '').trim();
-    if (src.isEmpty) {
-      final srcset = (e.attributes['srcset'] ?? '').trim();
-      if (srcset.isNotEmpty) src = srcset.split(',').first.trim().split(RegExp(r'\s+')).first;
-    }
-    if (!isImportableImageSource(src)) return;
+    if (!includeImages || _images.length >= maxImages) return;
+    final a = e.attributes;
+    final picture = e.parent?.localName == 'picture' ? e.parent! : null;
+    final src = pickImageSource(
+      src: a['src'] ?? '',
+      dataSrc: a['data-src'] ?? a['data-original'] ?? a['data-lazy-src'] ?? '',
+      srcset: a['srcset'] ?? a['data-srcset'] ?? '',
+      sourceSrcset: picture?.querySelector('source')?.attributes['srcset'] ?? '',
+    );
+    if (src == null) return;
     final w = int.tryParse((e.attributes['width'] ?? '').replaceAll(RegExp(r'[^0-9]'), ''));
     final h = int.tryParse((e.attributes['height'] ?? '').replaceAll(RegExp(r'[^0-9]'), ''));
     if ((w != null && w < 48) || (h != null && h < 48)) return;

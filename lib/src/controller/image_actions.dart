@@ -59,26 +59,51 @@ extension RichEditorImages on RichEditorController {
   /// side by side and never block typing.
   Future<void> resolveImportedImages(List<ImportedImage> items) async {
     if (items.isEmpty) return;
-    await Future.wait([for (final item in items) _resolveImported(item)]);
+    // A few at a time (a page can have dozens, and a phone should not open them all at
+    // once), and an address that repeats (a flag on every row) is fetched and stored once.
+    final fetched = <String, Future<({String id, PreparedImage prepared})?>>{};
+    var next = 0;
+    var added = 0;
+    var failed = 0;
+    Future<void> worker() async {
+      while (next < items.length) {
+        final item = items[next++];
+        if (await _resolveImported(item, fetched)) {
+          added++;
+        } else {
+          failed++;
+        }
+      }
+    }
+
+    await Future.wait([for (var i = 0; i < (items.length < 4 ? items.length : 4); i++) worker()]);
+    if (disposed) return;
+    onImagesImported?.call(ImageImportReport(added: added, failed: failed, limited: items.length >= importedImageLimit, limit: importedImageLimit));
   }
 
   // Fetches and shows one placeholder's picture; `false` when it could not be
   // had (the placeholder is then removed).
-  Future<bool> _resolveImported(ImportedImage item) async {
+  Future<bool> _resolveImported(ImportedImage item, [Map<String, Future<({String id, PreparedImage prepared})?>>? fetched]) async {
     final store = imageStore;
     String? id;
     PreparedImage? prepared;
     if (store != null) {
-      final bytes = await loadImageSource(item.source);
-      if (bytes != null) prepared = await prepareImage(bytes);
-      if (prepared != null) {
+      Future<({String id, PreparedImage prepared})?> fetch() async {
+        final bytes = await loadImageSource(item.source);
+        final p = bytes == null ? null : await prepareImage(bytes);
+        if (p == null) return null;
         try {
-          id = await store.save(prepared.bytes);
-          await _rememberAddress(store, id, item.source);
+          final saved = await store.save(p.bytes);
+          await _rememberAddress(store, saved, item.source);
+          return (id: saved, prepared: p);
         } catch (_) {
-          id = null;
+          return null;
         }
       }
+
+      final got = await (fetched == null ? fetch() : (fetched[item.source] ??= fetch()));
+      id = got?.id;
+      prepared = got?.prepared;
     }
     if (disposed) return false;
     final run = imageRunByLevel(item.level);

@@ -29,7 +29,7 @@ class MarkdownImporter {
   /// lines becomes one blank line, and leading/trailing blank lines are
   /// dropped. Everything else is a line per paragraph, with list markers and
   /// `> ` quote markers kept as literal text.
-  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) parse(String markdown, {bool images = false}) {
+  ({String text, List<TextAttribute> attributes, List<ImportedImage> images}) parse(String markdown, {bool images = false, int maxImages = maxImportedImages}) {
     final imported = <ImportedImage>[];
     final source = markdown.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final lines = source.split('\n');
@@ -110,7 +110,7 @@ class MarkdownImporter {
 
       // A line that is only a picture, `![alt](address)`: a block of blank rows
       // for the picture to be filled into once it is fetched.
-      final pic = images && imported.length < maxImportedImages ? _pictureLine.firstMatch(line.trim()) : null;
+      final pic = images && imported.length < maxImages ? _pictureLine.firstMatch(line.trim()) : null;
       if (pic != null && isImportableImageSource(pic.group(2)!)) {
         final rows = 6;
         final level = imageLevelFor(pendingImageId, newImageInstance());

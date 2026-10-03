@@ -15,7 +15,7 @@ export 'src/rendering/render_theme.dart';
 export 'src/rendering/code_block_region.dart';
 export 'src/rendering/code_highlighter.dart' show CodeSyntaxColors;
 export 'src/models/code_block.dart';
-export 'src/models/image_block.dart' show isImageLevel, imageIdOf, imageBlockLevel, minImageRows, maxImageRows, rowsForImage, ImageRun, ImportedImage, isImportableImageSource, pendingImageId, maxImportedImages;
+export 'src/models/image_block.dart' show isImageLevel, imageIdOf, imageBlockLevel, minImageRows, maxImageRows, rowsForImage, ImageRun, ImportedImage, ImageImportReport, isImportableImageSource, pickImageSource, pendingImageId, maxImportedImages;
 export 'src/rendering/image_region.dart';
 export 'src/rendering/ruled_row_metrics.dart';
 export 'src/rendering/text_span_renderer.dart' show TextSpanRenderer;

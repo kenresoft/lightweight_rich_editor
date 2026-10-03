@@ -105,12 +105,90 @@ class ImportedImage {
 }
 
 /// The most pictures one paste or import brings in; a whole web page can have
-/// hundreds.
-const int maxImportedImages = 12;
+/// hundreds. (They are fetched a few at a time, and one address is fetched once.)
+const int maxImportedImages = 60;
+
+/// What became of the pictures of a paste or import.
+class ImageImportReport {
+  const ImageImportReport({required this.added, required this.failed, required this.limited, this.limit = maxImportedImages});
+
+  /// The most pictures one paste could bring in.
+  final int limit;
+
+  /// Pictures now in the note.
+  final int added;
+
+  /// Pictures that could not be had (offline, gone, too big, not a picture).
+  final int failed;
+
+  /// Whether the page had more pictures than [maxImportedImages] (the rest were left out).
+  final bool limited;
+}
 
 /// Whether [source] is something an importer may fetch: a web address or an
 /// inline `data:image/...` URI.
 bool isImportableImageSource(String source) {
   final s = source.trimLeft().toLowerCase();
   return s.startsWith('https://') || s.startsWith('http://') || s.startsWith('data:image/');
+}
+
+/// The picture address of an `<img>` as pages really write it: lazy-loading pages keep
+/// the real address in `data-src` (and a tiny `data:` placeholder in `src`), responsive
+/// ones in `srcset` / a `<picture>`'s `<source>` (the widest candidate is taken), and
+/// some start with `//` (https). Returns `null` when there is nothing to fetch.
+String? pickImageSource({
+  String src = '',
+  String dataSrc = '',
+  String srcset = '',
+  String sourceSrcset = '',
+}) {
+  String fix(String s) {
+    final t = s.trim();
+    return t.startsWith('//') ? 'https:$t' : t;
+  }
+
+  String widest(String set) => bestSrcsetCandidate(set);
+
+  final candidates = <String>[
+    fix(src),
+    fix(dataSrc),
+    fix(widest(srcset)),
+    fix(widest(sourceSrcset)),
+  ].where(isImportableImageSource).toList();
+  if (candidates.isEmpty) return null;
+  // A short `data:` address is a placeholder (a 1x1 gif); a real address beats it.
+  for (final c in candidates) {
+    if (!(c.toLowerCase().startsWith('data:') && c.length < 400)) return c;
+  }
+  return candidates.first;
+}
+
+/// The address to take from a `srcset`. Candidates are separated by a comma *followed by
+/// whitespace*; a comma inside an address (`.../fill,aspectratio:3x4,width:375`, as image
+/// services write them) belongs to the address. Of the candidates the one just big enough
+/// for a phone-width picture is taken (about 800 px: `2x`, or `800w` and up), else the
+/// biggest there is, so a page's 4000 px original is not downloaded for a note.
+String bestSrcsetCandidate(String set) {
+  final tokens = set.trim().split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+  final found = <({String url, double px})>[];
+  var i = 0;
+  while (i < tokens.length) {
+    var url = tokens[i++];
+    var descriptor = '';
+    if (url.endsWith(',')) {
+      url = url.replaceFirst(RegExp(r',+$'), '');
+    } else if (i < tokens.length && !tokens[i].contains('/') && !tokens[i].startsWith('http')) {
+      descriptor = tokens[i++];
+      descriptor = descriptor.replaceFirst(RegExp(r',+$'), '');
+    }
+    if (url.isEmpty) continue;
+    final n = double.tryParse(descriptor.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0;
+    final px = descriptor.endsWith('w') ? n : (descriptor.endsWith('x') ? n * 400 : 0.0);
+    found.add((url: url, px: px));
+  }
+  if (found.isEmpty) return '';
+  final enough = found.where((c) => c.px >= 800).toList()..sort((a, b) => a.px.compareTo(b.px));
+  if (enough.isNotEmpty) return enough.first.url;
+  found.sort((a, b) => b.px.compareTo(a.px));
+  return found.first.url;
 }

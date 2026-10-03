@@ -84,6 +84,15 @@ class RichEditorController extends TextEditingController {
     notifyListeners();
   }
 
+  /// Told when the pictures of a paste or import have all been dealt with (so the host
+  /// can say how many could not be had, or that the page had more than the limit).
+  void Function(ImageImportReport report)? onImagesImported;
+
+  /// The most pictures one paste or import brings in (at most [maxImportedImages]); a
+  /// host can lower it, for example for a free tier.
+  int get importedImageLimit => clipboard.importedImageLimit;
+  set importedImageLimit(int value) => clipboard.importedImageLimit = value.clamp(0, maxImportedImages);
+
   /// Whether [dispose] has run (asynchronous work finishing later must not touch
   /// a disposed controller).
   bool disposed = false;
@@ -792,7 +801,7 @@ class RichEditorController extends TextEditingController {
   /// Parses `markdown` (a deliberately scoped subset — see
   /// [MarkdownImporter]) and pastes the result at the current selection.
   void pasteMarkdown(String markdown) {
-    final parsed = const MarkdownImporter().parse(markdown, images: imageStore != null);
+    final parsed = const MarkdownImporter().parse(markdown, images: imageStore != null, maxImages: importedImageLimit);
     _repairAndSync(
       commands.pasteRich(_currentSelection, parsed.text, parsed.attributes),
     );
@@ -808,7 +817,7 @@ class RichEditorController extends TextEditingController {
   /// your app has obtained an HTML string some other way (a clipboard
   /// plugin, a platform channel, drag-and-drop, a web `paste` event).
   void pasteHtml(String html) {
-    final parsed = const HtmlImporter().parse(html, images: imageStore != null);
+    final parsed = const HtmlImporter().parse(html, images: imageStore != null, maxImages: importedImageLimit);
     _repairAndSync(
       commands.pasteRich(_currentSelection, parsed.text, parsed.attributes),
     );

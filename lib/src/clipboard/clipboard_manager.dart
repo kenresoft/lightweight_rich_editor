@@ -31,6 +31,9 @@ class ClipboardManager {
   /// [takeImports] for the caller to fetch.
   bool acceptImages = false;
 
+  /// The most pictures one paste brings in (a host can lower it, e.g. for a free tier).
+  int importedImageLimit = maxImportedImages;
+
   List<ImportedImage> _imports = const [];
 
   /// The pictures the last [paste] left as placeholders; clears the list.
@@ -105,7 +108,7 @@ class ClipboardManager {
 
     // 1. HTML flavor, if the clipboard provided one.
     if (htmlText != null && htmlText.isNotEmpty) {
-      final parsed = const HtmlImporter().parse(htmlText, images: acceptImages);
+      final parsed = const HtmlImporter().parse(htmlText, images: acceptImages, maxImages: importedImageLimit);
       if (parsed.attributes.isNotEmpty || (normalizedPlainText != null && parsed.text != normalizedPlainText)) {
         _imports = parsed.images;
         // _withAutolinks still runs here: a bare URL from e.g. a
@@ -119,7 +122,7 @@ class ClipboardManager {
     if (normalizedPlainText != null && normalizedPlainText.isNotEmpty) {
       final text = normalizedPlainText;
       if (_looksLikeMarkdown(text)) {
-        final parsed = const MarkdownImporter().parse(text, images: acceptImages);
+        final parsed = const MarkdownImporter().parse(text, images: acceptImages, maxImages: importedImageLimit);
         if (parsed.attributes.isNotEmpty) {
           _imports = parsed.images;
           return commands.pasteRich(selection, parsed.text, _withAutolinks(parsed.text, parsed.attributes));

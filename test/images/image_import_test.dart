@@ -74,8 +74,51 @@ void main() {
       expect(const HtmlImporter().parse(html, images: true).images, isEmpty);
     });
 
-    test('a data: URI is accepted, and no more than the cap is taken from a long page', () {
+    test('addresses with commas inside them are not cut up (the way image services write them, as on fifa.com)', () {
+      const set = 'https://digitalhub.fifa.com/transform/aa/Juan?&io=transform:fill,aspectratio:3x4,width:375&quality=75 1x, '
+          'https://digitalhub.fifa.com/transform/aa/Juan?&io=transform:fill,aspectratio:3x4,width:750&quality=75 2x';
+      expect(pickImageSource(srcset: set), 'https://digitalhub.fifa.com/transform/aa/Juan?&io=transform:fill,aspectratio:3x4,width:750&quality=75');
+      expect(pickImageSource(srcset: 'https://api.fifa.com/api/v3/picture/flags-sq-4/ARG 1x'), 'https://api.fifa.com/api/v3/picture/flags-sq-4/ARG');
+      expect(pickImageSource(srcset: 'https://e.com/a.jpg, https://e.com/b.jpg 2x'), 'https://e.com/b.jpg', reason: 'a candidate without a descriptor');
+      final r = const HtmlImporter().parse('<img loading="lazy" width="100%" alt="Juan MUSSO" srcset="$set" sizes="(min-width: 1920px) calc((100vw - 160px) / 4), calc(100vw - 40px)">', images: true);
+      expect(r.images.single.source, endsWith('width:750&quality=75'));
+    });
+
+    test('a host can lower the number of pictures a paste brings in (a free tier)', () {
       final many = List.generate(30, (i) => '<p><img src="https://e.com/$i.png" width="400" height="300"></p>').join();
+      expect(const HtmlImporter().parse(many, images: true, maxImages: 12).images, hasLength(12));
+      expect(const MarkdownImporter().parse(List.generate(30, (i) => '![a](https://e.com/$i.png)').join(String.fromCharCode(10)), images: true, maxImages: 5).images, hasLength(5));
+      final c = RichEditorController(text: '');
+      addTearDown(c.dispose);
+      expect(c.importedImageLimit, maxImportedImages);
+      c.importedImageLimit = 12;
+      expect(c.importedImageLimit, 12);
+      c.importedImageLimit = 1000;
+      expect(c.importedImageLimit, maxImportedImages, reason: 'never above the package limit');
+    });
+
+    test('lazy-loaded, responsive and protocol-relative pictures are found the way pages write them', () {
+      const tiny = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      expect(pickImageSource(src: tiny, dataSrc: 'https://e.com/real.jpg'), 'https://e.com/real.jpg', reason: 'a placeholder gif loses to the real address');
+      expect(pickImageSource(src: 'https://e.com/a.jpg', dataSrc: 'https://e.com/b.jpg'), 'https://e.com/a.jpg');
+      expect(pickImageSource(srcset: 'https://e.com/s.jpg 400w, https://e.com/l.jpg 1200w, https://e.com/m.jpg 800w'), 'https://e.com/m.jpg', reason: 'just big enough for a phone, not the biggest');
+      expect(pickImageSource(srcset: 'https://e.com/s.jpg 300w, https://e.com/m.jpg 600w'), 'https://e.com/m.jpg', reason: 'all small: the biggest');
+      expect(pickImageSource(src: '//cdn.e.com/x.png'), 'https://cdn.e.com/x.png');
+      expect(pickImageSource(src: '/relative/x.png'), isNull);
+      expect(pickImageSource(), isNull);
+      expect(pickImageSource(src: _dataUri), _dataUri, reason: 'a real inline picture is kept when it is all there is');
+
+      final r = const HtmlImporter().parse(
+        '<img src="$tiny" data-src="https://e.com/lazy.jpg" width="400" height="300">'
+        '<picture><source srcset="https://e.com/p400.jpg 400w, https://e.com/p800.jpg 800w"><img width="400" height="300"></picture>'
+        '<img srcset="//cdn.e.com/r1.jpg 1x, //cdn.e.com/r2.jpg 2x" width="400" height="300">',
+        images: true,
+      );
+      expect(r.images.map((i) => i.source), ['https://e.com/lazy.jpg', 'https://e.com/p800.jpg', 'https://cdn.e.com/r2.jpg']);
+    });
+
+    test('a data: URI is accepted, and no more than the cap is taken from a long page', () {
+      final many = List.generate(80, (i) => '<p><img src="https://e.com/$i.png" width="400" height="300"></p>').join();
       expect(const HtmlImporter().parse(many, images: true).images, hasLength(maxImportedImages));
       expect(const HtmlImporter().parse('<img src="$_dataUri">', images: true).images, hasLength(1));
     });
@@ -134,6 +177,29 @@ void main() {
 
       c.commands.undo(); // fill-in of the picture goes back to the placeholder (one step)
       expect(c.document.paragraphs.records.where((x) => imageIdOf(x.headerLevel) == 'img1'), isEmpty);
+    });
+
+    test('a long page: pictures are fetched once per address, all shown, and the host is told', () async {
+      final store = _Store();
+      final c = RichEditorController(text: '', theme: notebookTheme)..imageStore = store;
+      addTearDown(c.dispose);
+      ImageImportReport? report;
+      c.onImagesImported = (r) => report = r;
+      // 40 rows, each a flag (the same two addresses over and over) and a player.
+      const other = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII=';
+      final html = List.generate(20, (i) => '<p><img src="$_dataUri" width="400" height="400"></p><p><img src="$other" width="400" height="400"></p>').join();
+      final r = const HtmlImporter().parse(html, images: true);
+      expect(r.images, hasLength(40));
+      c.pasteRichText(r.text, r.attributes);
+
+      await c.resolveImportedImages(r.images);
+
+      expect(store.files.length, lessThanOrEqualTo(2), reason: 'each address is fetched and stored once');
+      expect(r.images.any((i) => c.imageRunByLevel(i.level) != null), isFalse, reason: 'no placeholder is left');
+      expect(c.document.paragraphs.records.where((x) => isImageLevel(x.headerLevel)), isNotEmpty);
+      expect(report?.added, 40);
+      expect(report?.failed, 0);
+      expect(report?.limited, isFalse);
     });
 
     test('a placeholder deleted before its picture arrives is not resurrected, and disposal is safe', () async {
