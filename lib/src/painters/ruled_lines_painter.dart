@@ -203,7 +203,7 @@ class RuledLinesPainter extends CustomPainter {
       // Inset inside its rows so the card has air above and below it and never
       // touches the text around it; its rows (and the rules) are unchanged.
       final rect = Rect.fromLTRB(codeLeft, top + codeBlockInsetTop, codeRight > codeLeft ? codeRight : size.width, bottom - codeBlockInsetBottom);
-      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(10));
+      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(5));
       canvas.drawRRect(rrect, fill);
       canvas.drawRRect(rrect.deflate(0.5), border);
     }

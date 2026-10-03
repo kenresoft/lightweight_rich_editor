@@ -66,7 +66,8 @@ class EditingEngine {
     if (attrs.isEmpty && target > 0) {
       final text = document.text;
       if (text.codeUnitAt(target - 1) != 0x0A) {
-        attrs = document.attributeStore.findAt(target - 1);
+        // A link does not carry on past its last character.
+        attrs = document.attributeStore.findAt(target - 1).where((a) => a.type != AttributeType.link).toList();
       }
     }
 
@@ -108,7 +109,14 @@ class EditingEngine {
     }
 
     if (text.isNotEmpty) {
+      // A link ends where its words end: text typed right after it (a space, the next
+      // word) is not part of it, unless the caller says so.
+      final endsLink = start > 0 &&
+          end == start && // (a replaced word inside a link stays linked)
+          !(attributesForInsertion ?? _stickyAttributes).containsKey(AttributeType.link) &&
+          store.findIntersecting(start - 1, start, type: AttributeType.link).any((s) => s.end == start);
       store.shiftForInsertion(start, text.length);
+      if (endsLink) store.clearRange(start, start + text.length, type: AttributeType.link);
       buffer.insert(start, text);
       document.paragraphs.applyInsertion(start, text);
 

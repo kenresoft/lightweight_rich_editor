@@ -73,7 +73,8 @@ class CodeSyntaxColors {
       other.literal == literal;
 
   @override
-  int get hashCode => Object.hash(comment, string, number, keyword, type, literal);
+  int get hashCode =>
+      Object.hash(comment, string, number, keyword, type, literal);
 }
 
 class _Lang {
@@ -107,12 +108,68 @@ const _dart = _Lang(
   lineComments: _cLikeComments,
   blockComment: _cBlock,
   keywords: {
-    'abstract', 'as', 'assert', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue',
-    'covariant', 'default', 'deferred', 'do', 'dynamic', 'else', 'enum', 'export', 'extends', 'extension',
-    'external', 'factory', 'final', 'finally', 'for', 'get', 'hide', 'if', 'implements', 'import', 'in',
-    'interface', 'is', 'late', 'library', 'mixin', 'new', 'of', 'on', 'operator', 'part', 'required',
-    'rethrow', 'return', 'sealed', 'set', 'show', 'static', 'super', 'switch', 'sync', 'this', 'throw', 'try',
-    'typedef', 'var', 'void', 'when', 'while', 'with', 'yield',
+    'abstract',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'covariant',
+    'default',
+    'deferred',
+    'do',
+    'dynamic',
+    'else',
+    'enum',
+    'export',
+    'extends',
+    'extension',
+    'external',
+    'factory',
+    'final',
+    'finally',
+    'for',
+    'get',
+    'hide',
+    'if',
+    'implements',
+    'import',
+    'in',
+    'interface',
+    'is',
+    'late',
+    'library',
+    'mixin',
+    'new',
+    'of',
+    'on',
+    'operator',
+    'part',
+    'required',
+    'rethrow',
+    'return',
+    'sealed',
+    'set',
+    'show',
+    'static',
+    'super',
+    'switch',
+    'sync',
+    'this',
+    'throw',
+    'try',
+    'typedef',
+    'var',
+    'void',
+    'when',
+    'while',
+    'with',
+    'yield',
   },
 );
 
@@ -121,11 +178,59 @@ const _js = _Lang(
   blockComment: _cBlock,
   quotes: '\'"`',
   keywords: {
-    'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete',
-    'do', 'else', 'export', 'extends', 'finally', 'for', 'from', 'function', 'if', 'import', 'in', 'instanceof',
-    'let', 'new', 'of', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void',
-    'while', 'with', 'yield', 'interface', 'type', 'enum', 'implements', 'public', 'private', 'protected',
-    'readonly', 'abstract', 'declare', 'namespace', 'as', 'is', 'keyof',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'debugger',
+    'default',
+    'delete',
+    'do',
+    'else',
+    'export',
+    'extends',
+    'finally',
+    'for',
+    'from',
+    'function',
+    'if',
+    'import',
+    'in',
+    'instanceof',
+    'let',
+    'new',
+    'of',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'this',
+    'throw',
+    'try',
+    'typeof',
+    'var',
+    'void',
+    'while',
+    'with',
+    'yield',
+    'interface',
+    'type',
+    'enum',
+    'implements',
+    'public',
+    'private',
+    'protected',
+    'readonly',
+    'abstract',
+    'declare',
+    'namespace',
+    'as',
+    'is',
+    'keyof',
   },
   literals: {'true', 'false', 'null', 'undefined', 'NaN', 'Infinity'},
 );
@@ -134,13 +239,70 @@ const _java = _Lang(
   lineComments: _cLikeComments,
   blockComment: _cBlock,
   keywords: {
-    'abstract', 'assert', 'break', 'case', 'catch', 'class', 'continue', 'default', 'do', 'else', 'enum',
-    'extends', 'final', 'finally', 'for', 'if', 'implements', 'import', 'instanceof', 'interface', 'native',
-    'new', 'package', 'private', 'protected', 'public', 'return', 'static', 'super', 'switch', 'synchronized',
-    'this', 'throw', 'throws', 'try', 'void', 'volatile', 'while', 'var', 'record',
+    'abstract',
+    'assert',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'continue',
+    'default',
+    'do',
+    'else',
+    'enum',
+    'extends',
+    'final',
+    'finally',
+    'for',
+    'if',
+    'implements',
+    'import',
+    'instanceof',
+    'interface',
+    'native',
+    'new',
+    'package',
+    'private',
+    'protected',
+    'public',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'synchronized',
+    'this',
+    'throw',
+    'throws',
+    'try',
+    'void',
+    'volatile',
+    'while',
+    'var',
+    'record',
     // Kotlin / C# overlap
-    'fun', 'val', 'when', 'object', 'is', 'in', 'as', 'override', 'open', 'data', 'companion', 'lateinit',
-    'namespace', 'using', 'readonly', 'sealed', 'string', 'int', 'bool', 'double', 'float', 'long', 'char',
+    'fun',
+    'val',
+    'when',
+    'object',
+    'is',
+    'in',
+    'as',
+    'override',
+    'open',
+    'data',
+    'companion',
+    'lateinit',
+    'namespace',
+    'using',
+    'readonly',
+    'sealed',
+    'string',
+    'int',
+    'bool',
+    'double',
+    'float',
+    'long',
+    'char',
     'byte', 'short', 'boolean',
   },
 );
@@ -149,11 +311,57 @@ const _swift = _Lang(
   lineComments: _cLikeComments,
   blockComment: _cBlock,
   keywords: {
-    'associatedtype', 'class', 'deinit', 'enum', 'extension', 'fileprivate', 'func', 'import', 'init', 'inout',
-    'internal', 'let', 'open', 'operator', 'private', 'protocol', 'public', 'static', 'struct', 'subscript',
-    'typealias', 'var', 'break', 'case', 'continue', 'default', 'defer', 'do', 'else', 'fallthrough', 'for',
-    'guard', 'if', 'in', 'repeat', 'return', 'switch', 'where', 'while', 'as', 'catch', 'is', 'super', 'self',
-    'throw', 'throws', 'try', 'async', 'await', 'some', 'any',
+    'associatedtype',
+    'class',
+    'deinit',
+    'enum',
+    'extension',
+    'fileprivate',
+    'func',
+    'import',
+    'init',
+    'inout',
+    'internal',
+    'let',
+    'open',
+    'operator',
+    'private',
+    'protocol',
+    'public',
+    'static',
+    'struct',
+    'subscript',
+    'typealias',
+    'var',
+    'break',
+    'case',
+    'continue',
+    'default',
+    'defer',
+    'do',
+    'else',
+    'fallthrough',
+    'for',
+    'guard',
+    'if',
+    'in',
+    'repeat',
+    'return',
+    'switch',
+    'where',
+    'while',
+    'as',
+    'catch',
+    'is',
+    'super',
+    'self',
+    'throw',
+    'throws',
+    'try',
+    'async',
+    'await',
+    'some',
+    'any',
   },
   literals: {'true', 'false', 'nil'},
 );
@@ -162,11 +370,60 @@ const _c = _Lang(
   lineComments: _cLikeComments,
   blockComment: _cBlock,
   keywords: {
-    'auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extern',
-    'float', 'for', 'goto', 'if', 'inline', 'int', 'long', 'register', 'return', 'short', 'signed', 'sizeof',
-    'static', 'struct', 'switch', 'typedef', 'union', 'unsigned', 'void', 'volatile', 'while', 'class',
-    'namespace', 'template', 'typename', 'public', 'private', 'protected', 'virtual', 'new', 'delete', 'this',
-    'using', 'bool', 'try', 'catch', 'throw', 'constexpr', 'nullptr', 'override', 'final', 'explicit',
+    'auto',
+    'break',
+    'case',
+    'char',
+    'const',
+    'continue',
+    'default',
+    'do',
+    'double',
+    'else',
+    'enum',
+    'extern',
+    'float',
+    'for',
+    'goto',
+    'if',
+    'inline',
+    'int',
+    'long',
+    'register',
+    'return',
+    'short',
+    'signed',
+    'sizeof',
+    'static',
+    'struct',
+    'switch',
+    'typedef',
+    'union',
+    'unsigned',
+    'void',
+    'volatile',
+    'while',
+    'class',
+    'namespace',
+    'template',
+    'typename',
+    'public',
+    'private',
+    'protected',
+    'virtual',
+    'new',
+    'delete',
+    'this',
+    'using',
+    'bool',
+    'try',
+    'catch',
+    'throw',
+    'constexpr',
+    'nullptr',
+    'override',
+    'final',
+    'explicit',
   },
   literals: {'true', 'false', 'NULL', 'nullptr'},
 );
@@ -176,9 +433,31 @@ const _go = _Lang(
   blockComment: _cBlock,
   quotes: '\'"`',
   keywords: {
-    'break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else', 'fallthrough', 'for', 'func',
-    'go', 'goto', 'if', 'import', 'interface', 'map', 'package', 'range', 'return', 'select', 'struct',
-    'switch', 'type', 'var',
+    'break',
+    'case',
+    'chan',
+    'const',
+    'continue',
+    'default',
+    'defer',
+    'else',
+    'fallthrough',
+    'for',
+    'func',
+    'go',
+    'goto',
+    'if',
+    'import',
+    'interface',
+    'map',
+    'package',
+    'range',
+    'return',
+    'select',
+    'struct',
+    'switch',
+    'type',
+    'var',
   },
   literals: {'true', 'false', 'nil', 'iota'},
 );
@@ -187,9 +466,42 @@ const _rust = _Lang(
   lineComments: _cLikeComments,
   blockComment: _cBlock,
   keywords: {
-    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn', 'else', 'enum', 'extern', 'fn', 'for',
-    'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self',
-    'static', 'struct', 'super', 'trait', 'type', 'unsafe', 'use', 'where', 'while',
+    'as',
+    'async',
+    'await',
+    'break',
+    'const',
+    'continue',
+    'crate',
+    'dyn',
+    'else',
+    'enum',
+    'extern',
+    'fn',
+    'for',
+    'if',
+    'impl',
+    'in',
+    'let',
+    'loop',
+    'match',
+    'mod',
+    'move',
+    'mut',
+    'pub',
+    'ref',
+    'return',
+    'self',
+    'Self',
+    'static',
+    'struct',
+    'super',
+    'trait',
+    'type',
+    'unsafe',
+    'use',
+    'where',
+    'while',
   },
 );
 
@@ -197,9 +509,41 @@ const _python = _Lang(
   lineComments: ['#'],
   tripleQuotes: true,
   keywords: {
-    'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else',
-    'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not',
-    'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield', 'self', 'match', 'case',
+    'and',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'break',
+    'class',
+    'continue',
+    'def',
+    'del',
+    'elif',
+    'else',
+    'except',
+    'finally',
+    'for',
+    'from',
+    'global',
+    'if',
+    'import',
+    'in',
+    'is',
+    'lambda',
+    'nonlocal',
+    'not',
+    'or',
+    'pass',
+    'raise',
+    'return',
+    'try',
+    'while',
+    'with',
+    'yield',
+    'self',
+    'match',
+    'case',
   },
   literals: {'True', 'False', 'None'},
 );
@@ -207,8 +551,32 @@ const _python = _Lang(
 const _shell = _Lang(
   lineComments: ['#'],
   keywords: {
-    'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'in', 'function',
-    'select', 'return', 'exit', 'export', 'local', 'readonly', 'unset', 'source', 'alias', 'echo', 'cd', 'sudo',
+    'if',
+    'then',
+    'else',
+    'elif',
+    'fi',
+    'for',
+    'while',
+    'until',
+    'do',
+    'done',
+    'case',
+    'esac',
+    'in',
+    'function',
+    'select',
+    'return',
+    'exit',
+    'export',
+    'local',
+    'readonly',
+    'unset',
+    'source',
+    'alias',
+    'echo',
+    'cd',
+    'sudo',
   },
   capitalisedIsType: false,
 );
@@ -220,49 +588,246 @@ const _sql = _Lang(
   caseInsensitive: true,
   capitalisedIsType: false,
   keywords: {
-    'select', 'from', 'where', 'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table', 'alter',
-    'drop', 'index', 'view', 'join', 'inner', 'left', 'right', 'outer', 'full', 'cross', 'on', 'as', 'and', 'or',
-    'not', 'in', 'is', 'like', 'between', 'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
-    'distinct', 'case', 'when', 'then', 'else', 'end', 'primary', 'key', 'foreign', 'references', 'default',
-    'constraint', 'unique', 'with', 'exists', 'asc', 'desc', 'begin', 'commit', 'rollback', 'int', 'integer',
-    'text', 'varchar', 'boolean', 'date', 'timestamp',
+    'select',
+    'from',
+    'where',
+    'insert',
+    'into',
+    'values',
+    'update',
+    'set',
+    'delete',
+    'create',
+    'table',
+    'alter',
+    'drop',
+    'index',
+    'view',
+    'join',
+    'inner',
+    'left',
+    'right',
+    'outer',
+    'full',
+    'cross',
+    'on',
+    'as',
+    'and',
+    'or',
+    'not',
+    'in',
+    'is',
+    'like',
+    'between',
+    'group',
+    'by',
+    'order',
+    'having',
+    'limit',
+    'offset',
+    'union',
+    'all',
+    'distinct',
+    'case',
+    'when',
+    'then',
+    'else',
+    'end',
+    'primary',
+    'key',
+    'foreign',
+    'references',
+    'default',
+    'constraint',
+    'unique',
+    'with',
+    'exists',
+    'asc',
+    'desc',
+    'begin',
+    'commit',
+    'rollback',
+    'int',
+    'integer',
+    'text',
+    'varchar',
+    'boolean',
+    'date',
+    'timestamp',
   },
 );
 
 const _json = _Lang(quotes: '"', capitalisedIsType: false);
 
-const _yaml = _Lang(lineComments: ['#'], capitalisedIsType: false, literals: {'true', 'false', 'null', 'yes', 'no'});
+const _yaml = _Lang(
+  lineComments: ['#'],
+  capitalisedIsType: false,
+  literals: {'true', 'false', 'null', 'yes', 'no'},
+);
 
-const _css = _Lang(blockComment: _cBlock, capitalisedIsType: false, literals: {});
+const _css = _Lang(
+  blockComment: _cBlock,
+  capitalisedIsType: false,
+  literals: {},
+);
 
 const _markup = _Lang(markup: true, quotes: '\'"', capitalisedIsType: false);
 
 const Map<String, _Lang> _languages = {
   'dart': _dart,
-  'javascript': _js, 'js': _js, 'jsx': _js, 'mjs': _js, 'typescript': _js, 'ts': _js, 'tsx': _js,
-  'java': _java, 'kotlin': _java, 'kt': _java, 'csharp': _java, 'cs': _java, 'c#': _java, 'scala': _java,
+  'javascript': _js,
+  'js': _js,
+  'jsx': _js,
+  'mjs': _js,
+  'typescript': _js,
+  'ts': _js,
+  'tsx': _js,
+  'java': _java,
+  'kotlin': _java,
+  'kt': _java,
+  'csharp': _java,
+  'cs': _java,
+  'c#': _java,
+  'scala': _java,
   'swift': _swift,
-  'c': _c, 'cpp': _c, 'c++': _c, 'cc': _c, 'h': _c, 'hpp': _c, 'objc': _c,
-  'go': _go, 'golang': _go,
-  'rust': _rust, 'rs': _rust,
-  'python': _python, 'py': _python,
-  'shell': _shell, 'sh': _shell, 'bash': _shell, 'zsh': _shell, 'terminal': _shell, 'console': _shell,
+  'c': _c,
+  'cpp': _c,
+  'c++': _c,
+  'cc': _c,
+  'h': _c,
+  'hpp': _c,
+  'objc': _c,
+  'go': _go,
+  'golang': _go,
+  'rust': _rust,
+  'rs': _rust,
+  'python': _python,
+  'py': _python,
+  'shell': _shell,
+  'sh': _shell,
+  'bash': _shell,
+  'zsh': _shell,
+  'terminal': _shell,
+  'console': _shell,
   'sql': _sql,
-  'json': _json, 'jsonc': _json,
-  'yaml': _yaml, 'yml': _yaml, 'toml': _yaml,
-  'css': _css, 'scss': _css,
-  'html': _markup, 'xml': _markup, 'svg': _markup, 'xhtml': _markup,
+  'json': _json,
+  'jsonc': _json,
+  'yaml': _yaml,
+  'yml': _yaml,
+  'toml': _yaml,
+  'css': _css,
+  'scss': _css,
+  'html': _markup,
+  'xml': _markup,
+  'svg': _markup,
+  'xhtml': _markup,
 };
 
 /// Whether [language] (a normalised label such as `dart`) has a tokenizer.
 /// The longest code block that is coloured; a longer one is shown plain (see the renderer).
 const int maxHighlightedCodeLength = 20000;
 
-bool canHighlight(String? language) => language != null && _languages.containsKey(language);
+bool canHighlight(String? language) =>
+    language != null && _languages.containsKey(language);
 
-bool _isIdentStart(int c) => (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || c == 0x5F || c == 0x24;
+bool _isIdentStart(int c) =>
+    (c >= 0x41 && c <= 0x5A) ||
+    (c >= 0x61 && c <= 0x7A) ||
+    c == 0x5F ||
+    c == 0x24;
 bool _isDigit(int c) => c >= 0x30 && c <= 0x39;
 bool _isIdentPart(int c) => _isIdentStart(c) || _isDigit(c);
+
+/// Markup (HTML / XML / SVG): tags, attribute names and values, comments,
+/// `<!DOCTYPE>` and entities. Text between tags stays plain, so an apostrophe in
+/// prose never opens a "string".
+List<CodeToken> _tokenizeMarkup(String code) {
+  final out = <CodeToken>[];
+  final n = code.length;
+  var i = 0;
+  bool nameChar(int c) =>
+      _isIdentPart(c) || c == 0x2D || c == 0x3A || c == 0x2E;
+  while (i < n) {
+    final c = code.codeUnitAt(i);
+    if (c == 0x26) {
+      // &entity;
+      var j = i + 1;
+      while (j < n &&
+          j - i < 12 &&
+          (_isIdentPart(code.codeUnitAt(j)) || code.codeUnitAt(j) == 0x23)) {
+        j++;
+      }
+      if (j < n && code.codeUnitAt(j) == 0x3B && j > i + 1) {
+        out.add(CodeToken(i, j + 1, CodeTokenKind.literal));
+        i = j + 1;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (c != 0x3C) {
+      i++;
+      continue;
+    }
+    if (code.startsWith('<!--', i)) {
+      final end = code.indexOf('-->', i + 4);
+      final stop = end == -1 ? n : end + 3;
+      out.add(CodeToken(i, stop, CodeTokenKind.comment));
+      i = stop;
+      continue;
+    }
+    if (i + 1 < n &&
+        (code.codeUnitAt(i + 1) == 0x21 || code.codeUnitAt(i + 1) == 0x3F)) {
+      // <!DOCTYPE html>, <?xml ... ?>, <![CDATA[ ... ]]>
+      final end = code.indexOf('>', i + 2);
+      final stop = end == -1 ? n : end + 1;
+      out.add(CodeToken(i, stop, CodeTokenKind.type));
+      i = stop;
+      continue;
+    }
+    var j = i + 1;
+    if (j < n && code.codeUnitAt(j) == 0x2F) j++;
+    final nameStart = j;
+    while (j < n && nameChar(code.codeUnitAt(j))) {
+      j++;
+    }
+    if (j == nameStart) {
+      i++; // a lone "<" in text
+      continue;
+    }
+    out.add(CodeToken(nameStart, j, CodeTokenKind.keyword));
+    // Attributes, up to the closing ">".
+    while (j < n) {
+      final d = code.codeUnitAt(j);
+      if (d == 0x3E) {
+        j++;
+        break;
+      }
+      if (d == 0x22 || d == 0x27) {
+        var k = j + 1;
+        while (k < n && code.codeUnitAt(k) != d) {
+          k++;
+        }
+        final stop = k < n ? k + 1 : n;
+        out.add(CodeToken(j, stop, CodeTokenKind.string));
+        j = stop;
+        continue;
+      }
+      if (_isIdentStart(d) || d == 0x40 || d == 0x3A) {
+        var k = j + 1;
+        while (k < n && nameChar(code.codeUnitAt(k))) {
+          k++;
+        }
+        out.add(CodeToken(j, k, CodeTokenKind.type));
+        j = k;
+        continue;
+      }
+      j++;
+    }
+    i = j;
+  }
+  return out;
+}
 
 /// Splits [code] into highlighted runs for [language]; runs not returned are
 /// plain. A single pass, linear in the text length, with no regular
@@ -270,6 +835,7 @@ bool _isIdentPart(int c) => _isIdentStart(c) || _isDigit(c);
 List<CodeToken> tokenizeCode(String code, String? language) {
   final lang = language == null ? null : _languages[language];
   if (lang == null || code.isEmpty) return const [];
+  if (lang.markup) return _tokenizeMarkup(code);
   final out = <CodeToken>[];
   final n = code.length;
   var i = 0;
@@ -278,28 +844,6 @@ List<CodeToken> tokenizeCode(String code, String? language) {
 
   while (i < n) {
     final c = code.codeUnitAt(i);
-
-    if (lang.markup) {
-      if (startsWith('<!--', i)) {
-        final end = code.indexOf('-->', i + 4);
-        final stop = end == -1 ? n : end + 3;
-        out.add(CodeToken(i, stop, CodeTokenKind.comment));
-        i = stop;
-        continue;
-      }
-      if (c == 0x3C) {
-        // <tag or </tag
-        var j = i + 1;
-        if (j < n && code.codeUnitAt(j) == 0x2F) j++;
-        final nameStart = j;
-        while (j < n && (_isIdentPart(code.codeUnitAt(j)) || code.codeUnitAt(j) == 0x2D || code.codeUnitAt(j) == 0x3A)) {
-          j++;
-        }
-        if (j > nameStart) out.add(CodeToken(nameStart, j, CodeTokenKind.keyword));
-        i = j > i + 1 ? j : i + 1;
-        continue;
-      }
-    }
 
     // Comments
     var matchedComment = false;
@@ -361,7 +905,13 @@ List<CodeToken> tokenizeCode(String code, String? language) {
       var j = i + 1;
       while (j < n) {
         final d = code.codeUnitAt(j);
-        if (_isDigit(d) || d == 0x2E || d == 0x5F || (d >= 0x61 && d <= 0x66) || (d >= 0x41 && d <= 0x46) || d == 0x78 || d == 0x58) {
+        if (_isDigit(d) ||
+            d == 0x2E ||
+            d == 0x5F ||
+            (d >= 0x61 && d <= 0x66) ||
+            (d >= 0x41 && d <= 0x46) ||
+            d == 0x78 ||
+            d == 0x58) {
           j++;
         } else {
           break;
@@ -384,7 +934,11 @@ List<CodeToken> tokenizeCode(String code, String? language) {
         out.add(CodeToken(i, j, CodeTokenKind.keyword));
       } else if (lang.literals.contains(key)) {
         out.add(CodeToken(i, j, CodeTokenKind.literal));
-      } else if (lang.capitalisedIsType && c >= 0x41 && c <= 0x5A && j - i > 1 && word != word.toUpperCase()) {
+      } else if (lang.capitalisedIsType &&
+          c >= 0x41 &&
+          c <= 0x5A &&
+          j - i > 1 &&
+          word != word.toUpperCase()) {
         out.add(CodeToken(i, j, CodeTokenKind.type));
       }
       i = j;
@@ -416,31 +970,146 @@ String? guessLanguage(String code) {
   }
 
   final scores = <String, int>{
-    'dart': s("import 'package:", 3) + s('void main(', 2) + s('Widget build(', 3) + s('@override', 2) + s('setState(', 2) + s(' extends State', 3) + s('Future<', 2) + s('final ', 1) + s('late ', 1) + s('print(', 1),
-    'javascript': s('console.log', 3) + s('const ', 1) + s('=> ', 1) + s('function ', 2) + s('require(', 2) + s('document.', 2) + s('export default', 3) + s(' from \'', 1) + s('let ', 1) + s('===', 2),
-    'python': s('def ', 2) + s('elif ', 3) + s('import ', 1) + s('print(', 1) + s('self.', 2) + s('None', 1) + s('__name__', 3) + s('):\n', 2) + s('lambda ', 2),
-    'java': s('public static void main', 4) + s('System.out', 3) + s('public class', 3) + s('private ', 1) + s('@Override', 2) + s('import java.', 3),
-    'kotlin': s('fun ', 2) + s('val ', 1) + s('println(', 1) + s('data class', 3) + s('import kotlin', 3),
-    'cpp': s('#include', 4) + s('std::', 3) + s('int main(', 3) + s('cout', 2) + s('printf(', 2),
+    'dart':
+        s("import 'package:", 3) +
+        s('void main(', 2) +
+        s('Widget build(', 3) +
+        s('@override', 2) +
+        s('setState(', 2) +
+        s(' extends State', 3) +
+        s('Future<', 2) +
+        s('final ', 1) +
+        s('late ', 1) +
+        s('print(', 1),
+    'javascript':
+        s('console.log', 3) +
+        s('const ', 1) +
+        s('=> ', 1) +
+        s('function ', 2) +
+        s('require(', 2) +
+        s('document.', 2) +
+        s('export default', 3) +
+        s(' from \'', 1) +
+        s('let ', 1) +
+        s('===', 2),
+    'python':
+        s('def ', 2) +
+        s('elif ', 3) +
+        s('import ', 1) +
+        s('print(', 1) +
+        s('self.', 2) +
+        s('None', 1) +
+        s('__name__', 3) +
+        s('):\n', 2) +
+        s('lambda ', 2),
+    'java':
+        s('public static void main', 4) +
+        s('System.out', 3) +
+        s('public class', 3) +
+        s('private ', 1) +
+        s('@Override', 2) +
+        s('import java.', 3),
+    'kotlin':
+        s('fun ', 2) +
+        s('val ', 1) +
+        s('println(', 1) +
+        s('data class', 3) +
+        s('import kotlin', 3),
+    'cpp':
+        s('#include', 4) +
+        s('std::', 3) +
+        s('int main(', 3) +
+        s('cout', 2) +
+        s('printf(', 2),
     'go': s('package main', 4) + s('func ', 2) + s(':= ', 2) + s('fmt.', 3),
-    'rust': s('fn ', 2) + s('let mut', 3) + s('println!', 3) + s('use std', 3) + s('impl ', 2) + s('-> ', 1),
-    'swift': s('import SwiftUI', 4) + s('import UIKit', 4) + s('func ', 1) + s('guard let', 3) + s('var body: some View', 4),
-    'sql': s('SELECT ', 2) + s(' FROM ', 2) + s('INSERT INTO', 3) + s('CREATE TABLE', 3) + s('WHERE ', 1) + s('UPDATE ', 1) + s('JOIN ', 1),
-    'shell': cmd(['npm', 'npx', 'pnpm', 'yarn', 'git', 'cd', 'sudo', 'apt', 'apt-get', 'brew', 'pip', 'pip3', 'flutter', 'dart', 'docker', 'curl', 'wget', 'echo', 'export', 'mkdir', 'ls', 'chmod', 'node', 'cargo', 'go']) + s('#!/bin/', 4) + (t.startsWith('\$ ') ? 3 : 0),
-    'css': s('{\n', 1) + s('margin', 1) + s('padding', 1) + s('display:', 2) + s('color:', 2) + s('font-size', 2) + s('background', 1),
+    'rust':
+        s('fn ', 2) +
+        s('let mut', 3) +
+        s('println!', 3) +
+        s('use std', 3) +
+        s('impl ', 2) +
+        s('-> ', 1),
+    'swift':
+        s('import SwiftUI', 4) +
+        s('import UIKit', 4) +
+        s('func ', 1) +
+        s('guard let', 3) +
+        s('var body: some View', 4),
+    'sql':
+        s('SELECT ', 2) +
+        s(' FROM ', 2) +
+        s('INSERT INTO', 3) +
+        s('CREATE TABLE', 3) +
+        s('WHERE ', 1) +
+        s('UPDATE ', 1) +
+        s('JOIN ', 1),
+    'shell':
+        cmd([
+          'npm',
+          'npx',
+          'pnpm',
+          'yarn',
+          'git',
+          'cd',
+          'sudo',
+          'apt',
+          'apt-get',
+          'brew',
+          'pip',
+          'pip3',
+          'flutter',
+          'dart',
+          'docker',
+          'curl',
+          'wget',
+          'echo',
+          'export',
+          'mkdir',
+          'ls',
+          'chmod',
+          'node',
+          'cargo',
+          'go',
+        ]) +
+        s('#!/bin/', 4) +
+        (t.startsWith('\$ ') ? 3 : 0),
+    'css':
+        s('{\n', 1) +
+        s('margin', 1) +
+        s('padding', 1) +
+        s('display:', 2) +
+        s('color:', 2) +
+        s('font-size', 2) +
+        s('background', 1),
   };
   // Structured data: judged on shape, not keywords.
   final head = t.trimRight();
   // JSON, also as a fragment or one still being typed: an object/array opening
   // with quoted keys, or lines that are `"key": value`.
-  final quotedKeyLines = RegExp(r'^\s*"[^"\n]+"\s*:', multiLine: true).allMatches(t).length;
-  if (((head.startsWith('{') || head.startsWith('[')) && (t.contains('":') || t.contains('" :'))) || quotedKeyLines >= 2) {
+  final quotedKeyLines = RegExp(
+    r'^\s*"[^"\n]+"\s*:',
+    multiLine: true,
+  ).allMatches(t).length;
+  if (((head.startsWith('{') || head.startsWith('[')) &&
+          (t.contains('":') || t.contains('" :'))) ||
+      quotedKeyLines >= 2) {
     scores['json'] = 5;
   }
-  if (head.startsWith('<') && (head.contains('</') || head.contains('/>') || head.startsWith('<!DOCTYPE') || head.startsWith('<?xml'))) {
-    scores['html'] = 4;
+  // Markup: opens with a tag, a comment, a doctype or an xml header.
+  if (RegExp(
+    r'^<(!--|!doctype|\?xml|/?[a-z][\w:-]*(\s[^<>]*)?/?>)',
+    caseSensitive: false,
+  ).hasMatch(head)) {
+    scores['html'] = 6;
   }
-  if (t.startsWith('---\n') || RegExp(r'^[A-Za-z_][\w-]*: .+(\n|$)', multiLine: true).allMatches(t).length >= 3 && !t.contains('{') && !t.contains(';')) {
+  if (t.startsWith('---\n') ||
+      RegExp(
+                r'^[A-Za-z_][\w-]*: .+(\n|$)',
+                multiLine: true,
+              ).allMatches(t).length >=
+              3 &&
+          !t.contains('{') &&
+          !t.contains(';')) {
     scores['yaml'] = 3;
   }
 

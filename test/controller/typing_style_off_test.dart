@@ -142,6 +142,33 @@ void linkAndCodeTests() {
       expect(c.document.attributeStore.findAt(6, type: AttributeType.link), isEmpty);
     });
 
+    test('a space and a word typed after a link are not part of it, also when typed again after deleting', () {
+      final c = RichEditorController(text: 'site');
+      addTearDown(c.dispose);
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+      c.setLink('https://example.com');
+      c.selection = const TextSelection.collapsed(offset: 4);
+      typed(c, ' more');
+      bool linked(int i) => c.document.attributeStore.findAt(i, type: AttributeType.link).isNotEmpty;
+      expect([for (var i = 0; i < 9; i++) linked(i)], [true, true, true, true, false, false, false, false, false]);
+
+      // Delete the word and the space, then type them again.
+      c.value = const TextEditingValue(text: 'site', selection: TextSelection.collapsed(offset: 4));
+      typed(c, ' more');
+      expect(c.document.text, 'site more');
+      expect([for (var i = 0; i < 9; i++) linked(i)], [true, true, true, true, false, false, false, false, false]);
+    });
+
+    test('typing inside a link keeps it linked', () {
+      final c = RichEditorController(text: 'site');
+      addTearDown(c.dispose);
+      c.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+      c.setLink('https://example.com');
+      c.value = const TextEditingValue(text: 'siXte', selection: TextSelection.collapsed(offset: 3));
+      expect(c.document.attributeStore.findAt(2, type: AttributeType.link), isNotEmpty);
+      expect(c.document.attributeStore.findAt(4, type: AttributeType.link), isNotEmpty);
+    });
+
     test('the same through the keyboard path', () {
       final c = RichEditorController(text: 'site');
       addTearDown(c.dispose);
