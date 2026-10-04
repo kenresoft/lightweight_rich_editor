@@ -746,7 +746,10 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
       hasSelectionHighlight ? selectionHighlightRange : null,
       hasAllMatches ? allMatchesRanges : null,
     );
-    if (events.isEmpty && !hasListPrefix && !hasHorizontalRule) {
+    // A header on the first paragraph raises no boundary event of its own (only a paragraph that
+    // differs from the one before does), so a note that is one heading line, or whose lines all
+    // share one heading, has no events yet must still be drawn as a heading.
+    if (events.isEmpty && !hasListPrefix && !hasHorizontalRule && !document.paragraphs.hasAnyHeader) {
       return TextSpan(text: text, style: style);
     }
 
