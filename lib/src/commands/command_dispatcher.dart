@@ -11,6 +11,7 @@ import '../core/editing_engine.dart';
 import '../core/editor_selection.dart';
 import '../history/history_manager.dart';
 import '../models/attribute_type.dart';
+import '../models/code_block.dart';
 import '../models/paragraph_alignment.dart';
 import '../models/paragraph_text_direction.dart';
 import '../models/text_attribute.dart';
@@ -200,7 +201,7 @@ class CommandDispatcher {
   EditorSelection _toggleList(EditorSelection selection, ParagraphListType type) {
     final edit = engine.listToggleEdit(selection, type);
     if (edit == null) return selection;
-    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+    return _dispatchListEdit(selection, edit);
   }
 
   /// Toggles task-list checkbox state on the paragraph(s) `selection`
@@ -208,7 +209,34 @@ class CommandDispatcher {
   EditorSelection toggleTaskItem(EditorSelection selection) {
     final edit = engine.toggleCheckedEdit(selection);
     if (edit == null) return selection;
-    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+    return _dispatchListEdit(selection, edit);
+  }
+
+  /// Applies a list edit. A line that becomes a list item stops being a heading, in the same
+  /// undo step: a heading and a list marker on one line is never what was meant, and the heading
+  /// size would otherwise stay on the first item of the list. (Lines that already are list items,
+  /// and code blocks, are left as they are.)
+  EditorSelection _dispatchListEdit(
+    EditorSelection selection,
+    ({int start, int end, String text, List<TextAttribute> relativeAttributes}) edit,
+  ) {
+    final bounds = engine.paragraphBoundsFor(selection);
+    final text = engine.document.text;
+    final headings = [
+      for (final r in engine.document.paragraphs.recordsOverlapping(bounds.start, bounds.end))
+        if (r.headerLevel != null && !isCodeBlockLevel(r.headerLevel) && listPrefixLength(text, r.start) == 0) r,
+    ];
+    final replace = ReplaceRangeCommand(
+      start: edit.start,
+      end: edit.end,
+      text: edit.text,
+      relativeAttributes: edit.relativeAttributes,
+    );
+    if (headings.isEmpty) return dispatch(replace);
+    return dispatch(CompositeCommand([
+      for (final r in headings) SetHeaderLevelCommand(EditorSelection.collapsed(r.start), null),
+      replace,
+    ]));
   }
 
   /// Indents the list item containing `selection.start` by inserting 2
