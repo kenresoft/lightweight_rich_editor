@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../clipboard/clipboard_manager.dart';
 import '../clipboard/in_memory_rich_clipboard_delegate.dart';
+import '../clipboard/native/rich_clipboard_platform.dart';
 import '../clipboard/rich_clipboard_delegate.dart';
 import '../commands/command_dispatcher.dart';
 import '../commands/composite_command.dart';
@@ -841,7 +842,34 @@ class RichEditorController extends TextEditingController {
   /// Copies the current selection to the system clipboard (and to
   /// [clipboard]'s delegate, if one is set, preserving formatting). See
   /// [ClipboardManager.copy].
-  Future<void> copy() => clipboard.copy(_currentSelection);
+  Future<void> copy() async {
+    final run = selection.isValid && !selection.isCollapsed ? selectedImageRun : null;
+    if (run != null) return _copyPicture(run);
+    _pictureClip = null;
+    await clipboard.copy(_currentSelection);
+  }
+
+  // The picture last copied or cut, as a whole. A picture is N blank rows, which is only
+  // N-1 line breaks of text: pasted as text it comes back a row short (and, on a line that
+  // is not empty, on the wrong rows), so a paste of this exact clipboard places a block.
+  ({String text, String id, int rows})? _pictureClip;
+
+  Future<void> _copyPicture(ImageRun run) async {
+    await clipboard.copy(EditorSelection(baseOffset: run.start, extentOffset: run.end));
+    _pictureClip = (text: document.text.substring(run.start, run.end), id: run.id, rows: run.rows);
+  }
+
+  Future<bool> _pastePictureClip() async {
+    final clip = _pictureClip;
+    if (clip == null) return false;
+    final data = await RichClipboardPlatform.getData();
+    final text = data.text?.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    if (text != clip.text) {
+      _pictureClip = null;
+      return false;
+    }
+    return insertImageBlock(clip.id, rows: clip.rows) != null;
+  }
 
   /// Copies `[start, end)` with its formatting (a code block keeps being a code
   /// block, with its language, when pasted back) without moving the selection.
@@ -854,10 +882,11 @@ class RichEditorController extends TextEditingController {
     // shorter picture behind. It goes whole, and a paste brings it back whole.
     final run = selection.isValid && !selection.isCollapsed ? selectedImageRun : null;
     if (run != null) {
-      await clipboard.copy(EditorSelection(baseOffset: run.start, extentOffset: run.end));
+      await _copyPicture(run);
       deleteImage(run);
       return;
     }
+    _pictureClip = null;
     _syncSelection(await clipboard.cut(_currentSelection));
   }
 
@@ -866,6 +895,7 @@ class RichEditorController extends TextEditingController {
   /// clipboard. See [ClipboardManager.paste].
   Future<void> paste() async {
     if (imageStore != null && await pasteImageFromClipboard()) return;
+    if (await _pastePictureClip()) return;
     _leaveImageRun();
     final result = await clipboard.paste(_currentSelection);
     if (result != null) _repairAndSync(result);

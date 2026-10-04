@@ -211,6 +211,7 @@ extension RichEditorImages on RichEditorController {
     // A line in progress keeps the part before the caret above the picture; a
     // caret on an empty line uses that line as the picture's first row.
     final needBefore = textBefore.isNotEmpty || within != null;
+    final afterIsEmpty = end == (document.paragraphs.paragraphAt(end)?.end ?? end);
     final inserted = '${needBefore ? '\n' : ''}${'\n' * (n - 1)}\n';
     final firstRow = start + (needBefore ? 1 : 0);
     final level = imageLevelFor(id, newImageInstance());
@@ -220,6 +221,11 @@ extension RichEditorImages on RichEditorController {
       // One command per row: an empty row is a zero-width range, which a
       // multi-row selection would skip at its end.
       for (var i = 0; i < n; i++) SetHeaderLevelCommand(EditorSelection.collapsed(firstRow + i), level),
+      // The line after the picture is where the caret goes. When it holds nothing from the line
+      // that was split (the picture went in at the end of a code line or a heading), it is a
+      // fresh ordinary line, not one more row of the block or heading above.
+      if (afterIsEmpty && para.headerLevel != null && !isImageLevel(para.headerLevel))
+        SetHeaderLevelCommand(EditorSelection.collapsed(firstRow + n), null),
     ]));
     selection = TextSelection.collapsed(offset: firstRow + n);
     return level;
