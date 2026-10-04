@@ -187,9 +187,9 @@ class _ScrollToCurrentMatchState extends State<_ScrollToCurrentMatch> {
     if (match == _lastMatch) return;
     _lastMatch = match;
     if (match == null) return;
-    if (!widget.scrollController.hasClients) return;
+    if (widget.scrollController.safePosition == null) return;
 
-    final position = widget.scrollController.position;
+    final position = widget.scrollController.safePosition!;
     final y =
         widget.topPadding +
         widget.controller.renderer.offsetYFor(
@@ -885,8 +885,8 @@ class RichTextEditor extends StatelessWidget {
                                     final imageCache = controller.imageCache;
                                     if (imageCache != null && imageBlocks.isNotEmpty) {
                                       // Ask only for pictures on, or just off, the screen.
-                                      final scrolled = scrollController.hasClients ? scrollController.offset : 0.0;
-                                      final viewport = scrollController.hasClients ? scrollController.position.viewportDimension : 900.0;
+                                      final scrolled = scrollController.safeOffset;
+                                      final viewport = scrollController.safeViewport;
                                       final wanted = ((totalWidth - leftPad - editorStyle.paddingRight) * devicePixelRatio).round();
                                       for (final b in imageBlocks) {
                                         final top = editorStyle.paddingTop + b.top - scrolled;
@@ -925,9 +925,7 @@ class RichTextEditor extends StatelessWidget {
                                         devicePixelRatio: devicePixelRatio,
                                         topPadding: editorStyle.paddingTop,
                                         scrollOffset:
-                                            scrollController.hasClients
-                                            ? scrollController.offset
-                                            : 0.0,
+                                            scrollController.safeOffset,
                                         marginOpacity: marginOpacity,
                                         lineStyle: lineStyle,
                                         marginLineX: editorStyle.marginLineX,
@@ -1251,13 +1249,13 @@ class _ImageScrollGuardState extends State<_ImageScrollGuard> with WidgetsBindin
     if (!mounted) return;
     final run = widget.controller.selectedImageRun;
     final scroll = widget.scrollController;
-    if (run == null || !scroll.hasClients) return;
+    if (run == null || scroll.safePosition == null) return;
     ImageRegion? region;
     for (final r in widget.regions()) {
       if (r.level == run.level) region = r;
     }
     if (region == null) return;
-    final position = scroll.position;
+    final position = scroll.safePosition!;
     final viewport = position.viewportDimension;
     const margin = 8.0;
     const barRoom = 64.0; // the bar under the picture: its height and the gap
@@ -1373,7 +1371,7 @@ class _ImageActions extends StatelessWidget {
           }
         }
         if (region == null) return const SizedBox.shrink();
-        final scroll = scrollController.hasClients ? scrollController.offset : 0.0;
+        final scroll = scrollController.safeOffset;
         final top = style.paddingTop + region.top - scroll + RuledLinesPainter.imageInset;
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -1714,7 +1712,7 @@ class _CodeBlockActions extends StatelessWidget {
       builder: (context, _) {
         final blocks = regions();
         if (blocks.isEmpty) return const SizedBox.shrink();
-        final scroll = scrollController.hasClients ? scrollController.offset : 0.0;
+        final scroll = scrollController.safeOffset;
         // The height of this editor's own area. (Not the scroll position's
         // viewport: the field grows with its content, and that dimension lags a
         // frame behind a paste or an import, which would hide a new block's chip.)
@@ -2032,4 +2030,15 @@ class _LinkTapListenerState extends State<_LinkTapListener> {
       child: widget.child,
     );
   }
+}
+
+/// Scroll reads that never throw. While the field is being rebuilt (reading and editing swap) the
+/// controller can briefly be attached to two scroll views, and `offset` / `position` assert then;
+/// the newest one is the live one.
+extension _SafeScroll on ScrollController {
+  ScrollPosition? get safePosition => positions.isEmpty ? null : positions.last;
+
+  double get safeOffset => safePosition?.pixels ?? 0.0;
+
+  double get safeViewport => safePosition?.viewportDimension ?? 900.0;
 }
