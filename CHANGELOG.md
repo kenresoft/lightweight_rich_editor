@@ -1,3 +1,9 @@
+## Unreleased
+
+* **Docs**: `CUSTOMIZATION_GUIDE.md`, a map of every customisation point and the tricky scenarios (changing the font
+  without breaking the ruled lines, dark mode, text scale, icons and built-in chrome, images, testing). No API change;
+  the package still ships no fonts, icons or theme of its own.
+
 ## 0.2.0
 
 * **Whole-document `textAlign`/`textDirection`**: `RichTextEditor` and

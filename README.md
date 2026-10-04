@@ -123,6 +123,8 @@ setState(() {
 
 For a fuller example — dark mode, save/load — check the `example/` folder in the repository.
 
+**Making it look like your app:** the package ships no fonts, icons or theme of its own, so everything is a value you pass in. [CUSTOMIZATION_GUIDE.md](CUSTOMIZATION_GUIDE.md) maps every knob and walks through the tricky cases (changing the font without breaking the ruled lines, dark mode, text scale, icons, images, testing).
+
 ### Contributions
 
 Contributions are welcome! Please feel free to open issues or pull requests on GitHub.
