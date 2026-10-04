@@ -161,7 +161,9 @@ class LightweightRichEditorState extends State<LightweightRichEditor> {
   void _cycleLineStyle() => setState(() {
     _lineStyle = switch (_lineStyle) {
       RuledLineStyle.solid => RuledLineStyle.dashed,
-      RuledLineStyle.dashed => RuledLineStyle.none,
+      RuledLineStyle.dashed => RuledLineStyle.grid,
+      RuledLineStyle.grid => RuledLineStyle.dots,
+      RuledLineStyle.dots => RuledLineStyle.none,
       RuledLineStyle.none => RuledLineStyle.solid,
     };
   });

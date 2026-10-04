@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' show PointMode;
 
 import 'package:flutter/material.dart';
 
@@ -17,6 +18,12 @@ enum RuledLineStyle {
 
   /// Dashed lines are drawn.
   dashed,
+
+  /// Graph paper: the rules, crossed by vertical lines one row apart.
+  grid,
+
+  /// Dot grid: a dot where graph-paper lines would cross.
+  dots,
 }
 
 /// A custom painter that draws notebook-style ruled lines and a margin line.
@@ -175,6 +182,7 @@ class RuledLinesPainter extends CustomPainter {
     // Paper rules run under the cards (the cards are translucent), so a block
     // sits on the page like a slip laid over it instead of cutting the ruling.
     if (lineStyle != RuledLineStyle.none) {
+      if (lineStyle == RuledLineStyle.grid) _drawGridColumns(canvas, size);
       _drawRuledLines(canvas, size);
     }
     canvas.save();
@@ -387,8 +395,36 @@ class RuledLinesPainter extends CustomPainter {
     final paint = _insideCodeBlock(y - topPadding + scrollOffset) ? _softLinePaint : _linePaint;
     if (lineStyle == RuledLineStyle.dashed) {
       _drawDashedLine(canvas, y, width, paint);
+    } else if (lineStyle == RuledLineStyle.dots) {
+      _drawDotRow(canvas, y, width, paint);
     } else {
       canvas.drawLine(Offset(0.0, y), Offset(width, y), paint);
+    }
+  }
+
+  // A row of dots, one row-height apart (the crossings of a grid).
+  void _drawDotRow(Canvas canvas, double y, double width, Paint base) {
+    final step = fallbackLineHeight;
+    if (step < 4) return;
+    final dot = Paint()
+      ..color = base.color.withValues(alpha: math.min(1.0, base.color.a * 2.2))
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
+    final points = <Offset>[for (var x = step; x < width; x += step) Offset(x, y)];
+    canvas.drawPoints(PointMode.points, points, dot);
+  }
+
+  // The vertical lines of graph paper, one row-height apart, fainter than the rules.
+  void _drawGridColumns(Canvas canvas, Size size) {
+    final step = fallbackLineHeight;
+    if (step < 4) return;
+    final paint = Paint()
+      ..color = lineColor.withValues(alpha: lineColor.a * 0.7)
+      ..strokeWidth = 0.7
+      ..isAntiAlias = false;
+    for (var x = step; x < size.width; x += step) {
+      final snapped = _snap(x);
+      canvas.drawLine(Offset(snapped, topPadding), Offset(snapped, size.height), paint);
     }
   }
 
