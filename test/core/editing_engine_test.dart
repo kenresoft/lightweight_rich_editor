@@ -7,6 +7,7 @@
 // below was hand-traced against the actual method logic before being
 // written here, not assumed.
 
+import 'package:flutter/services.dart' show TextSelection;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 import 'package:lightweight_rich_editor/src/core/editing_engine.dart';
@@ -204,28 +205,30 @@ void main() {
       );
     });
 
-    test('backspacing an empty numbered item mid-list renumbers correctly', () {
-      final engine = _engineFor('1. \n2. Something\n3. Something else');
-      final markerEnd = '1. '.length;
-      final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd));
-      expect(edit, isNotNull);
-      _applyWithCursor(engine, edit!);
-      expect(engine.document.text, '1. Something\n2. Something else');
+    test('backspacing an empty numbered item mid-list takes the marker off and the items after it count from 1', () {
+      final c = RichEditorController(text: '1. \n2. Something\n3. Something else');
+      addTearDown(c.dispose);
+      c.selection = const TextSelection.collapsed(offset: 3);
+      c.deleteBackward();
+      expect(c.document.text, '\n1. Something\n2. Something else');
+      c.undo();
+      expect(c.document.text, '1. \n2. Something\n3. Something else', reason: 'one undo');
     });
 
     test('backspacing an empty item preserves attributes on subsequent items', () {
       const text = '1. \n2. Bold word here';
       final boldStart = text.indexOf('Bold');
       final boldEnd = boldStart + 'Bold'.length;
-      final engine = _engineFor(text, [
-        TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold),
-      ]);
-      final markerEnd = '1. '.length;
-      final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd));
-      expect(edit, isNotNull);
-      expect(edit!.relativeAttributes.any((a) => a.type == AttributeType.bold), isTrue);
-      _applyWithCursor(engine, edit);
-      expect(engine.document.text, '1. Bold word here');
+      final c = RichEditorController(
+        text: text,
+        initialAttributes: [TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold)],
+      );
+      addTearDown(c.dispose);
+      c.selection = const TextSelection.collapsed(offset: 3);
+      c.deleteBackward();
+      expect(c.document.text, '\n1. Bold word here');
+      final start = c.document.text.indexOf('Bold');
+      expect(c.document.attributeStore.coversRange(start, start + 'Bold'.length, AttributeType.bold), isTrue);
     });
 
     test('backspacing a bullet marker with no following list is a plain, non-throwing removal', () {
@@ -260,12 +263,18 @@ void main() {
       expect(edit.text, '');
     });
 
-    test('reuses the same renumbering as backspace when deleting a numbered marker mid-list', () {
-      final engine = _engineFor('1. First\n2. Second\n3. Third');
-      final edit = engine.deleteForwardEdit(EditorSelection.collapsed(0)); // right before "1. "
-      expect(edit, isNotNull);
-      _apply(engine, edit!);
-      expect(engine.document.text, 'First\n1. Second\n2. Third');
+    test('deleting a numbered marker mid-list: the items after it count from 1', () {
+      final c = RichEditorController(text: '1. First\n2. Second\n3. Third');
+      addTearDown(c.dispose);
+      c.commands.deleteForward(const EditorSelection.collapsed(0)); // right before "1. "
+      expect(c.document.text, 'First\n1. Second\n2. Third');
+    });
+
+    test('Delete at the end of a line takes the marker of the item below with it', () {
+      final c = RichEditorController(text: 'abc\n  - item\n  - more');
+      addTearDown(c.dispose);
+      c.commands.deleteForward(const EditorSelection.collapsed(3));
+      expect(c.document.text, 'abcitem\n  - more');
     });
   });
 
@@ -471,10 +480,12 @@ void main() {
       expect(engine.document.text, '- [ ] Buy milk');
     });
 
-    test('is a no-op on a numbered item — numbered lists are not task-list-compatible', () {
-      final engine = _engineFor('1. Buy milk');
+    test('turns a numbered item into a checklist item at the same depth', () {
+      final engine = _engineFor('    1. Buy milk');
       final edit = engine.toggleCheckedEdit(EditorSelection.collapsed(0));
-      expect(edit, isNull);
+      expect(edit, isNotNull);
+      _apply(engine, edit!);
+      expect(engine.document.text, '    - [ ] Buy milk');
     });
 
     test('preserves an inline attribute, shifted to match the new marker length', () {

@@ -255,10 +255,9 @@ class EditingEngine {
   }
 
   /// Computes the edit for a backspace at a collapsed caret. Two cases:
-  /// 1. Right after a paragraph's list prefix: removes the whole prefix
-  ///    in one step, and if that paragraph was part of a numbered run,
-  ///    renumbers everything after it down by one (see
-  ///    [_removeListMarkerEdit]).
+  /// 1. Right after a paragraph's list prefix: a nested item moves out one level, a top-level
+  ///    one has its whole prefix removed in one step (the numbers after it are put right by
+  ///    [renumberEdits], which the caller runs as part of the same undo step).
   /// 2. Otherwise: plain single-character deletion.
   ///
   /// Returns `null` for a non-collapsed selection (use [deleteRange]) or
@@ -274,6 +273,17 @@ class EditingEngine {
     if (record != null) {
       final prefixLen = listPrefixLength(text, record.start);
       if (prefixLen > 0 && selection.start == record.start + prefixLen) {
+        final outer = outdentedPrefix(text.substring(record.start, record.start + prefixLen));
+        if (outer != null) {
+          // Nested: one step out, the way Enter on an empty nested item does.
+          return (
+            start: record.start,
+            end: record.start + prefixLen,
+            text: outer,
+            cursorOffsetFromStart: outer.length,
+            relativeAttributes: const <TextAttribute>[],
+          );
+        }
         return _removeListMarkerEdit(record, prefixLen);
       }
     }
@@ -291,72 +301,17 @@ class EditingEngine {
     return (start: deleteStart, end: selection.start, text: '', cursorOffsetFromStart: 0, relativeAttributes: const []);
   }
 
-  // Removes a paragraph's list prefix (record/prefixLen already confirmed
-  // to match the caret). A bullet, or a numbered item with nothing after
-  // it in the run, is a plain prefix deletion. A numbered item with more
-  // items following renumbers all of them down by one as a single
-  // combined replacement.
+  // Removes a paragraph's list prefix (record/prefixLen already confirmed to match the caret),
+  // leaving the caret at the start of what the line says. The numbers of the items after it are
+  // put right by [renumberEdits], in the same undo step, so this is the same for every kind.
   ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes})
   _removeListMarkerEdit(ParagraphRecord record, int prefixLen) {
-    final text = document.text;
-    final prefix = text.substring(record.start, record.start + prefixLen);
-    final ownContentStart = record.start + prefixLen;
-    final ownContent = text.substring(ownContentStart, record.end);
-    final plain = (
-    start: record.start,
-    end: record.start + prefixLen,
-    text: '',
-    cursorOffsetFromStart: 0,
-    relativeAttributes: const <TextAttribute>[],
-    );
-
-    if (listTypeOfPrefix(prefix) != ParagraphListType.numbered) return plain;
-
-    final indent = RegExp(r'^[ \t]*').firstMatch(prefix)!.group(0)!;
-    final records = document.paragraphs.records;
-    final currentIndex = records.indexOf(record);
-    if (currentIndex == -1) return plain;
-
-    bool matchesRun(int i) {
-      if (i < 0 || i >= records.length) return false;
-      final r = records[i];
-      final len = listPrefixLength(text, r.start);
-      if (len == 0) return false;
-      final p = text.substring(r.start, r.start + len);
-      return listTypeOfPrefix(p) == ParagraphListType.numbered &&
-          RegExp(r'^[ \t]*').firstMatch(p)!.group(0)! == indent;
-    }
-
-    if (!matchesRun(currentIndex + 1)) return plain; // nothing after to renumber
-
-    var lastIndex = currentIndex + 1;
-    while (matchesRun(lastIndex + 1)) {
-      lastIndex++;
-    }
-
-    final relativeAttrs = _extractRelativeAttributes(ownContentStart, record.end, 0);
-    final buffer = StringBuffer(ownContent);
-    var number = 0;
-    for (var i = currentIndex + 1; i <= lastIndex; i++) {
-      number++;
-      final r = records[i];
-      final len = listPrefixLength(text, r.start);
-      final contentStart = r.start + len;
-      // Only write the separator once the buffer already has content, so
-      // an empty ownContent doesn't leave a leading blank line.
-      if (buffer.isNotEmpty) buffer.write('\n');
-      buffer.write('$indent$number. ');
-      final destOffset = buffer.length;
-      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
-      buffer.write(text.substring(contentStart, r.end));
-    }
-
     return (
-    start: record.start,
-    end: records[lastIndex].end,
-    text: buffer.toString(),
-    cursorOffsetFromStart: ownContent.length,
-    relativeAttributes: relativeAttrs,
+      start: record.start,
+      end: record.start + prefixLen,
+      text: '',
+      cursorOffsetFromStart: 0,
+      relativeAttributes: const <TextAttribute>[],
     );
   }
 
@@ -390,6 +345,18 @@ class EditingEngine {
         text: markerEdit.text,
         relativeAttributes: markerEdit.relativeAttributes,
         );
+      }
+    }
+
+    // Joining the next line onto this one (Delete at the end of a line) takes that line's list
+    // marker with the line break: leaving it in the middle of the text would be a stray "- ".
+    if (document.text.codeUnitAt(selection.start) == 0x0A) {
+      final next = document.paragraphs.paragraphAt(selection.start + 1);
+      if (next != null && next.start == selection.start + 1 && !isCodeBlockLevel(next.headerLevel)) {
+        final len = listPrefixLength(document.text, next.start);
+        if (len > 0) {
+          return (start: selection.start, end: next.start + len, text: '', relativeAttributes: const []);
+        }
       }
     }
 
@@ -594,9 +561,12 @@ class EditingEngine {
     final restAfterCaret = text.substring(caret, paragraphEnd).trim();
 
     if (restBeforeCaret.isEmpty && restAfterCaret.isEmpty) {
-      // Empty list item: exit the list instead of repeating the prefix. The marker is
-      // simply removed, so the item becomes an empty paragraph with the caret on it
-      // (replacing it with a newline left a stray blank row after every list).
+      // An empty item that is nested steps out one level, as in every list editor: Enter twice
+      // from the deepest item walks back to the top. An empty top-level item leaves the list:
+      // the marker is simply removed, so the item becomes an empty paragraph with the caret on
+      // it (replacing it with a newline left a stray blank row after every list).
+      final outer = outdentedPrefix(prefix);
+      if (outer != null) return (start: paragraphStart, end: caret, text: outer);
       return (start: paragraphStart, end: caret, text: '');
     }
 
@@ -639,7 +609,8 @@ class EditingEngine {
     relativeAttributes: stickyAsRelative(base.text.length),
     );
 
-    if (base.text.isEmpty || base.text == '\n') return plain; // exit-list or plain newline — nothing to renumber
+    // Exit-list, step-out or a plain newline: a replacement of the prefix, or nothing to continue.
+    if (base.end != base.start || base.text.isEmpty || base.text == '\n') return plain;
     final insertedPrefix = base.text.substring(1);
     if (listTypeOfPrefix(insertedPrefix) != ParagraphListType.numbered) return plain;
 
@@ -732,6 +703,12 @@ class EditingEngine {
     final endIndex = records.indexOf(endRecord);
     if (startIndex == -1 || endIndex == -1) return null;
 
+    if (type == ParagraphListType.bullet) {
+      // A checklist item is not "already a bullet": Bullet turns it into a plain one, and only a
+      // line that is a plain bullet already is taken back to plain text.
+      return _kindToggleEdit(startIndex, endIndex, (prefix) => listTypeOfPrefix(prefix) == ParagraphListType.bullet && checkboxStateOfPrefix(prefix) == null, (indent, _) => '$indent- ');
+    }
+
     var allAlreadyType = true;
     for (var i = startIndex; i <= endIndex; i++) {
       final r = records[i];
@@ -742,27 +719,79 @@ class EditingEngine {
         break;
       }
     }
-    final turningOn = !allAlreadyType;
+    return _numberedToggleEdit(text, records, startIndex, endIndex, !allAlreadyType);
+  }
 
-    if (type == ParagraphListType.bullet) {
-      final buffer = StringBuffer();
-      final relativeAttrs = <TextAttribute>[];
-      for (var i = startIndex; i <= endIndex; i++) {
-        if (i > startIndex) buffer.write('\n');
-        final r = records[i];
-        final prefixLen = listPrefixLength(text, r.start);
-        final contentStart = r.start + prefixLen;
-        // '  ' default indent, not flush-left: a bare '- ' reads as "just
-        // a dash", not a list.
-        if (turningOn) buffer.write('  - ');
-        final destOffset = buffer.length;
-        relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
-        buffer.write(text.substring(contentStart, r.end));
-      }
-      return (start: startRecord.start, end: endRecord.end, text: buffer.toString(), relativeAttributes: relativeAttrs);
+  /// Toggles the checklist kind over the paragraph(s) `selection` spans: lines that are not
+  /// checklist items become unchecked ones (keeping their depth), and when every line already is
+  /// one the boxes go and the lines are plain text again. Unlike [toggleCheckedEdit] this never
+  /// changes whether an item is ticked.
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})? checklistToggleEdit(
+      EditorSelection selection,
+      ) {
+    final records = document.paragraphs.records;
+    final startRecord = document.paragraphs.paragraphAt(selection.start);
+    if (startRecord == null) return null;
+    final endRecord = document.paragraphs.paragraphAt(selection.end) ?? startRecord;
+    final startIndex = records.indexOf(startRecord);
+    final endIndex = records.indexOf(endRecord);
+    if (startIndex == -1 || endIndex == -1) return null;
+    return _kindToggleEdit(
+      startIndex,
+      endIndex,
+      (prefix) => checkboxStateOfPrefix(prefix) != null,
+      (indent, prefix) => prefix != null && checkboxStateOfPrefix(prefix) != null ? '$indent${prefix.trimLeft()}' : '$indent- [ ] ',
+    );
+  }
+
+  /// The edit that gives every line of `[startIndex, endIndex]` one kind of marker, or takes the
+  /// markers off when every line already has that kind ([isKind]). [marker] writes the marker for
+  /// a line given its indentation and its old prefix (null for a plain line). A line that is
+  /// already a list item keeps its depth; a plain line keeps the spaces it starts with, or takes
+  /// the depth of the first item in the range, or the default of two spaces ('- ' with none
+  /// reads as a dash, not a list).
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes}) _kindToggleEdit(
+      int startIndex,
+      int endIndex,
+      bool Function(String prefix) isKind,
+      String Function(String indent, String? prefix) marker,
+      ) {
+    final text = document.text;
+    final records = document.paragraphs.records;
+
+    var allAlready = true;
+    String? baseIndent;
+    for (var i = startIndex; i <= endIndex; i++) {
+      final r = records[i];
+      final len = listPrefixLength(text, r.start);
+      if (len == 0 || !isKind(text.substring(r.start, r.start + len))) allAlready = false;
+      if (len > 0) baseIndent ??= listIndentWhitespace(text, r.start);
     }
+    final turningOn = !allAlready;
+    baseIndent ??= '  ';
 
-    return _numberedToggleEdit(text, records, startIndex, endIndex, turningOn);
+    final buffer = StringBuffer();
+    final relativeAttrs = <TextAttribute>[];
+    for (var i = startIndex; i <= endIndex; i++) {
+      if (i > startIndex) buffer.write('\n');
+      final r = records[i];
+      final len = listPrefixLength(text, r.start);
+      final own = listIndentWhitespace(text, r.start);
+      final contentStart = r.start + (len > 0 ? len : own.length);
+      if (turningOn) {
+        final prefix = len > 0 ? text.substring(r.start, r.start + len) : null;
+        buffer.write(marker(len > 0 || own.isNotEmpty ? own : baseIndent, prefix));
+      }
+      final destOffset = buffer.length;
+      relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
+      buffer.write(text.substring(contentStart, r.end));
+    }
+    return (
+      start: records[startIndex].start,
+      end: records[endIndex].end,
+      text: buffer.toString(),
+      relativeAttributes: relativeAttrs,
+    );
   }
 
   // The numbered half of listToggleEdit — has to consider paragraphs
@@ -782,8 +811,9 @@ class EditingEngine {
       ) {
     String indentOf(int i) {
       final r = records[i];
-      if (listPrefixLength(text, r.start) == 0) return '  ';
-      return listIndentWhitespace(text, r.start);
+      final own = listIndentWhitespace(text, r.start);
+      if (listPrefixLength(text, r.start) == 0 && own.isEmpty) return '  ';
+      return own;
     }
 
     bool matchesNumberedIndent(int i, String indent) {
@@ -837,8 +867,12 @@ class EditingEngine {
         number++;
         final r = records[i];
         final len = listPrefixLength(text, r.start);
-        final contentStart = r.start + len;
-        buffer.write('$indent$number. ');
+        // A plain line's own leading spaces are its depth, not part of what it says.
+        final own = listIndentWhitespace(text, r.start);
+        final contentStart = r.start + (len > 0 ? len : own.length);
+        // A line in the selection keeps its own depth (the numbers are settled afterwards, per depth).
+        final lineIndent = i >= startIndex && i <= endIndex && own.isNotEmpty ? own : indent;
+        buffer.write('$lineIndent$number. ');
         final destOffset = buffer.length;
         relativeAttrs.addAll(_extractRelativeAttributes(contentStart, r.end, destOffset));
         buffer.write(text.substring(contentStart, r.end));
@@ -924,15 +958,18 @@ class EditingEngine {
       if (i > startIndex) buffer.write('\n');
       final r = records[i];
       final prefixLen = listPrefixLength(text, r.start);
-      final contentStart = r.start + prefixLen;
+      final own = listIndentWhitespace(text, r.start);
+      final contentStart = r.start + (prefixLen > 0 ? prefixLen : own.length);
 
       if (prefixLen == 0) {
-        buffer.write('  - [ ] ');
+        buffer.write('${own.isEmpty ? '  ' : own}- [ ] ');
         changedAny = true;
       } else {
         final prefix = text.substring(r.start, contentStart);
         if (listTypeOfPrefix(prefix) == ParagraphListType.numbered) {
-          buffer.write(prefix);
+          // A numbered item becomes a checklist item at the same depth.
+          buffer.write('$own- [ ] ');
+          changedAny = true;
         } else {
           final checked = checkboxStateOfPrefix(prefix);
           if (checked == null) {
@@ -995,7 +1032,7 @@ class EditingEngine {
 
       final newIndent = outdent
           ? (leadingWs.length >= 2 ? leadingWs.substring(2) : '')
-          : '$leadingWs  ';
+          : (leadingWs.length >= maxListIndent ? leadingWs : '$leadingWs  ');
       if (newIndent != leadingWs) anyChange = true;
       buffer.write('$newIndent$markerRest');
       final destOffset = buffer.length;
@@ -1172,6 +1209,85 @@ class EditingEngine {
       assert(_debugValidateParagraphs());
       transactions.notify();
     });
+  }
+
+  /// Where a deletion that ends at [end] should really end. A cut that stops inside the next
+  /// line's indentation or marker takes the whole marker, so no half of one ("[ ] x", "ta") is
+  /// left in the text.
+  int endOutsideMarker(int end) {
+    final record = document.paragraphs.paragraphAt(end);
+    if (record == null || isCodeBlockLevel(record.headerLevel)) return end;
+    final markerEnd = record.start + listPrefixLength(document.text, record.start);
+    return end > record.start && end < markerEnd ? markerEnd : end;
+  }
+
+  /// Whether any paragraph from the one before [from] to the one after [to] is a list item, i.e.
+  /// whether an edit there can leave numbers wrong (see [renumberEdits]).
+  bool touchesList(int from, int to) {
+    final paragraphs = document.paragraphs;
+    final records = paragraphs.records;
+    if (records.isEmpty) return false;
+    final a = (paragraphs.indexAt(from) - 1).clamp(0, records.length - 1);
+    final b = (paragraphs.indexAt(to) + 1).clamp(0, records.length - 1);
+    for (var i = a; i <= b; i++) {
+      if (_isListLine(records[i])) return true;
+    }
+    return false;
+  }
+
+  bool _isListLine(ParagraphRecord r) =>
+      !isCodeBlockLevel(r.headerLevel) && listPrefixLength(document.text, r.start) > 0;
+
+  /// The digit changes that make every numbered item in the lists around [offset] count 1, 2, 3
+  /// within its own depth: a nested list starts again at 1 under its parent, a bullet or a plain
+  /// line at the same depth ends a run, and the parent's count carries on after its children.
+  /// Highest position first, so they can be applied one after another. Empty when every number is
+  /// already right. Only digits change: the text and formatting around them are not touched.
+  List<({int start, int end, String text})> renumberEdits(int offset) {
+    final text = document.text;
+    final paragraphs = document.paragraphs;
+    final records = paragraphs.records;
+    if (records.isEmpty) return const [];
+    final at = paragraphs.indexAt(offset).clamp(0, records.length - 1);
+
+    // The runs of consecutive list lines that touch the paragraph, the one before it and the one after.
+    final runs = <(int, int)>{};
+    for (final seed in [at - 1, at, at + 1]) {
+      if (seed < 0 || seed >= records.length || !_isListLine(records[seed])) continue;
+      var a = seed, b = seed;
+      while (a > 0 && _isListLine(records[a - 1])) {
+        a--;
+      }
+      while (b < records.length - 1 && _isListLine(records[b + 1])) {
+        b++;
+      }
+      runs.add((a, b));
+    }
+
+    final edits = <({int start, int end, String text})>[];
+    for (final (a, b) in runs) {
+      final counters = <int, int>{};
+      for (var i = a; i <= b; i++) {
+        final r = records[i];
+        final len = listPrefixLength(text, r.start);
+        final indent = listIndentWhitespace(text, r.start).length;
+        counters.removeWhere((level, _) => level > indent);
+        final prefix = text.substring(r.start, r.start + len);
+        if (listTypeOfPrefix(prefix) != ParagraphListType.numbered) {
+          counters.remove(indent);
+          continue;
+        }
+        final next = (counters[indent] ?? 0) + 1;
+        counters[indent] = next;
+        final digitsStart = r.start + indent;
+        final digitsEnd = r.start + prefix.indexOf('.');
+        if (text.substring(digitsStart, digitsEnd) != '$next') {
+          edits.add((start: digitsStart, end: digitsEnd, text: '$next'));
+        }
+      }
+    }
+    edits.sort((x, y) => y.start.compareTo(x.start));
+    return edits;
   }
 
   /// Rewrites every marker in the entire contiguous numbered list

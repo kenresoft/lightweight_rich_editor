@@ -40,12 +40,12 @@ void main() {
     expect(c.document.text, '- [ ] task\n');
   });
 
-  test('ending an empty item in the middle of a numbered list leaves the others alone', () {
+  test('ending an empty item in the middle of a numbered list: the items after it are a new list, counting from 1', () {
     final c = RichEditorController(text: '1. a\n2. \n3. b');
     addTearDown(c.dispose);
     c.selection = const TextSelection.collapsed(offset: 8);
     c.insertText('\n');
-    expect(c.document.text, '1. a\n\n3. b');
+    expect(c.document.text, '1. a\n\n1. b');
   });
 
   test('undo brings the empty item back', () {

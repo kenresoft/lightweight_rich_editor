@@ -2,6 +2,7 @@ import '../commands/apply_attribute_command.dart';
 import '../commands/clear_formatting_command.dart';
 import '../commands/composite_command.dart';
 import '../commands/editor_command.dart';
+import '../commands/renumber_lists_command.dart';
 import '../commands/replace_range_command.dart';
 import '../commands/set_alignment_command.dart';
 import '../commands/set_header_level_command.dart';
@@ -49,14 +50,18 @@ class CommandDispatcher {
       // must keep its own formatting rather than inheriting sticky
       // attributes across the whole thing.
       final edit = engine.enterKeyEditWithRenumber(selection, Map.of(engine.stickyAttributes));
-      dispatch(ReplaceRangeCommand(
-        start: edit.start,
-        end: edit.end,
-        text: edit.text,
-        relativeAttributes: edit.relativeAttributes,
-        stripAttributes: engine.stickyOff,
-      ));
-      return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
+      return dispatchRenumbered(
+        ReplaceRangeCommand(
+          start: edit.start,
+          end: edit.end,
+          text: edit.text,
+          relativeAttributes: edit.relativeAttributes,
+          stripAttributes: engine.stickyOff,
+        ),
+        from: edit.start,
+        to: edit.end,
+        caret: edit.start + edit.cursorOffsetFromStart,
+      );
     }
     return dispatch(ReplaceRangeCommand(
       start: selection.start,
@@ -81,23 +86,34 @@ class CommandDispatcher {
     return EditorSelection.collapsed(exit.start);
   }
 
-  /// Deletes `selection`, then runs [EditingEngine.repairListNumbering]
-  /// as a follow-up check so a selection spanning list items doesn't
-  /// leave subsequent numbered items with stale numbers.
-  ///
-  /// When a repair is needed this is two separate undo steps: undoing
-  /// once reverts the repair, undoing again removes the deletion.
-  EditorSelection deleteSelection(EditorSelection selection) {
-    if (selection.isCollapsed) return selection;
-    final result = dispatch(ReplaceRangeCommand(start: selection.start, end: selection.end, text: ''));
-    return _repairNumberingIfNeeded(result);
+  /// Runs [main], an edit at `[from, to)`, and, when it touches a list, the renumbering of the
+  /// lists around it ([RenumberListsCommand]) as the same undo step. [caret] is where the caret
+  /// is after [main]; the result is where it is once the numbers are right. An edit away from any
+  /// list is a plain command, so typing still groups into one undo step as it always did.
+  EditorSelection dispatchRenumbered(
+    EditorCommand main, {
+    required int from,
+    required int to,
+    required int caret,
+  }) {
+    if (!engine.touchesList(from, to)) {
+      dispatch(main);
+      return EditorSelection.collapsed(caret);
+    }
+    return dispatch(CompositeCommand([main, RenumberListsCommand(around: caret, caret: caret)]));
   }
 
-  EditorSelection _repairNumberingIfNeeded(EditorSelection resultSelection) {
-    final edit = engine.repairListNumbering(resultSelection);
-    if (edit == null) return resultSelection;
-    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
-    return resultSelection;
+  /// Deletes `selection`. A selection spanning list items leaves the numbers after it right, in
+  /// the same undo step.
+  EditorSelection deleteSelection(EditorSelection selection) {
+    if (selection.isCollapsed) return selection;
+    final end = engine.endOutsideMarker(selection.end);
+    return dispatchRenumbered(
+      ReplaceRangeCommand(start: selection.start, end: end, text: ''),
+      from: selection.start,
+      to: end,
+      caret: selection.start,
+    );
   }
 
   /// Deletes one character/list-marker backward from a collapsed caret,
@@ -106,8 +122,12 @@ class CommandDispatcher {
     if (!selection.isCollapsed) return deleteSelection(selection);
     final edit = engine.deleteBackwardEdit(selection);
     if (edit == null) return selection;
-    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
-    return EditorSelection.collapsed(edit.start + edit.cursorOffsetFromStart);
+    return dispatchRenumbered(
+      ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes),
+      from: edit.start,
+      to: edit.end,
+      caret: edit.start + edit.cursorOffsetFromStart,
+    );
   }
 
   /// Deletes one character/list-marker forward from a collapsed caret,
@@ -116,8 +136,12 @@ class CommandDispatcher {
     if (!selection.isCollapsed) return deleteSelection(selection);
     final edit = engine.deleteForwardEdit(selection);
     if (edit == null) return selection;
-    dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
-    return EditorSelection.collapsed(edit.start);
+    return dispatchRenumbered(
+      ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes),
+      from: edit.start,
+      to: edit.end,
+      caret: edit.start,
+    );
   }
 
   /// Plain-text paste — same as [insertText], named for call-site clarity.
@@ -204,8 +228,17 @@ class CommandDispatcher {
     return _dispatchListEdit(selection, edit);
   }
 
-  /// Toggles task-list checkbox state on the paragraph(s) `selection`
-  /// spans.
+  /// The Checklist button: lines that are not checklist items become unchecked ones, and when
+  /// every line already is one the boxes are taken off. Never ticks or unticks an item (that is
+  /// [toggleTaskItem], what tapping the box does).
+  EditorSelection toggleChecklist(EditorSelection selection) {
+    final edit = engine.checklistToggleEdit(selection);
+    if (edit == null) return selection;
+    return _dispatchListEdit(selection, edit);
+  }
+
+  /// Ticks or unticks the checklist item(s) `selection` spans; a line that is not a checklist
+  /// item becomes an unchecked one.
   EditorSelection toggleTaskItem(EditorSelection selection) {
     final edit = engine.toggleCheckedEdit(selection);
     if (edit == null) return selection;
@@ -232,10 +265,12 @@ class CommandDispatcher {
       text: edit.text,
       relativeAttributes: edit.relativeAttributes,
     );
-    if (headings.isEmpty) return dispatch(replace);
+    final caret = edit.start + edit.text.length;
     return dispatch(CompositeCommand([
       for (final r in headings) SetHeaderLevelCommand(EditorSelection.collapsed(r.start), null),
       replace,
+      // Whatever kind the lines are now, the numbers around them count properly.
+      RenumberListsCommand(around: caret, caret: caret),
     ]));
   }
 
@@ -251,7 +286,12 @@ class CommandDispatcher {
   EditorSelection _listIndent(EditorSelection selection, {required bool outdent}) {
     final edit = engine.listIndentEdit(selection, outdent: outdent);
     if (edit == null) return selection;
-    return dispatch(ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes));
+    final caret = edit.start + edit.text.length;
+    return dispatch(CompositeCommand([
+      ReplaceRangeCommand(start: edit.start, end: edit.end, text: edit.text, relativeAttributes: edit.relativeAttributes),
+      // A nested numbered item starts again at 1 and the items after it close the gap.
+      RenumberListsCommand(around: caret, caret: caret),
+    ]));
   }
 
   /// Tab / Shift+Tab inside a code block: indent or outdent by two spaces (see

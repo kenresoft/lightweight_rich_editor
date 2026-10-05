@@ -7,6 +7,7 @@ import '../clipboard/rich_clipboard_delegate.dart';
 import '../commands/command_dispatcher.dart';
 import '../commands/composite_command.dart';
 import '../commands/editor_command.dart';
+import '../commands/renumber_lists_command.dart';
 import '../commands/replace_range_command.dart';
 import '../commands/set_header_level_command.dart';
 import '../core/editing_engine.dart';
@@ -226,6 +227,7 @@ class RichEditorController extends TextEditingController {
     final newText = newValue.text;
 
     if (oldText == newText) {
+      newValue = newValue.copyWith(selection: _outOfMarker(newValue.selection));
       if (newValue.selection != selection) {
         history.breakCoalescing();
         if (newValue.selection.isCollapsed) {
@@ -255,6 +257,7 @@ class RichEditorController extends TextEditingController {
     // gets overwritten with the real post-edit caret where needed.
     var resultSelection = newValue.selection;
     var resultComposing = newValue.composing;
+    var shift = 0; // how far renumbering moved the caret (a "9." that became "10.")
     var ranAutolink = false;
     int? enterBoundary; // Enter pressed right after text: the line it ends may end in an address
 
@@ -265,6 +268,9 @@ class RichEditorController extends TextEditingController {
     // what `document` (left unmodified) already says, then rethrow.
     try {
       if (!diff.isNoOp) {
+        // A deletion that stops inside the next line's marker takes the whole marker, so no half of
+        // one is left in the text.
+        final cutEnd = diff.insertedText.isEmpty ? engine.endOutsideMarker(diff.end) : diff.end;
         final codeExit = diff.insertedText == '\n'
             ? commands.exitCodeBlock(EditorSelection(baseOffset: diff.start, extentOffset: diff.end))
             : null;
@@ -280,7 +286,7 @@ class RichEditorController extends TextEditingController {
             EditorSelection(baseOffset: diff.start, extentOffset: diff.end),
             Map.of(engine.stickyAttributes),
           );
-          history.execute(
+          final settled = commands.dispatchRenumbered(
             ReplaceRangeCommand(
               start: edit.start,
               end: edit.end,
@@ -288,10 +294,11 @@ class RichEditorController extends TextEditingController {
               relativeAttributes: edit.relativeAttributes,
               stripAttributes: engine.stickyOff,
             ),
+            from: edit.start,
+            to: edit.end,
+            caret: edit.start + edit.cursorOffsetFromStart,
           );
-          resultSelection = TextSelection.collapsed(
-            offset: edit.start + edit.cursorOffsetFromStart,
-          );
+          resultSelection = TextSelection.collapsed(offset: settled.start);
           resultComposing = TextRange.empty;
           // The exit-list variant deletes the list prefix, shifting positions, so only a plain
           // line break (the new line break sits exactly where Enter was pressed) links the
@@ -310,17 +317,18 @@ class RichEditorController extends TextEditingController {
             EditorSelection.collapsed(diff.end),
           );
           if (edit != null) {
-            history.execute(
+            final settled = commands.dispatchRenumbered(
               ReplaceRangeCommand(
                 start: edit.start,
                 end: edit.end,
                 text: edit.text,
                 relativeAttributes: edit.relativeAttributes,
               ),
+              from: edit.start,
+              to: edit.end,
+              caret: edit.start + edit.cursorOffsetFromStart,
             );
-            resultSelection = TextSelection.collapsed(
-              offset: edit.start + edit.cursorOffsetFromStart,
-            );
+            resultSelection = TextSelection.collapsed(offset: settled.start);
             resultComposing = TextRange.empty;
           } else {
             // Shouldn't happen — diff implies something was deletable —
@@ -328,7 +336,7 @@ class RichEditorController extends TextEditingController {
             history.execute(
               ReplaceRangeCommand(
                 start: diff.start,
-                end: diff.end,
+                end: cutEnd,
                 text: diff.insertedText,
                 attributesForInsertion: Map.of(engine.stickyAttributes),
               ),
@@ -382,14 +390,16 @@ class RichEditorController extends TextEditingController {
                 : const <DetectedUrl>[];
 
             if (urls.isEmpty) {
-              history.execute(
+              shift = _executeText(
                 ReplaceRangeCommand(
                   start: diff.start,
-                  end: diff.end,
+                  end: cutEnd,
                   text: diff.insertedText,
                   attributesForInsertion: Map.of(engine.stickyAttributes),
                   stripAttributes: engine.stickyOff,
                 ),
+                diff,
+                oldText,
               );
               ranAutolink = diff.insertedText.length == 1;
             } else {
@@ -406,34 +416,18 @@ class RichEditorController extends TextEditingController {
                 for (final u in urls)
                   TextAttribute(start: u.start, end: u.end, type: AttributeType.link, value: u.href),
               ];
-              history.execute(
+              shift = _executeText(
                 ReplaceRangeCommand(
                   start: diff.start,
-                  end: diff.end,
+                  end: cutEnd,
                   text: diff.insertedText,
                   relativeAttributes: relativeAttributes,
                   stripAttributes: engine.stickyOff,
                 ),
+                diff,
+                oldText,
               );
               ranAutolink = false;
-            }
-
-            // Same "range edit can orphan a numbered run" concern as
-            // CommandDispatcher.deleteSelection, for a live multi-
-            // paragraph backspace/overwrite. Two separate undo steps when
-            // a repair is needed.
-            final repairEdit = engine.repairListNumbering(
-              EditorSelection.collapsed(diff.start + diff.insertedText.length),
-            );
-            if (repairEdit != null) {
-              history.execute(
-                ReplaceRangeCommand(
-                  start: repairEdit.start,
-                  end: repairEdit.end,
-                  text: repairEdit.text,
-                  relativeAttributes: repairEdit.relativeAttributes,
-                ),
-              );
             }
           }
         }
@@ -446,6 +440,13 @@ class RichEditorController extends TextEditingController {
         ),
       );
       rethrow;
+    }
+
+    if (shift != 0) {
+      resultSelection = TextSelection(
+        baseOffset: resultSelection.baseOffset + shift,
+        extentOffset: resultSelection.extentOffset + shift,
+      );
     }
 
     // Trust the TextField/IME's own reported selection where it wasn't
@@ -462,6 +463,38 @@ class RichEditorController extends TextEditingController {
     } else if (enterBoundary != null) {
       _linkAddressBefore(enterBoundary);
     }
+  }
+
+  static final RegExp _numberedLine = RegExp(r'^[ \t]*\d{1,9}\. ', multiLine: true);
+
+  /// Runs a typed or pasted text edit. One that spans lines, in or into a list, also renumbers
+  /// the lists around it as the same undo step; any other stays a plain command, so typing keeps
+  /// grouping into one undo step. Returns how far the caret moved because digits changed length.
+  int _executeText(ReplaceRangeCommand command, TextDiff diff, String oldText) {
+    final multiLine = diff.insertedText.contains('\n') || oldText.substring(diff.start, diff.end).contains('\n');
+    if (!multiLine || !(engine.touchesList(diff.start, diff.end) || _numberedLine.hasMatch(diff.insertedText))) {
+      history.execute(command);
+      return 0;
+    }
+    final caret = diff.start + diff.insertedText.length;
+    final settled = history.execute(CompositeCommand([command, RenumberListsCommand(around: caret, caret: caret)]));
+    return settled.start - caret;
+  }
+
+  /// A caret placed in a list item's indentation or marker (a tap at the left edge, Home, an
+  /// arrow key) goes to where the item's text starts: typing there would break the marker
+  /// (`-x item`, `x- item`). Left from the start of an item's text goes to the end of the line
+  /// above instead, so the arrow key is never stuck behind the marker. A selection is left alone.
+  TextSelection _outOfMarker(TextSelection sel) {
+    if (!sel.isValid || !sel.isCollapsed) return sel;
+    final record = document.paragraphs.paragraphAt(sel.baseOffset);
+    if (record == null || isCodeBlockLevel(record.headerLevel)) return sel;
+    final markerEnd = record.start + listPrefixLength(document.text, record.start);
+    if (markerEnd == record.start || sel.baseOffset >= markerEnd) return sel;
+    final before = selection;
+    final movedLeft = before.isValid && before.isCollapsed && before.baseOffset == markerEnd;
+    final target = movedLeft && record.start > 0 ? record.start - 1 : markerEnd;
+    return TextSelection.collapsed(offset: target, affinity: sel.affinity);
   }
 
   // The image block containing [offset], or null. Reads paragraph metadata only,
@@ -985,8 +1018,15 @@ class RichEditorController extends TextEditingController {
         type;
   }
 
+  /// Ticks or unticks the checklist item the caret is on (what tapping its box does); a line that
+  /// is not a checklist item becomes an unchecked one.
   void toggleTaskItem() =>
       _syncSelection(commands.toggleTaskItem(_currentSelection));
+
+  /// The Checklist button: the line(s) become checklist items, or, when they all are already,
+  /// plain text again. Never ticks an item.
+  void toggleChecklist() =>
+      _syncSelection(commands.toggleChecklist(_currentSelection));
 
   /// Whether the paragraph containing the current selection is a
   /// task-list item, and if so, whether it's checked — `null` if it
