@@ -1359,9 +1359,11 @@ class _ImageActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([controller, scrollController, if (controller.imageCache != null) controller.imageCache!]),
+      listenable: Listenable.merge([controller, controller.focusNode, scrollController, if (controller.imageCache != null) controller.imageCache!]),
       builder: (context, _) {
-        final run = controller.selectedImageRun;
+        // A note that opens with a picture has its caret on it, but nobody has touched it yet: the
+        // buttons belong to a picture the person is working with, so they wait for focus.
+        final run = controller.focusNode.hasFocus ? controller.selectedImageRun : null;
         if (run == null) return const SizedBox.shrink();
         ImageRegion? region;
         for (final b in regions()) {

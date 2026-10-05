@@ -407,6 +407,23 @@ void main() {
       expect(c.document.paragraphs.hasAnyImage, isTrue, reason: 'and Undo brings it back');
     });
 
+    testWidgets('a note that opens with a picture does not show the picture bar until the editor is touched', (tester) async {
+      final (c, _) = await pumpEditor(tester);
+      c.selection = const TextSelection.collapsed(offset: 0);
+      c.insertImageBlock('pic', rows: 5);
+      c.selection = const TextSelection.collapsed(offset: 0);
+      await tester.pump();
+      expect(c.selectedImageRun, isNotNull, reason: 'the caret is on the first row of the picture');
+      expect(c.focusNode.hasFocus, isFalse);
+      expect(find.byTooltip('Remove picture'), findsNothing, reason: 'nobody has touched it yet');
+
+      c.focusNode.requestFocus();
+      c.selection = const TextSelection.collapsed(offset: 0);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byTooltip('Remove picture'), findsOneWidget, reason: 'a touch gives it focus, and the bar appears');
+    });
+
     testWidgets('cutting a selected picture removes all of it, not just its line breaks', (tester) async {
       final (c, _) = await pumpEditor(tester);
       c.selection = const TextSelection.collapsed(offset: 5);
