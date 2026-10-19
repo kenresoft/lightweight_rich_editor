@@ -1,81 +1,82 @@
 # lightweight_rich_editor
 
-> [!WARNING]
-> This package is currently in active development. APIs may change before the 1.0.0 release.
+A rich-text editor for Flutter that draws your note on ruled paper. It is
+built on a single `TextField`, so scrolling, selection, IME input and accessibility are the ones Flutter already
+gives you.
 
-A performance-focused, lightweight rich-text editor for Flutter with notebook-style ruled lines and a powerful configuration system.
+The API may still change before 1.0.
 
-## Features
+## What it does
 
-- **Standard Rich Text Styling**: Bold, Italic, Underline, Strikethrough, inline code.
-- **Advanced Styling**: Custom text colors, highlights, font sizes.
-- **Structural Elements**: Headings (H1, H2), horizontal rules, bullet/numbered/task lists (with tappable checkboxes).
-- **Hyperlinks**: Easy link insertion, editing, and a tap-triggered preview bar.
-- **Rich Content Interop**: Intelligent paste support for HTML (from browsers) and Markdown, including native rich-clipboard support on Android, iOS, macOS, Windows, and Linux.
-- **Find & Replace**: Built-in find bar with next/previous navigation and replace/replace-all.
-- **Notebook Experience**: Customizable horizontal ruled lines and vertical margin lines that stay aligned even when a line wraps or a header is taller than body text.
-- **Whole-document alignment/direction**: `textAlign`/`textDirection` for the whole editor, including RTL.
-- **Performance First**: Built on top of standard `TextField`/`EditableText` for smooth scrolling and low memory overhead — validated against multi-thousand-paragraph documents.
-- **Highly Configurable**: Control colors, fonts, and layout via `RichTextRenderTheme` and `RichEditorStyle`.
-- **Serialization**: Save and load documents with high fidelity using `EditorDocument` (JSON-ready).
-- **Undo/Redo**: Full history support, including for rich pastes and multi-step edits.
+- Bold, italic, underline, strikethrough, inline code, text colour, highlight and font size.
+- Headings, bullet, numbered and checklist items (up to six levels deep), horizontal rules.
+- Fenced code blocks with a language label and syntax colouring.
+- Pictures that sit in the text as blocks of rows. You choose where the bytes are stored.
+- Links, with a small bar to open, copy, edit or remove the one you tapped.
+- Find and replace.
+- Paste of HTML and Markdown (including from a browser), and export to Markdown and HTML.
+- Undo and redo.
+- Ruled, dashed, dotted and grid paper, with an optional margin line. Lines follow the real height of each row,
+  so wrapped lines and headings stay on the paper.
+- Read-only mode, whole-document text alignment and direction (RTL works).
+- Save and load a document as JSON.
 
-## Getting started
+Platforms: Android, iOS, macOS, Windows, Linux and web. Native code is only used for reading and writing rich
+text on the clipboard.
 
-Add the package to your `pubspec.yaml`:
+## Install
 
 ```yaml
 dependencies:
-  lightweight_rich_editor: ^0.2.0
+  lightweight_rich_editor: ^0.3.0
 ```
 
-## Usage
+## Use it
 
-### 1. Quick start
-
-`LightweightRichEditor` bundles the toolbar, editor, and find/replace bar with sensible defaults — the fastest way to drop in a working note editor:
+`LightweightRichEditor` is the toolbar, the editor and the find bar in one widget:
 
 ```dart
 import 'package:flutter/material.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 
-class MyEditor extends StatelessWidget {
-  const MyEditor({super.key});
+class NoteScreen extends StatelessWidget {
+  const NoteScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Notes')),
-      body: const LightweightRichEditor(initialText: 'Hello, world!'),
+    return const Scaffold(
+      body: LightweightRichEditor(initialText: 'Hello, world!'),
     );
   }
 }
 ```
 
-Reach the underlying controller — for save/load, programmatic formatting, or listening for changes — via a `GlobalKey<LightweightRichEditorState>`, or by supplying your own `RichEditorController`:
+To get at the controller, pass your own, or use a key:
 
 ```dart
 final key = GlobalKey<LightweightRichEditorState>();
 
 LightweightRichEditor(
   key: key,
-  onSave: () => saveToDisk(key.currentState!.controller.document),
+  onSave: () => save(key.currentState!.controller.document.toJson()),
 );
 ```
 
-### 2. Composing the pieces yourself
+### Using the pieces separately
 
-`FormatToolbar`, `RichTextEditor`, and `FindReplaceBar` are also exported individually, for apps that want to place them separately in a layout:
+`FormatToolbar`, `RichTextEditor` and `FindReplaceBar` can be placed wherever you like:
 
 ```dart
-class MyEditor extends StatefulWidget {
-  @override
-  State<MyEditor> createState() => _MyEditorState();
-}
-
-class _MyEditorState extends State<MyEditor> {
+class _NoteState extends State<Note> {
   late final _controller = RichEditorController(text: 'Hello World!');
-  final _scrollController = ScrollController();
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +86,7 @@ class _MyEditorState extends State<MyEditor> {
         Expanded(
           child: RichTextEditor(
             controller: _controller,
-            scrollController: _scrollController,
+            scrollController: _scroll,
           ),
         ),
       ],
@@ -94,41 +95,36 @@ class _MyEditorState extends State<MyEditor> {
 }
 ```
 
-### 3. Custom configuration
+### Changing how it looks
 
-Customize the editor's text styling and layout via `RichTextRenderTheme` and `RichEditorStyle`:
-
-```dart
-final myTheme = RichTextRenderTheme(
-  baseFontSize: 18.0,
-  highlightColor: Colors.yellow.withValues(alpha: 0.5),
-);
-
-final myStyle = RichEditorStyle(
-  ruledLineColor: Colors.grey.withValues(alpha: 0.2),
-);
-
-final controller = RichEditorController(text: 'Custom Editor', theme: myTheme);
-```
-
-Swap themes at runtime (e.g. a dark-mode toggle) by assigning `controller.renderer.theme` directly — no need to recreate the controller:
+Text styling is in `RichTextRenderTheme`, the page (padding, ruled lines, margin) is in `RichEditorStyle`:
 
 ```dart
-setState(() {
-  controller.renderer.theme = isDarkMode ? darkTheme : RichTextRenderTheme.standard;
-});
+final controller = RichEditorController(
+  text: 'Custom editor',
+  theme: const RichTextRenderTheme(baseFontSize: 18),
+);
+
+const style = RichEditorStyle(ruledLineColor: Color(0x33808080));
 ```
 
-## Additional information
+Themes can be swapped while the editor is open, for example for dark mode. The text, selection and undo history
+stay as they are:
 
-For a fuller example — dark mode, save/load — check the `example/` folder in the repository.
+```dart
+controller.renderer.theme = isDark ? darkTheme : RichTextRenderTheme.standard;
+```
 
-**Making it look like your app:** the package ships no fonts, icons or theme of its own, so everything is a value you pass in. [CUSTOMIZATION_GUIDE.md](CUSTOMIZATION_GUIDE.md) maps every knob and walks through the tricky cases (changing the font without breaking the ruled lines, dark mode, text scale, icons, images, testing).
+The package has no fonts, icons or theme of its own. Everything is a value you pass in.
+[CUSTOMIZATION_GUIDE.md](CUSTOMIZATION_GUIDE.md) lists them all and covers the awkward cases, such as changing the
+font without pushing text off the ruled lines.
 
-### Contributions
+## More
 
-Contributions are welcome! Please feel free to open issues or pull requests on GitHub.
+- `example/` has a small app with dark mode and save/load.
+- [EXTENSION_POINTS.md](EXTENSION_POINTS.md) lists what the editor does not do, and why.
+- Bugs and pull requests are welcome on [GitHub](https://github.com/kenresoft/lightweight_rich_editor/issues).
 
-### License
+## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT, see [LICENSE](LICENSE). Copyright Kenresoft Technologies Ltd.

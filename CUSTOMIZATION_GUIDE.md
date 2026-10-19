@@ -70,7 +70,7 @@ The editor draws ruled lines and expects the text to sit on them. That makes the
 ### The common trap: changing the font changes which headings fit
 
 Two fonts at the same point size have different line heights. A heading size that fits one row in one font can
-need two in another. (Real case: with the default theme, an H1 of 24 fit one 30 px row in Roboto, but needed
+need two in another. (Real case: an H1 of 24 fit one 30 px row in Roboto, but needed
 two in Plus Jakarta Sans; 23 was the largest that fitted.)
 
 When you change `bodyFontFamily` (or the app's font), **re-check H1 to H3**:
