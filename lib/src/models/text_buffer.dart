@@ -1,7 +1,7 @@
 /// Abstraction over the raw character storage backing an
 /// [EditorDocument].
 ///
-/// The [EditingEngine] (Phase 2) talks to text storage only through this
+/// The `EditingEngine` (Phase 2) talks to text storage only through this
 /// interface — never through a raw `String` directly. That indirection is
 /// the entire point: [StringTextBuffer] is a correct, simple starting
 /// implementation, and per the product brief we do **not** optimize this

@@ -6,7 +6,7 @@ import 'attribute_type.dart';
 /// Every transformation — shifting on edit, splitting at a boundary,
 /// merging with a neighbor — produces a *new* [TextAttribute] rather than
 /// mutating this one. That immutability is deliberate: it's what makes
-/// value equality meaningful, which in turn is what lets [HistoryManager]
+/// value equality meaningful, which in turn is what lets `HistoryManager`
 /// (Phase 3) diff "before" and "after" span lists correctly. The previous
 /// controller mutated spans in place and relied on identity equality for
 /// undo diffing, which silently recorded every span as changed on every

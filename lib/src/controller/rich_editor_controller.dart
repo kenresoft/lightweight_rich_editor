@@ -40,7 +40,7 @@ import '../utils/text_diff.dart';
 import '../utils/url_detector.dart';
 
 /// The public API of the editor: a [TextEditingController] that
-/// coordinates [EditorDocument], [EditingEngine], [HistoryManager]/
+/// coordinates [EditorDocument], `EditingEngine`, `HistoryManager`/
 /// [CommandDispatcher], [TextSpanRenderer], and [ClipboardManager].
 ///
 /// Deliberately thin — editing logic, span math, undo grouping, style
@@ -214,7 +214,7 @@ class RichEditorController extends TextEditingController {
   ///
   /// This is the only place raw text-diffing happens: it figures out
   /// *what* changed via [diffText], turns that into one
-  /// [ReplaceRangeCommand], and lets [HistoryManager] decide whether it
+  /// [ReplaceRangeCommand], and lets `HistoryManager` decide whether it
   /// coalesces with the in-progress typing session. Selection-only
   /// changes skip straight to syncing sticky formatting.
   ///

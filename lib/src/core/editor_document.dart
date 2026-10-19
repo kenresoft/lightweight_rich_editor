@@ -52,7 +52,7 @@ class EditorDocument {
 
   bool get isEmpty => _buffer.isEmpty;
 
-  /// The underlying storage. Only [EditingEngine] should call its
+  /// The underlying storage. Only `EditingEngine` should call its
   /// mutating methods directly — everything else should treat text as
   /// read-only via [text].
   TextBuffer get buffer => _buffer;

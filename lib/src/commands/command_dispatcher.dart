@@ -21,7 +21,7 @@ import '../utils/list_prefix.dart';
 /// The single entry point every editing action goes through — toolbar
 /// buttons, keyboard shortcuts, and paste handling all call
 /// `dispatcher.someAction(...)` rather than constructing commands or
-/// touching [EditingEngine] / [HistoryManager] directly.
+/// touching `EditingEngine` / `HistoryManager` directly.
 class CommandDispatcher {
   final EditingEngine engine;
   final HistoryManager history;

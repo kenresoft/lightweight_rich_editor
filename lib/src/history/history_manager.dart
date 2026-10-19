@@ -3,12 +3,12 @@ import '../commands/editor_command.dart';
 import '../core/editing_engine.dart';
 import '../core/editor_selection.dart';
 
-/// Owns undo/redo for an [EditingEngine] and decides how edits group into
+/// Owns undo/redo for an `EditingEngine` and decides how edits group into
 /// history entries: sequential typing/deleting coalesces into one entry,
 /// formatting changes always get their own, and cursor movement starts a
 /// new typing session.
 ///
-/// [HistoryManager] never mutates the document itself; every stack entry
+/// `HistoryManager` never mutates the document itself; every stack entry
 /// is an [EditorCommand] responsible for applying and reversing itself.
 class HistoryManager {
   final EditingEngine engine;
@@ -43,7 +43,7 @@ class HistoryManager {
   /// Applies `command` and records it, coalescing into the current
   /// typing/deleting session when appropriate. This is the only path by
   /// which new commands should reach the engine — going through
-  /// [EditingEngine] directly bypasses history entirely.
+  /// `EditingEngine` directly bypasses history entirely.
   EditorSelection execute(EditorCommand command) {
     final selection = command.execute(engine);
     _record(command);

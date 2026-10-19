@@ -14,7 +14,7 @@ class _PreviousMatchIntent extends Intent {
 /// A find/replace bar wired to [RichEditorController.search].
 ///
 /// Manages its own local state (query text, replacement text, case/
-/// whole-word toggles) via plain [setState] after each operation — it
+/// whole-word toggles) via plain `setState` after each operation — it
 /// does *not* wrap itself in a `ListenableBuilder(listenable: controller)`.
 /// `SearchIndex` isn't a `Listenable` at all, and this widget owns every
 /// interaction that changes search state (the query field's `onChanged`,

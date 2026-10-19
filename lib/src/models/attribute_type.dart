@@ -4,7 +4,7 @@
 /// philosophy is "plain text + lightweight inline formatting" — adding a
 /// new [AttributeType] should be a deliberate, rare product decision, not
 /// something callers can extend ad hoc. Toggle-style attributes (bold,
-/// italic, underline, strikethrough, highlight, code) carry no [value];
+/// italic, underline, strikethrough, highlight, code) carry no `value`;
 /// value-style attributes (color, size, link, header) do.
 ///
 /// `bulletList`/`numberedList` were removed entirely — see the git
@@ -44,7 +44,7 @@
 ///
 /// [textDirection] follows [align]'s exact template
 /// (`ParagraphRecord.textDirection`), same no-live-rendering caveat — see
-/// [ParagraphTextDirection]'s doc comment.
+/// `ParagraphTextDirection`'s doc comment.
 enum AttributeType {
   bold,
   italic,

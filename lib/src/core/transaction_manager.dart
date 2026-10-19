@@ -3,7 +3,7 @@
 /// formatting) rebuilds the editor's UI once instead of once per
 /// underlying edit.
 ///
-/// [EditingEngine] calls [notify] after every mutation. Outside a
+/// `EditingEngine` calls [notify] after every mutation. Outside a
 /// transaction that fires [onCommit] immediately; inside [run], each
 /// [notify] just marks the batch dirty and [onCommit] fires once when
 /// the outermost [run] call returns. Transactions nest safely.
@@ -40,7 +40,7 @@ class TransactionManager {
     }
   }
 
-  /// Signals that something changed. Called by [EditingEngine] after
+  /// Signals that something changed. Called by `EditingEngine` after
   /// each mutation.
   void notify() {
     if (_depth > 0) {

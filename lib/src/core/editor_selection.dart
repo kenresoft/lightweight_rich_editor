@@ -4,7 +4,7 @@ import '../utils/clamp_int.dart';
 ///
 /// Mirrors the shape of Flutter's `TextSelection` (base/extent rather
 /// than a pre-normalized start/end) but lives outside `dart:ui`, so
-/// [EditingEngine] and everything below it stays testable without
+/// `EditingEngine` and everything below it stays testable without
 /// widget bindings.
 class EditorSelection {
   /// Where the selection gesture started; equal to [extentOffset] for a

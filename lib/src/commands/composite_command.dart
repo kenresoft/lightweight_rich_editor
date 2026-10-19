@@ -4,7 +4,7 @@ import 'editor_command.dart';
 
 /// Several [EditorCommand]s treated as one undo step.
 ///
-/// [HistoryManager] builds these to coalesce sequential typing or
+/// `HistoryManager` builds these to coalesce sequential typing or
 /// backspacing into a single history entry, undoing/redoing the whole
 /// group together in one [TransactionManager] batch.
 class CompositeCommand extends EditorCommand {
@@ -38,7 +38,7 @@ class CompositeCommand extends EditorCommand {
   }
 
   /// Returns a new group with `command` appended — used by
-  /// [HistoryManager] when an incoming command coalesces with this
+  /// `HistoryManager` when an incoming command coalesces with this
   /// group's most recent member.
   CompositeCommand grow(EditorCommand command) => CompositeCommand([...commands, command]);
 }
