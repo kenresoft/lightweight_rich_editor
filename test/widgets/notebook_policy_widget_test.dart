@@ -206,10 +206,10 @@ void main() {
   }
 
   testWidgets('a theme whose headings need several rows keeps the multi-row path (strut not forced)', (tester) async {
-    // The package default h1=28 over a 30px row needs two rows with Roboto.
+    // A 28px h1 over a 30px row needs two rows with Roboto.
     final controller = RichEditorController(
       text: 'Title\nbody',
-      theme: const RichTextRenderTheme(lineHeight: 30),
+      theme: const RichTextRenderTheme(lineHeight: 30, h1FontSize: 28),
       initialAttributes: const [TextAttribute(start: 0, end: 5, type: AttributeType.header, value: 'h1')],
     );
     final scroll = ScrollController();

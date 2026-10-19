@@ -45,6 +45,7 @@ class _ToolButtonState extends State<ToolButton> {
 
   @override
   Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
     return IconButton(
       focusNode: _focusNode,
       tooltip: widget.tooltip,
@@ -52,8 +53,8 @@ class _ToolButtonState extends State<ToolButton> {
         widget.icon,
         size: 20,
         color: widget.onPressed == null
-            ? Colors.black26
-            : (widget.isActive ? Colors.blue : Colors.black87),
+            ? onSurface.withValues(alpha: 0.38)
+            : (widget.isActive ? Colors.blue : onSurface),
       ),
       onPressed: widget.onPressed,
     );

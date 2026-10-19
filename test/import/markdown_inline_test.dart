@@ -3,34 +3,59 @@
 // This is deliberately not full CommonMark.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
-import 'package:lightweight_rich_editor/src/import/markdown_importer.dart';
 
 const md = MarkdownImporter();
 
 List<String> spans(String source, AttributeType type) {
   final r = md.parse(source);
-  return [for (final a in r.attributes.where((a) => a.type == type)) r.text.substring(a.start, a.end)];
+  return [
+    for (final a in r.attributes.where((a) => a.type == type))
+      r.text.substring(a.start, a.end),
+  ];
 }
 
 void main() {
   group('emphasis needs flanking text', () {
-    test('arithmetic and spaced asterisks are not emphasis, and keep their characters', () {
-      final r = md.parse('2 * 3 * 4 = 24');
-      expect(r.text, '2 * 3 * 4 = 24');
-      expect(r.attributes, isEmpty);
-    });
+    test(
+      'arithmetic and spaced asterisks are not emphasis, and keep their characters',
+      () {
+        final r = md.parse('2 * 3 * 4 = 24');
+        expect(r.text, '2 * 3 * 4 = 24');
+        expect(r.attributes, isEmpty);
+      },
+    );
 
     test('snake_case_names are not italic; _word_ still is', () {
       expect(md.parse('call my_func_name now').text, 'call my_func_name now');
       expect(md.parse('call my_func_name now').attributes, isEmpty);
-      expect(spans('an _emphasised_ word', AttributeType.italic), ['emphasised']);
+      expect(spans('an _emphasised_ word', AttributeType.italic), [
+        'emphasised',
+      ]);
     });
 
     test('ordinary emphasis is unchanged', () {
-      expect(spans('**bold** and *it* and ~~gone~~ and `code`', AttributeType.bold), ['bold']);
-      expect(spans('**bold** and *it* and ~~gone~~ and `code`', AttributeType.italic), ['it']);
-      expect(spans('**bold** and *it* and ~~gone~~ and `code`', AttributeType.strikethrough), ['gone']);
-      expect(spans('**bold** and *it* and ~~gone~~ and `code`', AttributeType.code), ['code']);
+      expect(
+        spans('**bold** and *it* and ~~gone~~ and `code`', AttributeType.bold),
+        ['bold'],
+      );
+      expect(
+        spans(
+          '**bold** and *it* and ~~gone~~ and `code`',
+          AttributeType.italic,
+        ),
+        ['it'],
+      );
+      expect(
+        spans(
+          '**bold** and *it* and ~~gone~~ and `code`',
+          AttributeType.strikethrough,
+        ),
+        ['gone'],
+      );
+      expect(
+        spans('**bold** and *it* and ~~gone~~ and `code`', AttributeType.code),
+        ['code'],
+      );
       expect(spans('***both***', AttributeType.bold), ['both']);
       expect(spans('***both***', AttributeType.italic), ['both']);
     });
@@ -47,10 +72,13 @@ void main() {
       expect(r.attributes, isEmpty);
     });
 
-    test('an escaped bracket does not start a link; a lone backslash stays', () {
-      expect(md.parse(r'\[a](b)').text, '[a](b)');
-      expect(md.parse(r'C:\path\file').text, r'C:\path\file');
-    });
+    test(
+      'an escaped bracket does not start a link; a lone backslash stays',
+      () {
+        expect(md.parse(r'\[a](b)').text, '[a](b)');
+        expect(md.parse(r'C:\path\file').text, r'C:\path\file');
+      },
+    );
   });
 
   group('autolinks', () {
@@ -60,20 +88,38 @@ void main() {
       final link = r.attributes.single;
       expect(link.type, AttributeType.link);
       expect(link.value, 'https://kenresoft.com/docs');
-      expect(r.text.substring(link.start, link.end), 'https://kenresoft.com/docs');
+      expect(
+        r.text.substring(link.start, link.end),
+        'https://kenresoft.com/docs',
+      );
     });
 
-    test('<email> becomes a mailto link; other schemes and plain angle text are left alone', () {
-      final mail = md.parse('<me@kenresoft.com>');
-      expect(mail.text, 'me@kenresoft.com');
-      expect(mail.attributes.single.value, 'mailto:me@kenresoft.com');
-      expect(md.parse('<javascript:alert(1)>').attributes.where((a) => a.type == AttributeType.link), isEmpty);
-      expect(md.parse('a <b> c').text, 'a <b> c');
-    });
+    test(
+      '<email> becomes a mailto link; other schemes and plain angle text are left alone',
+      () {
+        final mail = md.parse('<me@kenresoft.com>');
+        expect(mail.text, 'me@kenresoft.com');
+        expect(mail.attributes.single.value, 'mailto:me@kenresoft.com');
+        expect(
+          md
+              .parse('<javascript:alert(1)>')
+              .attributes
+              .where((a) => a.type == AttributeType.link),
+          isEmpty,
+        );
+        expect(md.parse('a <b> c').text, 'a <b> c');
+      },
+    );
 
     test('[text](url) and a bare URL still work', () {
-      expect(md.parse('[docs](https://x.dev/a)').attributes.single.value, 'https://x.dev/a');
-      expect(md.parse('go to https://x.dev/a?b=1 please').attributes.single.value, 'https://x.dev/a?b=1');
+      expect(
+        md.parse('[docs](https://x.dev/a)').attributes.single.value,
+        'https://x.dev/a',
+      );
+      expect(
+        md.parse('go to https://x.dev/a?b=1 please').attributes.single.value,
+        'https://x.dev/a?b=1',
+      );
     });
   });
 
@@ -87,7 +133,12 @@ void main() {
     test('CRLF input behaves like LF, fences included', () {
       final r = md.parse('a\r\n\r\n# T\r\n```dart\r\nx = 1\r\n```\r\nend');
       expect(r.text, 'a\n\nT\nx = 1\nend');
-      expect(r.attributes.where((a) => a.type == AttributeType.header).map((a) => a.value), ['h1', 'code:dart']);
+      expect(
+        r.attributes
+            .where((a) => a.type == AttributeType.header)
+            .map((a) => a.value),
+        ['h1', 'code:dart'],
+      );
     });
 
     test('an unclosed fence runs to the end of the text as one code block', () {
@@ -95,7 +146,10 @@ void main() {
       expect(r.text, 'before\nlet a = 1;\n\nlet b = 2;');
       final code = r.attributes.single;
       expect(code.value, 'code:js');
-      expect(r.text.substring(code.start, code.end), 'let a = 1;\n\nlet b = 2;');
+      expect(
+        r.text.substring(code.start, code.end),
+        'let a = 1;\n\nlet b = 2;',
+      );
     });
 
     test('lists, nesting, task items and quotes stay as literal text', () {

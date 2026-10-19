@@ -2,6 +2,7 @@ import 'dart:ui' as ui show BoxHeightStyle;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../core/attribute_store.dart';
 import '../core/editor_document.dart';
@@ -172,6 +173,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   List<TextRange>? _cachedAllMatches;
   RichTextRenderTheme? _cachedTheme;
   bool? _cachedInteractiveLinks;
+  bool? _cachedSemantics;
   TextScaler? _cachedTextScaler;
   double? _cachedDevicePixelRatio;
 
@@ -235,6 +237,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
         identical(_cachedAllMatches, allMatchesRanges) &&
         _cachedTheme == theme &&
         _cachedInteractiveLinks == interactiveLinks &&
+        _cachedSemantics == _semanticsOn &&
         _cachedTextScaler == textScaler &&
         _cachedDevicePixelRatio == devicePixelRatio) {
       return _cachedSpan!;
@@ -265,6 +268,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _cachedAllMatches = allMatchesRanges;
     _cachedTheme = theme;
     _cachedInteractiveLinks = interactiveLinks;
+    _cachedSemantics = _semanticsOn;
     _cachedTextScaler = textScaler;
     _cachedDevicePixelRatio = devicePixelRatio;
     return span;
@@ -677,8 +681,19 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
     _recognizers.clear();
   }
 
+  // Flutter asserts when an editable field holds spans with recognizers while
+  // semantics are on (screen readers), so tap recognizers are left off then.
+  bool get _semanticsOn {
+    try {
+      return SemanticsBinding.instance.semanticsEnabled;
+    } catch (_) {
+      // No Flutter binding yet (plain unit tests, off-screen rendering).
+      return false;
+    }
+  }
+
   TapGestureRecognizer? _recognizerFor(String? linkUrl) {
-    if (linkUrl == null || onTapLink == null || !interactiveLinks) return null;
+    if (linkUrl == null || onTapLink == null || !interactiveLinks || _semanticsOn) return null;
     final url = linkUrl;
     final recognizer = TapGestureRecognizer()
       ..onTap = () => onTapLink?.call(url);
@@ -687,7 +702,7 @@ class TextSpanRenderer implements DocumentRenderer<TextSpan> {
   }
 
   TapGestureRecognizer? _checkboxRecognizerFor(int paragraphStart) {
-    if (onToggleCheckbox == null) return null;
+    if (onToggleCheckbox == null || _semanticsOn) return null;
     final recognizer = TapGestureRecognizer()
       ..onTap = () => onToggleCheckbox?.call(paragraphStart);
     _recognizers.add(recognizer);

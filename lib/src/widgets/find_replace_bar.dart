@@ -71,7 +71,13 @@ class _FindReplaceBarState extends State<FindReplaceBar> {
     _queryFocusNode.dispose();
     // Ending the search when the bar goes away avoids leaving a stale
     // match selected in the editor after the bar that showed it is gone.
-    widget.controller.clearFind();
+    // The tree is locked while a State is disposed, so the notification that
+    // repaints the editor waits for the end of the frame.
+    final controller = widget.controller;
+    controller.search.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!controller.disposed) controller.clearFind();
+    });
     super.dispose();
   }
 

@@ -13,9 +13,11 @@ import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
 import 'package:lightweight_rich_editor/src/core/editing_engine.dart';
 import 'package:lightweight_rich_editor/src/core/editor_selection.dart';
 import 'package:lightweight_rich_editor/src/core/transaction_manager.dart';
-import 'package:lightweight_rich_editor/src/utils/list_prefix.dart';
 
-EditingEngine _engineFor(String text, [List<TextAttribute> attributes = const []]) {
+EditingEngine _engineFor(
+  String text, [
+  List<TextAttribute> attributes = const [],
+]) {
   final document = EditorDocument.fromText(text, attributes);
   final transactions = TransactionManager(() {});
   return EditingEngine(document: document, transactions: transactions);
@@ -26,9 +28,10 @@ EditingEngine _engineFor(String text, [List<TextAttribute> attributes = const []
 /// actually survive real application, not just that the computed edit
 /// object happens to contain them.
 void _apply(
-    EditingEngine engine,
-    ({int start, int end, String text, List<TextAttribute> relativeAttributes}) edit,
-    ) {
+  EditingEngine engine,
+  ({int start, int end, String text, List<TextAttribute> relativeAttributes})
+  edit,
+) {
   engine.pasteRich(
     EditorSelection(baseOffset: edit.start, extentOffset: edit.end),
     edit.text,
@@ -45,7 +48,14 @@ void _apply(
 /// [_apply] for both shapes.
 void _applyWithCursor(
   EditingEngine engine,
-  ({int start, int end, String text, int cursorOffsetFromStart, List<TextAttribute> relativeAttributes}) edit,
+  ({
+    int start,
+    int end,
+    String text,
+    int cursorOffsetFromStart,
+    List<TextAttribute> relativeAttributes,
+  })
+  edit,
 ) {
   engine.pasteRich(
     EditorSelection(baseOffset: edit.start, extentOffset: edit.end),
@@ -58,134 +68,218 @@ void main() {
   group('listToggleEdit — bullet', () {
     test('turning on inserts default 2-space indent + dash', () {
       final engine = _engineFor('Item one');
-      final edit = engine.listToggleEdit(EditorSelection.collapsed(0), ParagraphListType.bullet);
+      final edit = engine.listToggleEdit(
+        EditorSelection.collapsed(0),
+        ParagraphListType.bullet,
+      );
       expect(edit, isNotNull);
       expect(edit!.text, '  - Item one');
     });
 
     test('turning off strips the marker', () {
       final engine = _engineFor('  - Item one');
-      final edit = engine.listToggleEdit(EditorSelection.collapsed(0), ParagraphListType.bullet);
+      final edit = engine.listToggleEdit(
+        EditorSelection.collapsed(0),
+        ParagraphListType.bullet,
+      );
       expect(edit, isNotNull);
       expect(edit!.text, 'Item one');
     });
 
-    test('preserves an inline attribute, shifted to match the new marker length', () {
-      // "Item one" — "one" (positions 5-8) is bold.
-      final engine = _engineFor('Item one', [
-        TextAttribute(start: 5, end: 8, type: AttributeType.bold),
-      ]);
-      final edit = engine.listToggleEdit(EditorSelection.collapsed(0), ParagraphListType.bullet);
-      expect(edit, isNotNull);
-      expect(edit!.text, '  - Item one');
-      // '  - ' is 4 chars, so bold shifts from [5,8) to [9,12).
-      expect(edit.relativeAttributes, hasLength(1));
-      expect(edit.relativeAttributes.first.type, AttributeType.bold);
-      expect(edit.relativeAttributes.first.start, 9);
-      expect(edit.relativeAttributes.first.end, 12);
-    });
+    test(
+      'preserves an inline attribute, shifted to match the new marker length',
+      () {
+        // "Item one" — "one" (positions 5-8) is bold.
+        final engine = _engineFor('Item one', [
+          TextAttribute(start: 5, end: 8, type: AttributeType.bold),
+        ]);
+        final edit = engine.listToggleEdit(
+          EditorSelection.collapsed(0),
+          ParagraphListType.bullet,
+        );
+        expect(edit, isNotNull);
+        expect(edit!.text, '  - Item one');
+        // '  - ' is 4 chars, so bold shifts from [5,8) to [9,12).
+        expect(edit.relativeAttributes, hasLength(1));
+        expect(edit.relativeAttributes.first.type, AttributeType.bold);
+        expect(edit.relativeAttributes.first.start, 9);
+        expect(edit.relativeAttributes.first.end, 12);
+      },
+    );
   });
 
-  group('listToggleEdit — numbered, reproduces the reported link-propagation bug', () {
-    test('toggling a paragraph with a mid-word link to numbered preserves the link range only', () {
-      const text = 'This is a paragraph containing a linked word somewhere in the middle.';
-      final linkStart = text.indexOf('linked word');
-      final linkEnd = linkStart + 'linked word'.length;
-      final engine = _engineFor(text, [
-        TextAttribute(start: linkStart, end: linkEnd, type: AttributeType.link, value: 'https://example.com'),
-      ]);
+  group(
+    'listToggleEdit — numbered, reproduces the reported link-propagation bug',
+    () {
+      test(
+        'toggling a paragraph with a mid-word link to numbered preserves the link range only',
+        () {
+          const text =
+              'This is a paragraph containing a linked word somewhere in the middle.';
+          final linkStart = text.indexOf('linked word');
+          final linkEnd = linkStart + 'linked word'.length;
+          final engine = _engineFor(text, [
+            TextAttribute(
+              start: linkStart,
+              end: linkEnd,
+              type: AttributeType.link,
+              value: 'https://example.com',
+            ),
+          ]);
 
-      final edit = engine.listToggleEdit(EditorSelection.collapsed(0), ParagraphListType.numbered);
-      expect(edit, isNotNull);
-      expect(edit!.text, '  1. $text');
+          final edit = engine.listToggleEdit(
+            EditorSelection.collapsed(0),
+            ParagraphListType.numbered,
+          );
+          expect(edit, isNotNull);
+          expect(edit!.text, '  1. $text');
 
-      // Exactly one attribute, shifted by the marker's length (5 chars:
-      // '  1. '), NOT expanded to cover the whole paragraph.
-      expect(edit.relativeAttributes, hasLength(1));
-      final link = edit.relativeAttributes.first;
-      expect(link.type, AttributeType.link);
-      expect(link.start, linkStart + 5);
-      expect(link.end, linkEnd + 5);
-      expect(link.end - link.start, equals(linkEnd - linkStart)); // unchanged length
-      expect(link.end - link.start, lessThan(edit.text.length)); // never the whole paragraph
+          // Exactly one attribute, shifted by the marker's length (5 chars:
+          // '  1. '), NOT expanded to cover the whole paragraph.
+          expect(edit.relativeAttributes, hasLength(1));
+          final link = edit.relativeAttributes.first;
+          expect(link.type, AttributeType.link);
+          expect(link.start, linkStart + 5);
+          expect(link.end, linkEnd + 5);
+          expect(
+            link.end - link.start,
+            equals(linkEnd - linkStart),
+          ); // unchanged length
+          expect(
+            link.end - link.start,
+            lessThan(edit.text.length),
+          ); // never the whole paragraph
 
-      _apply(engine, edit);
-      // After applying, the link must have survived at exactly the
-      // shifted position, not spread across the reconstructed text.
-      final restored = engine.document.attributeStore.findAt(link.start + 1, type: AttributeType.link);
-      expect(restored, isNotEmpty);
-      final afterLink = engine.document.attributeStore.findAt(link.end + 1, type: AttributeType.link);
-      expect(afterLink, isEmpty); // confirms it did NOT spread past the word
-    });
-  });
-
-  group('listToggleEdit — numbered renumbering, reproduces the 1,2,1,4,5 bug', () {
-    test('toggling item 3 off then back on restores 1,2,3,4,5', () {
-      final engine = _engineFor('1. Item one\n2. Item two\n3. Item three\n4. Item four\n5. Item five');
-      final item3Start = engine.document.text.indexOf('3. Item three');
-
-      final offEdit = engine.listToggleEdit(EditorSelection.collapsed(item3Start), ParagraphListType.numbered);
-      expect(offEdit, isNotNull);
-      _apply(engine, offEdit!);
-
-      // Item 3 is now plain; items 4-5 should have renumbered down to 1-2
-      // (they're a separate list now, split by the de-listed paragraph).
-      expect(engine.document.text, isNot(contains('3. Item three')));
-      expect(engine.document.text, contains('1. Item four'));
-      expect(engine.document.text, contains('2. Item five'));
-
-      final plainItem3Start = engine.document.text.indexOf('Item three');
-      final onEdit = engine.listToggleEdit(EditorSelection.collapsed(plainItem3Start), ParagraphListType.numbered);
-      expect(onEdit, isNotNull);
-      _apply(engine, onEdit!);
-
-      expect(
-        engine.document.text,
-        '1. Item one\n2. Item two\n3. Item three\n4. Item four\n5. Item five',
+          _apply(engine, edit);
+          // After applying, the link must have survived at exactly the
+          // shifted position, not spread across the reconstructed text.
+          final restored = engine.document.attributeStore.findAt(
+            link.start + 1,
+            type: AttributeType.link,
+          );
+          expect(restored, isNotEmpty);
+          final afterLink = engine.document.attributeStore.findAt(
+            link.end + 1,
+            type: AttributeType.link,
+          );
+          expect(
+            afterLink,
+            isEmpty,
+          ); // confirms it did NOT spread past the word
+        },
       );
-    });
+    },
+  );
 
-    test('mixed selection (some list, some plain) turns fully on, not decided by the first paragraph', () {
-      final engine = _engineFor('1. Already numbered\nPlain paragraph');
-      final selection = EditorSelection(baseOffset: 0, extentOffset: engine.document.text.length);
-      final edit = engine.listToggleEdit(selection, ParagraphListType.numbered);
-      expect(edit, isNotNull);
-      expect(edit!.text, contains('1. Already numbered'));
-      expect(edit.text, contains('2. Plain paragraph'));
-    });
-  });
+  group(
+    'listToggleEdit — numbered renumbering, reproduces the 1,2,1,4,5 bug',
+    () {
+      test('toggling item 3 off then back on restores 1,2,3,4,5', () {
+        final engine = _engineFor(
+          '1. Item one\n2. Item two\n3. Item three\n4. Item four\n5. Item five',
+        );
+        final item3Start = engine.document.text.indexOf('3. Item three');
+
+        final offEdit = engine.listToggleEdit(
+          EditorSelection.collapsed(item3Start),
+          ParagraphListType.numbered,
+        );
+        expect(offEdit, isNotNull);
+        _apply(engine, offEdit!);
+
+        // Item 3 is now plain; items 4-5 should have renumbered down to 1-2
+        // (they're a separate list now, split by the de-listed paragraph).
+        expect(engine.document.text, isNot(contains('3. Item three')));
+        expect(engine.document.text, contains('1. Item four'));
+        expect(engine.document.text, contains('2. Item five'));
+
+        final plainItem3Start = engine.document.text.indexOf('Item three');
+        final onEdit = engine.listToggleEdit(
+          EditorSelection.collapsed(plainItem3Start),
+          ParagraphListType.numbered,
+        );
+        expect(onEdit, isNotNull);
+        _apply(engine, onEdit!);
+
+        expect(
+          engine.document.text,
+          '1. Item one\n2. Item two\n3. Item three\n4. Item four\n5. Item five',
+        );
+      });
+
+      test(
+        'mixed selection (some list, some plain) turns fully on, not decided by the first paragraph',
+        () {
+          final engine = _engineFor('1. Already numbered\nPlain paragraph');
+          final selection = EditorSelection(
+            baseOffset: 0,
+            extentOffset: engine.document.text.length,
+          );
+          final edit = engine.listToggleEdit(
+            selection,
+            ParagraphListType.numbered,
+          );
+          expect(edit, isNotNull);
+          expect(edit!.text, contains('1. Already numbered'));
+          expect(edit.text, contains('2. Plain paragraph'));
+        },
+      );
+    },
+  );
 
   group('listIndentEdit', () {
     test('indents a single list paragraph by 2 spaces', () {
       final engine = _engineFor('- Item');
-      final edit = engine.listIndentEdit(EditorSelection.collapsed(0), outdent: false);
+      final edit = engine.listIndentEdit(
+        EditorSelection.collapsed(0),
+        outdent: false,
+      );
       expect(edit, isNotNull);
       expect(edit!.text, '  - Item');
     });
 
     test('outdent removes up to 2 spaces, no-ops at top level', () {
       final engine = _engineFor('- Item');
-      final edit = engine.listIndentEdit(EditorSelection.collapsed(0), outdent: true);
+      final edit = engine.listIndentEdit(
+        EditorSelection.collapsed(0),
+        outdent: true,
+      );
       expect(edit, isNull);
     });
 
-    test('multi-paragraph indent preserves inline attributes on each paragraph', () {
-      const text = '- Item A\n- Bold B';
-      final boldStart = text.indexOf('Bold');
-      final boldEnd = boldStart + 'Bold'.length;
-      final engine = _engineFor(text, [
-        TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold),
-      ]);
-      final selection = EditorSelection(baseOffset: 0, extentOffset: text.length);
-      final edit = engine.listIndentEdit(selection, outdent: false);
-      expect(edit, isNotNull);
-      expect(edit!.relativeAttributes.any((a) => a.type == AttributeType.bold), isTrue);
-    });
+    test(
+      'multi-paragraph indent preserves inline attributes on each paragraph',
+      () {
+        const text = '- Item A\n- Bold B';
+        final boldStart = text.indexOf('Bold');
+        final boldEnd = boldStart + 'Bold'.length;
+        final engine = _engineFor(text, [
+          TextAttribute(
+            start: boldStart,
+            end: boldEnd,
+            type: AttributeType.bold,
+          ),
+        ]);
+        final selection = EditorSelection(
+          baseOffset: 0,
+          extentOffset: text.length,
+        );
+        final edit = engine.listIndentEdit(selection, outdent: false);
+        expect(edit, isNotNull);
+        expect(
+          edit!.relativeAttributes.any((a) => a.type == AttributeType.bold),
+          isTrue,
+        );
+      },
+    );
 
     test('a non-list paragraph in the selection passes through unchanged', () {
       const text = '- Item\nPlain line';
       final engine = _engineFor(text);
-      final selection = EditorSelection(baseOffset: 0, extentOffset: text.length);
+      final selection = EditorSelection(
+        baseOffset: 0,
+        extentOffset: text.length,
+      );
       final edit = engine.listIndentEdit(selection, outdent: false);
       expect(edit, isNotNull);
       expect(edit!.text, contains('Plain line'));
@@ -198,131 +292,212 @@ void main() {
       final engine = _engineFor('1. \n2. Something\n3. Something else');
       final markerEnd = '1. '.length;
       expect(
-            () => engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd)),
+        () => engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd)),
         returnsNormally,
       );
     });
 
-    test('backspacing an empty numbered item mid-list takes the marker off and the items after it count from 1', () {
-      final c = RichEditorController(text: '1. \n2. Something\n3. Something else');
-      addTearDown(c.dispose);
-      c.selection = const TextSelection.collapsed(offset: 3);
-      c.deleteBackward();
-      expect(c.document.text, '\n1. Something\n2. Something else');
-      c.undo();
-      expect(c.document.text, '1. \n2. Something\n3. Something else', reason: 'one undo');
-    });
+    test(
+      'backspacing an empty numbered item mid-list takes the marker off and the items after it count from 1',
+      () {
+        final c = RichEditorController(
+          text: '1. \n2. Something\n3. Something else',
+        );
+        addTearDown(c.dispose);
+        c.selection = const TextSelection.collapsed(offset: 3);
+        c.deleteBackward();
+        expect(c.document.text, '\n1. Something\n2. Something else');
+        c.undo();
+        expect(
+          c.document.text,
+          '1. \n2. Something\n3. Something else',
+          reason: 'one undo',
+        );
+      },
+    );
 
-    test('backspacing an empty item preserves attributes on subsequent items', () {
-      const text = '1. \n2. Bold word here';
-      final boldStart = text.indexOf('Bold');
-      final boldEnd = boldStart + 'Bold'.length;
-      final c = RichEditorController(
-        text: text,
-        initialAttributes: [TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold)],
-      );
-      addTearDown(c.dispose);
-      c.selection = const TextSelection.collapsed(offset: 3);
-      c.deleteBackward();
-      expect(c.document.text, '\n1. Bold word here');
-      final start = c.document.text.indexOf('Bold');
-      expect(c.document.attributeStore.coversRange(start, start + 'Bold'.length, AttributeType.bold), isTrue);
-    });
+    test(
+      'backspacing an empty item preserves attributes on subsequent items',
+      () {
+        const text = '1. \n2. Bold word here';
+        final boldStart = text.indexOf('Bold');
+        final boldEnd = boldStart + 'Bold'.length;
+        final c = RichEditorController(
+          text: text,
+          initialAttributes: [
+            TextAttribute(
+              start: boldStart,
+              end: boldEnd,
+              type: AttributeType.bold,
+            ),
+          ],
+        );
+        addTearDown(c.dispose);
+        c.selection = const TextSelection.collapsed(offset: 3);
+        c.deleteBackward();
+        expect(c.document.text, '\n1. Bold word here');
+        final start = c.document.text.indexOf('Bold');
+        expect(
+          c.document.attributeStore.coversRange(
+            start,
+            start + 'Bold'.length,
+            AttributeType.bold,
+          ),
+          isTrue,
+        );
+      },
+    );
 
-    test('backspacing a bullet marker with no following list is a plain, non-throwing removal', () {
-      final engine = _engineFor('  - Solo item');
-      final markerEnd = '  - '.length;
-      expect(
-            () => engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd)),
-        returnsNormally,
-      );
-      final edit = engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd));
-      expect(edit!.text, '');
-      expect(edit.relativeAttributes, isEmpty);
-    });
+    test(
+      'backspacing a bullet marker with no following list is a plain, non-throwing removal',
+      () {
+        final engine = _engineFor('  - Solo item');
+        final markerEnd = '  - '.length;
+        expect(
+          () => engine.deleteBackwardEdit(EditorSelection.collapsed(markerEnd)),
+          returnsNormally,
+        );
+        final edit = engine.deleteBackwardEdit(
+          EditorSelection.collapsed(markerEnd),
+        );
+        expect(edit!.text, '');
+        expect(edit.relativeAttributes, isEmpty);
+      },
+    );
   });
 
   group('deleteForwardEdit', () {
-    test('deleting right before a marker removes the whole marker in one step', () {
-      final engine = _engineFor('  - Item one');
-      final edit = engine.deleteForwardEdit(EditorSelection.collapsed(0));
-      expect(edit, isNotNull);
-      expect(edit!.text, '');
-      expect(edit.start, 0);
-      expect(edit.end, '  - '.length);
-    });
+    test(
+      'deleting right before a marker removes the whole marker in one step',
+      () {
+        final engine = _engineFor('  - Item one');
+        final edit = engine.deleteForwardEdit(EditorSelection.collapsed(0));
+        expect(edit, isNotNull);
+        expect(edit!.text, '');
+        expect(edit.start, 0);
+        expect(edit.end, '  - '.length);
+      },
+    );
 
-    test('deleting elsewhere (not at a marker boundary) is a plain single-character delete', () {
-      final engine = _engineFor('Hello');
-      final edit = engine.deleteForwardEdit(EditorSelection.collapsed(1));
-      expect(edit, isNotNull);
-      expect(edit!.start, 1);
-      expect(edit.end, 2);
-      expect(edit.text, '');
-    });
+    test(
+      'deleting elsewhere (not at a marker boundary) is a plain single-character delete',
+      () {
+        final engine = _engineFor('Hello');
+        final edit = engine.deleteForwardEdit(EditorSelection.collapsed(1));
+        expect(edit, isNotNull);
+        expect(edit!.start, 1);
+        expect(edit.end, 2);
+        expect(edit.text, '');
+      },
+    );
 
-    test('deleting a numbered marker mid-list: the items after it count from 1', () {
-      final c = RichEditorController(text: '1. First\n2. Second\n3. Third');
-      addTearDown(c.dispose);
-      c.commands.deleteForward(const EditorSelection.collapsed(0)); // right before "1. "
-      expect(c.document.text, 'First\n1. Second\n2. Third');
-    });
+    test(
+      'deleting a numbered marker mid-list: the items after it count from 1',
+      () {
+        final c = RichEditorController(text: '1. First\n2. Second\n3. Third');
+        addTearDown(c.dispose);
+        c.commands.deleteForward(
+          const EditorSelection.collapsed(0),
+        ); // right before "1. "
+        expect(c.document.text, 'First\n1. Second\n2. Third');
+      },
+    );
 
-    test('Delete at the end of a line takes the marker of the item below with it', () {
-      final c = RichEditorController(text: 'abc\n  - item\n  - more');
-      addTearDown(c.dispose);
-      c.commands.deleteForward(const EditorSelection.collapsed(3));
-      expect(c.document.text, 'abcitem\n  - more');
-    });
+    test(
+      'Delete at the end of a line takes the marker of the item below with it',
+      () {
+        final c = RichEditorController(text: 'abc\n  - item\n  - more');
+        addTearDown(c.dispose);
+        c.commands.deleteForward(const EditorSelection.collapsed(3));
+        expect(c.document.text, 'abcitem\n  - more');
+      },
+    );
   });
 
-  group('enterKeyEditWithRenumber — reproduces the mid-line-split duplicate-number bug', () {
-    test('mid-line split renumbers every subsequent item', () {
-      final engine = _engineFor('1. First item\n2. Hello World\n3. Third item\n4. Fourth item\n5. Fifth item');
-      final splitAt = engine.document.text.indexOf('Hello') + 'Hello'.length; // "Hello| World"
+  group(
+    'enterKeyEditWithRenumber — reproduces the mid-line-split duplicate-number bug',
+    () {
+      test('mid-line split renumbers every subsequent item', () {
+        final engine = _engineFor(
+          '1. First item\n2. Hello World\n3. Third item\n4. Fourth item\n5. Fifth item',
+        );
+        final splitAt =
+            engine.document.text.indexOf('Hello') +
+            'Hello'.length; // "Hello| World"
 
-      final edit = engine.enterKeyEditWithRenumber(EditorSelection.collapsed(splitAt), const {});
-      _applyWithCursor(engine, edit);
+        final edit = engine.enterKeyEditWithRenumber(
+          EditorSelection.collapsed(splitAt),
+          const {},
+        );
+        _applyWithCursor(engine, edit);
 
-      final finalText = engine.document.text;
-      expect(finalText, contains('2. Hello'));
-      expect(finalText, contains('3.  World')); // double space is correct: Enter never trims
-      expect(finalText, contains('4. Third item'));
-      expect(finalText, contains('5. Fourth item'));
-      expect(finalText, contains('6. Fifth item'));
-    });
+        final finalText = engine.document.text;
+        expect(finalText, contains('2. Hello'));
+        expect(
+          finalText,
+          contains('3.  World'),
+        ); // double space is correct: Enter never trims
+        expect(finalText, contains('4. Third item'));
+        expect(finalText, contains('5. Fourth item'));
+        expect(finalText, contains('6. Fifth item'));
+      });
 
-    test('end-of-line Enter with nothing to renumber falls back to plain continuation', () {
-      final engine = _engineFor('1. Only item');
-      final caret = engine.document.text.length;
-      final edit = engine.enterKeyEditWithRenumber(EditorSelection.collapsed(caret), const {});
-      expect(edit.text, '\n2. ');
-    });
-
-    test('sticky attributes apply only to the new marker, never to reconstructed content', () {
-      final engine = _engineFor('1. First\n2. Second');
-      final caret = engine.document.text.indexOf('First') + 'First'.length;
-      final edit = engine.enterKeyEditWithRenumber(
-        EditorSelection.collapsed(caret),
-        {AttributeType.link: 'https://example.com'},
+      test(
+        'end-of-line Enter with nothing to renumber falls back to plain continuation',
+        () {
+          final engine = _engineFor('1. Only item');
+          final caret = engine.document.text.length;
+          final edit = engine.enterKeyEditWithRenumber(
+            EditorSelection.collapsed(caret),
+            const {},
+          );
+          expect(edit.text, '\n2. ');
+        },
       );
-      for (final attr in edit.relativeAttributes.where((a) => a.type == AttributeType.link)) {
-        expect(attr.end, lessThanOrEqualTo(edit.cursorOffsetFromStart));
-      }
-    });
 
-    test('preserves an existing attribute on reconstructed subsequent content', () {
-      const text = '1. First\n2. Bold Second';
-      final boldStart = text.indexOf('Bold');
-      final boldEnd = boldStart + 'Bold'.length;
-      final engine = _engineFor(text, [
-        TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold),
-      ]);
-      final caret = engine.document.text.indexOf('First') + 'First'.length;
-      final edit = engine.enterKeyEditWithRenumber(EditorSelection.collapsed(caret), const {});
-      expect(edit.relativeAttributes.any((a) => a.type == AttributeType.bold), isTrue);
-    });
-  });
+      test(
+        'sticky attributes apply only to the new marker, never to reconstructed content',
+        () {
+          final engine = _engineFor('1. First\n2. Second');
+          final caret = engine.document.text.indexOf('First') + 'First'.length;
+          final edit = engine.enterKeyEditWithRenumber(
+            EditorSelection.collapsed(caret),
+            {AttributeType.link: 'https://example.com'},
+          );
+          for (final attr in edit.relativeAttributes.where(
+            (a) => a.type == AttributeType.link,
+          )) {
+            expect(attr.end, lessThanOrEqualTo(edit.cursorOffsetFromStart));
+          }
+        },
+      );
+
+      test(
+        'preserves an existing attribute on reconstructed subsequent content',
+        () {
+          const text = '1. First\n2. Bold Second';
+          final boldStart = text.indexOf('Bold');
+          final boldEnd = boldStart + 'Bold'.length;
+          final engine = _engineFor(text, [
+            TextAttribute(
+              start: boldStart,
+              end: boldEnd,
+              type: AttributeType.bold,
+            ),
+          ]);
+          final caret = engine.document.text.indexOf('First') + 'First'.length;
+          final edit = engine.enterKeyEditWithRenumber(
+            EditorSelection.collapsed(caret),
+            const {},
+          );
+          expect(
+            edit.relativeAttributes.any((a) => a.type == AttributeType.bold),
+            isTrue,
+          );
+        },
+      );
+    },
+  );
 
   group('clearFormattingListEdit', () {
     test('returns null when nothing in range has a marker', () {
@@ -331,25 +506,44 @@ void main() {
       expect(engine.clearFormattingListEdit(selection), isNull);
     });
 
-    test('strips markers and preserves inline attributes across a mixed selection', () {
-      const text = '  - Bold item\nPlain paragraph';
-      final boldStart = text.indexOf('Bold');
-      final boldEnd = boldStart + 'Bold'.length;
-      final engine = _engineFor(text, [
-        TextAttribute(start: boldStart, end: boldEnd, type: AttributeType.bold),
-      ]);
-      final selection = EditorSelection(baseOffset: 0, extentOffset: text.length);
-      final edit = engine.clearFormattingListEdit(selection);
-      expect(edit, isNotNull);
-      expect(edit!.text, isNot(contains('- ')));
-      expect(edit.relativeAttributes.any((a) => a.type == AttributeType.bold), isTrue);
-    });
+    test(
+      'strips markers and preserves inline attributes across a mixed selection',
+      () {
+        const text = '  - Bold item\nPlain paragraph';
+        final boldStart = text.indexOf('Bold');
+        final boldEnd = boldStart + 'Bold'.length;
+        final engine = _engineFor(text, [
+          TextAttribute(
+            start: boldStart,
+            end: boldEnd,
+            type: AttributeType.bold,
+          ),
+        ]);
+        final selection = EditorSelection(
+          baseOffset: 0,
+          extentOffset: text.length,
+        );
+        final edit = engine.clearFormattingListEdit(selection);
+        expect(edit, isNotNull);
+        expect(edit!.text, isNot(contains('- ')));
+        expect(
+          edit.relativeAttributes.any((a) => a.type == AttributeType.bold),
+          isTrue,
+        );
+      },
+    );
 
-    test('clearFormatting itself strips list markers as one undoable operation', () {
-      final engine = _engineFor('  - Item one\n  - Item two');
-      final selection = EditorSelection(baseOffset: 0, extentOffset: engine.document.text.length);
-      engine.clearFormatting(selection);
-      expect(engine.document.text, 'Item one\nItem two');
-    });
+    test(
+      'clearFormatting itself strips list markers as one undoable operation',
+      () {
+        final engine = _engineFor('  - Item one\n  - Item two');
+        final selection = EditorSelection(
+          baseOffset: 0,
+          extentOffset: engine.document.text.length,
+        );
+        engine.clearFormatting(selection);
+        expect(engine.document.text, 'Item one\nItem two');
+      },
+    );
   });
 }

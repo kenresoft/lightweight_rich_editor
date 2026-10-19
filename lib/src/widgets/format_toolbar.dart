@@ -550,10 +550,10 @@ class _ColorMenu extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.format_color_text,
               size: 20,
-              color: Colors.black87,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
             const SizedBox(height: 2),
             Container(
