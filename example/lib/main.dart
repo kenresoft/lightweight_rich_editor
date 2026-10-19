@@ -1,5 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:lightweight_rich_editor/lightweight_rich_editor.dart';
+
+import 'sample_picture.dart';
 
 void main() {
   runApp(const MyApp());
@@ -35,21 +39,97 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
   // things: Save/Load, and swapping themes on dark-mode toggle. A screen
   // that needed neither could just use `LightweightRichEditor(
   // initialText: ...)` with no controller at all.
-  late final RichEditorController _controller = RichEditorController(
-    text:
-        'This is a clean, lightweight rich-text editor.\n\n'
-        'Try toggling Dark Mode in the top right to see the configuration system in action!',
-    initialAttributes: [
-      const TextAttribute(start: 35, end: 41, type: AttributeType.bold),
-    ],
-    theme: RichTextRenderTheme.standard,
-  );
+  late final RichEditorController _controller = _newController();
+
+  static final _sample = '''
+# Trip planning
+
+Notes for the **June weekend** away, in *no particular order*. Keep `flutter run` handy, tap the moon for dark mode, or search with the magnifier.
+
+Pack light, book early and bring the big camera.
+
+![The coast at dusk](data:image/png;base64,$samplePictureBase64)
+
+## To pack
+
+- [x] Passport and tickets
+- [x] Charger
+- [ ] Rain jacket
+- [ ] Camera
+
+## Route
+
+1. Train to the coast, leaving 08:10
+2. Walk the cliff path to the harbour
+3. Dinner at the fish market
+
+## A little code
+
+```dart
+final days = ['Fri', 'Sat', 'Sun'];
+for (final d in days) {
+  print('Packing for ' + d);
+}
+```
+
+More ideas at [the town guide](https://example.com/guide).
+
+Safe travels, see you on Sunday.
+''';
+
+  RichEditorController _newController() {
+    return RichEditorController(
+      text: '',
+      theme: _lightRenderTheme,
+    )..imageStore = _MemoryImageStore();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.pasteMarkdown(_sample);
+    _decorate();
+  }
+
+  // Colour, highlight and size are not Markdown, so they are applied to
+  // ranges of the finished note.
+  void _decorate() {
+    void style(String word, void Function() apply) {
+      final start = _controller.document.text.indexOf(word);
+      if (start < 0) return;
+      _controller.selection = TextSelection(
+        baseOffset: start,
+        extentOffset: start + word.length,
+      );
+      apply();
+    }
+
+    style('Pack light', () => _controller.setColor(0xFFE64A19));
+    style('book early', _controller.toggleHighlight);
+    style('big camera', () => _controller.setSize(22));
+    _controller.selection = const TextSelection.collapsed(offset: 0);
+  }
 
   bool _isDarkMode = false;
 
   ({String text, List<TextAttribute> attributes})? _internalStorage;
 
+  // Rows are 30 px and the headings are sized to fit one row each (see
+  // CUSTOMIZATION_GUIDE.md, "Fonts and the ruled grid").
+  static const _lightRenderTheme = RichTextRenderTheme(
+    lineHeight: 30,
+    h1FontSize: 23,
+    h2FontSize: 20,
+    h3FontSize: 18,
+  );
+
   static const _darkRenderTheme = RichTextRenderTheme(
+    textColor: Color(0xFFE6E9EC),
+    codeSyntax: CodeSyntaxColors.dark,
+    lineHeight: 30,
+    h1FontSize: 23,
+    h2FontSize: 20,
+    h3FontSize: 18,
     highlightColor: Color(0xFF4A148C),
     linkColor: Colors.cyanAccent,
   );
@@ -98,7 +178,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
       // and undo history all stay exactly as they were.
       _controller.renderer.theme = _isDarkMode
           ? _darkRenderTheme
-          : RichTextRenderTheme.standard;
+          : _lightRenderTheme;
     });
     // This button lives in this app's own AppBar, outside the library's
     // FormatToolbar -- so it doesn't get the toolbar's built-in focus
@@ -112,6 +192,19 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  // A full dark ThemeData (not just a colour scheme) so the toolbar, find bar
+  // and menus pick up light icons and text.
+  ThemeData _editorTheme(BuildContext context) {
+    if (!_isDarkMode) return Theme.of(context);
+    return ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.deepPurple,
+        brightness: Brightness.dark,
+      ),
+      useMaterial3: true,
+    );
   }
 
   @override
@@ -138,7 +231,7 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
         ],
       ),
       body: Theme(
-        data: Theme.of(context).copyWith(
+        data: _editorTheme(context).copyWith(
           textSelectionTheme: TextSelectionThemeData(
             selectionColor: _isDarkMode
                 ? Colors.cyan.withValues(alpha: 0.3)
@@ -158,4 +251,20 @@ class _EditorHomeScreenState extends State<EditorHomeScreen> {
       ),
     );
   }
+}
+
+/// Keeps pictures in memory. A real app would write them to disk or a database.
+class _MemoryImageStore extends RichImageStore {
+  final _pictures = <String, Uint8List>{};
+  var _next = 0;
+
+  @override
+  Future<String> save(Uint8List bytes) async {
+    final id = 'picture-${_next++}';
+    _pictures[id] = bytes;
+    return id;
+  }
+
+  @override
+  Future<Uint8List?> load(String id) async => _pictures[id];
 }
