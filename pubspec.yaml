@@ -1,6 +1,6 @@
 name: lightweight_rich_editor
 description: "A rich-text editor for Flutter that draws notes on ruled paper. Lists, code blocks, pictures, links, find and replace, HTML and Markdown paste."
-version: 0.3.0
+version: 0.3.1
 repository: https://github.com/kenresoft/lightweight_rich_editor
 issue_tracker: https://github.com/kenresoft/lightweight_rich_editor/issues
 topics:

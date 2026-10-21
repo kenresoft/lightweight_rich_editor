@@ -1,3 +1,7 @@
+## 0.3.1
+
+* Compiles to WebAssembly: the picture download now lives behind a conditional import, so `dart:io` is no longer reachable from the web build. Pasted `data:` pictures work on every platform; fetching a picture from a web address still needs a non-browser platform and returns nothing in a browser, as before.
+
 ## 0.3.0
 
 First release on pub.dev. The earlier versions below were development builds and were never
